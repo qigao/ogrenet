@@ -1,0 +1,54 @@
+package passthru
+
+import (
+	"bytes"
+	"encoding/binary"
+
+	"github.com/qigao/ogrenet/errors"
+	"github.com/qigao/ogrenet/options"
+	"github.com/rs/zerolog/log"
+)
+
+func NewEmptyHeadCodec() *HeadCodec {
+	return &HeadCodec{
+		Magic: options.DefaultMagicHead,
+	}
+}
+
+func NewHeadCodec(ver uint8, cmd CodecType, id [4]byte, len uint16, cseq [4]byte) *HeadCodec {
+	return &HeadCodec{
+		Magic:     options.DefaultMagicHead,
+		Version:   ver,
+		CodecType: cmd,
+		ID:        id,
+		BodyLen:   len,
+		Cseq:      cseq,
+	}
+}
+
+func (h *HeadCodec) Encode() ([]byte, error) {
+	var buf bytes.Buffer
+	err := binary.Write(&buf, binary.BigEndian, h)
+	return buf.Bytes(), err
+}
+
+func (h *HeadCodec) Decode(buf []byte) error {
+	if len(buf) < h.Length() {
+		log.Error().Msgf("invalid head length %d", len(buf))
+		return errors.ErrIncompletePacket
+	}
+	if buf[0] != options.DefaultMagicHead {
+		log.Error().Msgf("invalid head magic number %v", buf[0])
+		return errors.ErrInvalidMagicNumber
+	}
+	err := binary.Read(bytes.NewBuffer(buf), binary.BigEndian, h)
+	if err != nil {
+		log.Error().Err(err).Msgf("failed to decode head codecs %v", buf)
+		return errors.ErrInvalidCodecHead
+	}
+	return nil
+}
+
+func (h *HeadCodec) Length() int {
+	return binary.Size(h)
+}
