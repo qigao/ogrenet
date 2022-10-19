@@ -1,0 +1,14 @@
+version: 3
+tasks:
+  example:
+    desc: client example
+    cmds:
+      - go build -ldflags "${LD_FLAGS}" -o bin/client_example  example/client/basic/client_example.go
+  tls:
+    desc: client tls
+    cmds:
+      - go build -ldflags "${LD_FLAGS}" -o bin/client_tls  example/client/tls/client_tls_example.go
+  buffer:
+    desc: client buffer
+    cmds:
+      - go build -ldflags "${LD_FLAGS}" -o bin/client_buffer  example/client/buffer/client_buffer.go

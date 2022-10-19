@@ -1,0 +1,13 @@
+package codecs
+
+import "github.com/rs/xid"
+
+var (
+	more        = []byte{0x02, 0x03, 0x00, 0x04}
+	header      = []byte{0xAA, 0x01}
+	emptyHeader = []byte{0xAA, 0x00}
+	cseq        = xid.New()
+	emptyCseq   = [12]byte{}
+	bytes04     = []byte{0x00, 0x00, 0x00, 0x00}
+	body        = []byte{0x01, 0x02, 0x03, 0x04}
+)
