@@ -1,0 +1,7 @@
+.editorconfig
+.git
+.env
+.env.example
+readme.adoc
+**bin/
+**k8s/
