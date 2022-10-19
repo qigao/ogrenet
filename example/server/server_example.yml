@@ -1,0 +1,18 @@
+version: 3
+tasks:
+  example:
+    desc: tcp server example
+    cmds:
+      - go build -ldflags "${LD_FLAGS}" -o bin/server_example  example/server/tcp/tcp_example.go
+  tls:
+    desc: tcp server tls
+    cmds:
+      - go build -ldflags "${LD_FLAGS}" -o bin/server_tls  example/server/tls/tls_example.go
+  buffer:
+    desc: tcp server buffer
+    cmds:
+      - go build -ldflags "${LD_FLAGS}" -o bin/server_buffer  example/server/buffer/tcp_example.go
+  udp:
+    desc: udp server
+    cmds:
+      - go build -ldflags "${LD_FLAGS}" -o bin/server_udp  example/server/udp/udp_example.go

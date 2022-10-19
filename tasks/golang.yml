@@ -1,0 +1,22 @@
+version: 3
+
+tasks:
+  lang:
+    desc: Go develop tools
+    cmds:
+      - go install mvdan.cc/gofumpt@latest
+      - go install github.com/vburenin/ifacemaker@latest
+      - go install github.com/golangci/golangci-lint/cmd/golangci-lint@v1.54.2
+  tools:
+    desc: Go develop tools -- code gen tools
+    cmds:
+      - go install github.com/mailru/easyjson/...@latest
+      - go install github.com/volatiletech/sqlboiler/v4@latest
+      - go install github.com/volatiletech/sqlboiler/v4/drivers/sqlboiler-mysql@latest
+      - go install github.com/vektra/mockery/v2@latest
+      - go install github.com/vburenin/ifacemaker@latest
+  protoc:
+    desc: Go develop tools -- proto gen tools
+    cmds:
+      - go install google.golang.org/protobuf/cmd/protoc-gen-go@latest
+      - go install google.golang.org/grpc/cmd/protoc-gen-go-grpc@latest
