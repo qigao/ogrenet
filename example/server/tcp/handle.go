@@ -2,7 +2,8 @@ package main
 
 import (
 	"fmt"
-	"github.com/qigao/ogrenet/src/network"
+
+	"github.com/qigao/ogrenet/network"
 )
 
 type Handle struct{}

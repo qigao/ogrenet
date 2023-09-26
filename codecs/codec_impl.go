@@ -2,8 +2,8 @@ package codecs
 
 import (
 	"github.com/dsnet/try"
-	"github.com/qigao/ogrenet/src/errors"
-	"github.com/qigao/ogrenet/src/utils"
+	"github.com/qigao/ogrenet/errors"
+	"github.com/qigao/ogrenet/utils"
 	"github.com/rs/zerolog/log"
 )
 

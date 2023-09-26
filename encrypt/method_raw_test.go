@@ -19,5 +19,5 @@ func TestRawMethod_Encrypt(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Log("src:", string(src))
+	t.Log("core:", string(src))
 }

@@ -7,5 +7,5 @@ func TestMagicKeyEncode(t *testing.T) {
 	t.Log("dst:", string(dst))
 
 	src := MagicKeyDecode(dst)
-	t.Log("src:", string(src))
+	t.Log("core:", string(src))
 }
