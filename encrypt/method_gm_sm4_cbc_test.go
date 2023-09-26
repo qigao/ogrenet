@@ -2,8 +2,8 @@ package encrypt
 
 import "testing"
 
-func TestAES256CFBMethod_Encrypt(t *testing.T) {
-	method, err := NewMethodInstance("aes-256-cfb", "abc", "123")
+func TestGMSM4CBCMethod_Encrypt(t *testing.T) {
+	method, err := NewMethodInstance("gm-sm4-cbc", "abc", "123")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -12,18 +12,17 @@ func TestAES256CFBMethod_Encrypt(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	dst = dst[:len(src)]
 	t.Log("dst:", string(dst))
 
 	src, err = method.Decrypt(dst)
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Log("src:", string(src))
+	t.Log("core:", string(src))
 }
 
-func TestAES256CFBMethod_Encrypt2(t *testing.T) {
-	method, err := NewMethodInstance("aes-256-cfb", "abc", "123")
+func TestGMSM4CBCMethod_Encrypt2(t *testing.T) {
+	method, err := NewMethodInstance("gm-sm4-cbc", "abc", "123")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -38,5 +37,5 @@ func TestAES256CFBMethod_Encrypt2(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Log("src:", string(src))
+	t.Log("core:", string(src))
 }

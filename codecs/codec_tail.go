@@ -3,7 +3,7 @@ package codecs
 import (
 	"bytes"
 	"encoding/binary"
-	"github.com/qigao/ogrenet/src/errors"
+	"github.com/qigao/ogrenet/errors"
 )
 
 type TailCodec struct {

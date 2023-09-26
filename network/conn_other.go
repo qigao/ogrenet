@@ -5,8 +5,8 @@ package network
 import (
 	"crypto/tls"
 	"errors"
-	"github.com/qigao/ogrenet/src/codecs"
-	"github.com/qigao/ogrenet/src/utils"
+	"github.com/qigao/ogrenet/codecs"
+	"github.com/qigao/ogrenet/utils"
 	"net"
 	"strings"
 	"sync"

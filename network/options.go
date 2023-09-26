@@ -1,7 +1,7 @@
 package network
 
 import (
-	"github.com/qigao/ogrenet/src/encrypt"
+	"github.com/qigao/ogrenet/encrypt"
 	"time"
 )
 

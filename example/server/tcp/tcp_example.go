@@ -1,19 +1,19 @@
 package main
 
 import (
-	encrypt2 "github.com/qigao/ogrenet/src/encrypt"
-	network2 "github.com/qigao/ogrenet/src/network"
+	"github.com/qigao/ogrenet/encrypt"
+	"github.com/qigao/ogrenet/network"
 	"time"
 )
 
 func main() {
-	method, err := encrypt2.NewMethodInstance("aes-256-cfb", encrypt2.MagicKey, encrypt2.MagicKey)
+	method, err := encrypt.NewMethodInstance("aes-256-cfb", encrypt.MagicKey, encrypt.MagicKey)
 	if err != nil {
 		panic(err)
 	}
-	svr := network2.NewServer(":5005", new(Handle),
-		network2.WithEncryptMethod(method),
-		network2.WithTimeout(5*time.Second),
+	svr := network.NewServer(":5005", new(Handle),
+		network.WithEncryptMethod(method),
+		network.WithTimeout(5*time.Second),
 	)
 	if err != nil {
 		panic(err)

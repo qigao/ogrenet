@@ -5,13 +5,14 @@ import (
 	"crypto/x509"
 	"flag"
 	"fmt"
-	codecs2 "github.com/qigao/ogrenet/src/codecs"
-	encrypt2 "github.com/qigao/ogrenet/src/encrypt"
 	"log"
 	"net"
 	"os"
 	"syscall"
 	"time"
+
+	"github.com/qigao/ogrenet/codecs"
+	"github.com/qigao/ogrenet/encrypt"
 
 	examplecodec "github.com/qigao/ogrenet/example/codec"
 )
@@ -33,17 +34,17 @@ func main() {
 	setLimit()
 
 	addr := *ip + ":" + *port
-	var enc encrypt2.MethodInterface
+	var enc encrypt.MethodInterface
 	var err error
 	var conns []net.Conn
-	buffer := codecs2.NewBuffer(examplecodec.CheckHeader)
+	buffer := codecs.NewBuffer(examplecodec.CheckHeader)
 	msg := examplecodec.ExampleCodec{}
-	buffer.OnMessage(func(m codecs2.Codec) {
+	buffer.OnMessage(func(m codecs.Codec) {
 		msg := m.(*examplecodec.ExampleCodec)
 		fmt.Println("recv msg : ", string(msg.Data))
 	})
 	if *encryptMethod != "" {
-		enc, err = encrypt2.NewMethodInstance(*encryptMethod, encrypt2.MagicKey, encrypt2.MagicKey[:16])
+		enc, err = encrypt.NewMethodInstance(*encryptMethod, encrypt.MagicKey, encrypt.MagicKey[:16])
 		if err != nil {
 			log.Fatalf("set encrypt_method method errrr: %v", err)
 		}
