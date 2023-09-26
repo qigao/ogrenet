@@ -3,9 +3,9 @@ package main
 import (
 	"fmt"
 
+	"github.com/qigao/ogrenet/codecs"
 	"github.com/qigao/ogrenet/network"
 
-	"github.com/qigao/ogrenet/codecs"
 	example "github.com/qigao/ogrenet/example/codec"
 )
 

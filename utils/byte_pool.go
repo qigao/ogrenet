@@ -1,6 +1,6 @@
 package utils
 
-// pool for get byte slice
+// BytePool pool for get byte slice
 type BytePool struct {
 	c      chan []byte
 	length int
@@ -9,7 +9,7 @@ type BytePool struct {
 	lastSize int
 }
 
-// 创建新对象
+// NewBytePool 创建新对象
 func NewBytePool(maxSize, length int) *BytePool {
 	if maxSize <= 0 {
 		maxSize = 1024
@@ -25,38 +25,37 @@ func NewBytePool(maxSize, length int) *BytePool {
 	return pool
 }
 
-func (this *BytePool) start() {
-
+func (p *BytePool) start() {
 }
 
-// 获取一个新的byte slice
-func (this *BytePool) Get() (b []byte) {
+// Get 获取一个新的byte slice
+func (p *BytePool) Get() (b []byte) {
 	select {
-	case b = <-this.c:
+	case b = <-p.c:
 	default:
-		b = make([]byte, this.length)
+		b = make([]byte, p.length)
 	}
 	return
 }
 
-// 放回一个使用过的byte slice
-func (this *BytePool) Put(b []byte) {
-	if cap(b) != this.length {
+// Put 放回一个使用过的byte slice
+func (p *BytePool) Put(b []byte) {
+	if cap(b) != p.length {
 		return
 	}
 	select {
-	case this.c <- b:
+	case p.c <- b:
 	default:
 		// 已达最大容量，则抛弃
 	}
 }
 
-// 当前的数量
-func (this *BytePool) Size() int {
-	return len(this.c)
+// Size 当前的数量
+func (p *BytePool) Size() int {
+	return len(p.c)
 }
 
-// 销毁
-func (this *BytePool) Destroy() {
-	this.ticker.Stop()
+// Destroy 销毁
+func (p *BytePool) Destroy() {
+	p.ticker.Stop()
 }

@@ -23,7 +23,7 @@ func TestAES192CFBMethod_Encrypt(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Log("src:", string(src))
+	t.Log("core:", string(src))
 }
 
 func BenchmarkAES192CFBMethod_Encrypt(b *testing.B) {

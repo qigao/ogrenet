@@ -13,11 +13,12 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/qigao/ogrenet/codecs"
+	"github.com/qigao/ogrenet/utils"
+
 	"github.com/alitto/pond"
 
 	"github.com/mailru/easygo/netpoll"
-	"github.com/qigao/ogrenet/codecs"
-	"github.com/qigao/ogrenet/utils"
 	"github.com/rs/zerolog/log"
 )
 

@@ -24,7 +24,7 @@ func TestAES128CFBMethod_Encrypt(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Log("src:", string(src))
+	t.Log("core:", string(src))
 }
 
 func TestAES128CFBMethod_Encrypt2(t *testing.T) {

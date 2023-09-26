@@ -2,10 +2,10 @@ package codec
 
 import (
 	"encoding/binary"
-	errors2 "github.com/qigao/ogrenet/errors"
 	"sync/atomic"
 
 	"github.com/qigao/ogrenet/codecs"
+	"github.com/qigao/ogrenet/errors"
 )
 
 const (
@@ -105,21 +105,21 @@ func (t *ExampleCodec) GetLength() uint32 {
 func CheckHeader(buf []byte) (codecs.Codec, error) {
 	msg := ExampleCodec{}
 	if buf == nil || len(buf) == 0 {
-		return nil, errors2.ErrBufferInvalidIsNil
+		return nil, errors.ErrBufferInvalidIsNil
 	}
 	msg.Version = buf[0]
 	// 检查消息版本
 	if len(buf) > 0 && buf[0] != MessageVersion {
-		return nil, errors2.ErrBufferInvalidStart
+		return nil, errors.ErrBufferInvalidStart
 	}
 
 	if len(buf) < MessageHeaderLength {
-		return nil, errors2.ErrBufferInvalidHeader
+		return nil, errors.ErrBufferInvalidHeader
 	}
 
 	l := binary.BigEndian.Uint32(buf[MessageLengthIndex : MessageLengthIndex+4])
 	if l > codecs.MaxBufferSize { // 每次通讯数据不超过一定尺寸
-		return nil, errors2.ErrBufferDataTooLong
+		return nil, errors.ErrBufferDataTooLong
 	}
 	msg.Length = l
 	// 解析Header

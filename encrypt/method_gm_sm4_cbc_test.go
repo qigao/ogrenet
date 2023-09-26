@@ -18,7 +18,7 @@ func TestGMSM4CBCMethod_Encrypt(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Log("src:", string(src))
+	t.Log("core:", string(src))
 }
 
 func TestGMSM4CBCMethod_Encrypt2(t *testing.T) {
@@ -37,5 +37,5 @@ func TestGMSM4CBCMethod_Encrypt2(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Log("src:", string(src))
+	t.Log("core:", string(src))
 }

@@ -13,6 +13,7 @@ import (
 
 	"github.com/qigao/ogrenet/codecs"
 	"github.com/qigao/ogrenet/encrypt"
+
 	examplecodec "github.com/qigao/ogrenet/example/codec"
 )
 

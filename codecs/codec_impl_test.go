@@ -2,9 +2,9 @@ package codecs
 
 import (
 	"bytes"
-	"github.com/qigao/ogrenet/errors"
 	"testing"
 
+	"github.com/qigao/ogrenet/errors"
 	"github.com/qigao/ogrenet/utils"
 
 	"github.com/stretchr/testify/assert"

@@ -20,12 +20,14 @@ Thumbs.db
 .vscode/
 
 .env
-
 **/bin
-
 *.log
-
 .task
+
+# cert related
+/*.crt
+/*.pem
+/*.key
 
 # generated files
 *_easyjson.go

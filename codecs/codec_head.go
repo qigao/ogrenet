@@ -3,6 +3,7 @@ package codecs
 import (
 	"bytes"
 	"encoding/binary"
+
 	"github.com/qigao/ogrenet/errors"
 
 	"github.com/rs/zerolog/log"
