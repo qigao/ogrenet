@@ -2,10 +2,9 @@ package main
 
 import (
 	"fmt"
+	codecs2 "github.com/qigao/ogrenet/src/codecs"
+	"github.com/qigao/ogrenet/src/network"
 
-	"github.com/qigao/ogrenet/network"
-
-	"github.com/qigao/ogrenet/codecs"
 	example "github.com/qigao/ogrenet/example/codec"
 )
 
@@ -13,11 +12,11 @@ type (
 	Handle struct{}
 	conn   struct {
 		c     *network.Connection
-		codec *codecs.Message
+		codec *codecs2.Message
 	}
 )
 
-func (c *conn) onMessage(m codecs.Codec) {
+func (c *conn) onMessage(m codecs2.Codec) {
 	msg := m.(*example.ExampleCodec)
 	msg.SetData([]byte("recv msg"))
 	_, _ = c.c.Write(msg.Marshal())
@@ -26,7 +25,7 @@ func (c *conn) onMessage(m codecs.Codec) {
 // OnConnect 当TCP长连接建立成功是回调
 func (h *Handle) OnConnect(c *network.Connection) {
 	fmt.Println("new connection : ", c.RemoteAddr())
-	buffer := codecs.NewBuffer(example.CheckHeader)
+	buffer := codecs2.NewBuffer(example.CheckHeader)
 	buffer.OnMessage((&conn{c: c}).onMessage)
 	c.SetBuffer(buffer)
 }

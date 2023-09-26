@@ -5,13 +5,12 @@ import (
 	"crypto/x509"
 	"flag"
 	"fmt"
+	encrypt2 "github.com/qigao/ogrenet/src/encrypt"
 	"log"
 	"net"
 	"os"
 	"syscall"
 	"time"
-
-	"github.com/qigao/ogrenet/encrypt"
 )
 
 var (
@@ -31,11 +30,11 @@ func main() {
 	setLimit()
 
 	addr := *ip + ":" + *port
-	var enc encrypt.MethodInterface
+	var enc encrypt2.MethodInterface
 	var err error
 	var conns []net.Conn
 	if *encryptMethod != "" {
-		enc, err = encrypt.NewMethodInstance(*encryptMethod, encrypt.MagicKey, encrypt.MagicKey[:16])
+		enc, err = encrypt2.NewMethodInstance(*encryptMethod, encrypt2.MagicKey, encrypt2.MagicKey[:16])
 		if err != nil {
 			log.Fatalf("set encryptMethod method errrr: %v", err)
 		}
