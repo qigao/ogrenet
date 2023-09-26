@@ -5,18 +5,17 @@ package network
 import (
 	"crypto/tls"
 	"errors"
-	"github.com/qigao/ogrenet/codecs"
-	"github.com/qigao/ogrenet/utils"
 	"net"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
- 
+
 	"github.com/qigao/ogrenet/codecs"
 	"github.com/qigao/ogrenet/utils"
 
- 
+	"github.com/qigao/ogrenet/codecs"
+	"github.com/qigao/ogrenet/utils"
 )
 
 var (

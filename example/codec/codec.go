@@ -2,11 +2,10 @@ package codec
 
 import (
 	"encoding/binary"
- 
+	"sync/atomic"
+
 	"github.com/qigao/ogrenet/codecs"
 	"github.com/qigao/ogrenet/errors"
-	"sync/atomic"
- 
 )
 
 const (

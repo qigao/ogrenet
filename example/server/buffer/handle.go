@@ -2,18 +2,20 @@ package main
 
 import (
 	"fmt"
- 
+
 	"github.com/qigao/ogrenet/codecs"
 	"github.com/qigao/ogrenet/network"
 
 	example "github.com/qigao/ogrenet/example/codec"
 )
 
-type Handle struct{}
-type conn struct {
-	c     *network.Connection
-	codec *codecs.Message
-}
+type (
+	Handle struct{}
+	conn   struct {
+		c     *network.Connection
+		codec *codecs.Message
+	}
+)
 
 func (c *conn) onMessage(m codecs.Codec) {
 	msg := m.(*example.ExampleCodec)

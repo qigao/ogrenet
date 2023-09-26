@@ -1,11 +1,10 @@
 package main
 
-import ( 
+import (
 	"time"
 
 	"github.com/qigao/ogrenet/encrypt"
 	"github.com/qigao/ogrenet/network"
- 
 )
 
 func main() {
