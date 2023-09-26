@@ -6,6 +6,8 @@ package network
 
 import (
 	"errors"
+	"github.com/qigao/ogrenet/codecs"
+	"github.com/qigao/ogrenet/utils"
 	"io"
 	"net"
 	"strings"

@@ -26,6 +26,7 @@ func NewBytePool(maxSize, length int) *BytePool {
 }
 
 func (p *BytePool) start() {
+ 
 }
 
 // Get 获取一个新的byte slice

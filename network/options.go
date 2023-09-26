@@ -1,9 +1,8 @@
 package network
 
 import (
-	"time"
-
 	"github.com/qigao/ogrenet/encrypt"
+	"time"
 )
 
 // Options Server初始化参数
