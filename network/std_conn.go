@@ -31,11 +31,11 @@ func dupStdConn(netconn net.Conn) (Conn, error) {
 		return nil, err
 	}
 
-	c := &conn{
-		fd:        newFd,
-		localAddr: netconn.LocalAddr(),
-		rAddr:     netconn.RemoteAddr(),
-		ctx:       context.Background(),
+	c := &OgreConn{
+		fd:    newFd,
+		laddr: netconn.LocalAddr(),
+		raddr: netconn.RemoteAddr(),
+		ctx:   context.Background(),
 	}
 	return c, nil
 }

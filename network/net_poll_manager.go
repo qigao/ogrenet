@@ -1,17 +1,17 @@
 package network
 
-type Manager struct {
+type NetPollManager struct {
 	num int
 	// balance
-	polls []*Poller
+	polls []*NetPoll
 }
 
-func NewManager(e *Server, number int) (*Manager, error) {
-	m := new(Manager)
+func NewNetPollManager(ogreNet *OgreNet, number int) (*NetPollManager, error) {
+	m := new(NetPollManager)
 	m.num = number
 
 	for i := 0; i < number; i++ {
-		p, err := NewPoller(e)
+		p, err := NewNetPoll(ogreNet)
 		p.index = i
 		if err != nil {
 			_ = m.Stop()
@@ -24,20 +24,20 @@ func NewManager(e *Server, number int) (*Manager, error) {
 	return m, nil
 }
 
-func (m *Manager) init() {
+func (m *NetPollManager) init() {
 	for _, poller := range m.polls {
 		p := poller
 		go p.Wait()
 	}
 }
 
-func (m *Manager) Stop() error {
+func (m *NetPollManager) Stop() error {
 	for _, poller := range m.polls {
 		_ = poller.Close()
 	}
 	return nil
 }
 
-func (m *Manager) Pick(fd int) *Poller {
+func (m *NetPollManager) Pick(fd int) *NetPoll {
 	return m.polls[fd%m.num]
 }

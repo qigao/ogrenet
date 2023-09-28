@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"net"
 	"os"
 	"os/signal"
@@ -14,18 +15,19 @@ func main() {
 	if err != nil {
 		log.Error().Err(err)
 	}
-	for int := 0; int < 100; int++ {
-		n, err := conn.Write([]byte("hello world"))
+	for i := 0; i < 30; i++ {
+		x := fmt.Sprintf("hello world %d \r\n", i)
+		_, err := conn.Write([]byte(x))
 		if err != nil {
 			log.Error().Err(err)
 		}
 
 		go func() {
-			b := make([]byte, 100)
-			if n, err = conn.Read(b); err != nil {
-				log.Error().Err(err)
+			b := make([]byte, 16)
+			if n, err := conn.Read(b); err != nil {
+				log.Error().Err(err).Msgf("sent byte: %d err: %v", n, err)
 			}
-			log.Info().Msgf("read data: %d, %s", n, string(b))
+			log.Info().Msgf("read data: %d, %s", i, string(b))
 		}()
 	}
 	defer conn.Close()

@@ -5,10 +5,6 @@ tasks:
     desc: Go develop tools
     cmds:
       - go install mvdan.cc/gofumpt@latest
-<<<<<<< HEAD
-      - go install github.com/vburenin/ifacemaker@latest
-=======
->>>>>>> 1a822c8 (init commit)
       - go install github.com/golangci/golangci-lint/cmd/golangci-lint@v1.54.2
   tools:
     desc: Go develop tools -- code gen tools
