@@ -5,14 +5,12 @@ import (
 	"sync"
 )
 
-type Listener struct {
+type NetListener struct {
 	once     sync.Once
 	listener net.Listener
-	addr     net.Addr // local addr
-	engine   *Server
 }
 
-func (ln *Listener) Close() error {
+func (ln *NetListener) Close() error {
 	ln.once.Do(func() {
 		if ln.listener != nil {
 			ln.listener.Close()
@@ -21,11 +19,7 @@ func (ln *Listener) Close() error {
 	return nil
 }
 
-func (ln *Listener) Addr() net.Addr {
-	return ln.addr
-}
-
-func (ln *Listener) Accept() (net.Conn, error) {
+func (ln *NetListener) Accept() (net.Conn, error) {
 	conn, err := ln.listener.Accept()
 	if err != nil {
 		return nil, err
@@ -35,6 +29,7 @@ func (ln *Listener) Accept() (net.Conn, error) {
 	}
 
 	ec, ok := conn.(Conn)
+
 	if !ok {
 		ec, err = dupStdConn(conn)
 	}

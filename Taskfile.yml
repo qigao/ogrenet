@@ -10,8 +10,8 @@ vars:
 
 includes:
   golang: tasks/golang.yml
-  client: example/client/client_example.yml
-  server: example/server/server_example.yml
+  client: example/client/tasks.yml
+  server: example/server/tasks.yml
   tls-cert: tls-cert/tasks.yml
 
 tasks:

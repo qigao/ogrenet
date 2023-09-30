@@ -11,19 +11,17 @@ import (
 	"github.com/rs/zerolog/log"
 )
 
-type Poller struct {
-	e *Server
-
-	index int
-
+type NetPoll struct {
+	ogreNet  *OgreNet
+	index    int
 	fd       int
 	wfd      int
 	shutdown atomic.Bool
 }
 
-func NewPoller(e *Server) (*Poller, error) {
-	p := new(Poller)
-	p.e = e
+func NewNetPoll(oNet *OgreNet) (*NetPoll, error) {
+	p := new(NetPoll)
+	p.ogreNet = oNet
 
 	fd, err := syscall.EpollCreate1(0)
 	if err != nil {
@@ -52,30 +50,30 @@ func NewPoller(e *Server) (*Poller, error) {
 	return p, nil
 }
 
-func (p *Poller) Wait() error {
+func (m *NetPoll) Wait() error {
 	mesc := -1
 	events := make([]syscall.EpollEvent, 1024)
 
-	handler := p.e.GetEventHandler()
+	handler := m.ogreNet.GetEventHandler()
 
-	for !p.shutdown.Load() {
-		n, err := syscall.EpollWait(p.fd, events, mesc)
+	for !m.shutdown.Load() {
+		eventsNum, err := syscall.EpollWait(m.fd, events, mesc)
 		if err != nil && errors.Is(err, syscall.EINTR) {
 			return err
 		}
 		// no event
-		if n <= 0 {
+		if eventsNum <= 0 {
 			mesc = -1
 			runtime.Gosched()
 			continue
 		}
 		mesc = 20
 
-		for i := 0; i < n; i++ {
+		for i := 0; i < eventsNum; i++ {
 			event := events[i]
 
-			// find conn
-			c := p.e.GetConn(int(event.Fd))
+			// find OgreConn
+			c := m.ogreNet.GetConn(int(event.Fd))
 			if c == nil {
 				syscall.Close(int(event.Fd))
 				continue
@@ -83,13 +81,13 @@ func (p *Poller) Wait() error {
 
 			// 写
 			if event.Events&WriteEvents != 0 {
-				log.Info().Msgf("fd:%d write event\n", event.Fd)
+				log.Info().Msgf("fd:%d write event", event.Fd)
 				c.Flush()
 			}
 
 			// event Error
 			if event.Events&ErrEvents != 0 {
-				p.closeConn(c)
+				m.closeConn(c)
 				continue
 			}
 
@@ -103,59 +101,59 @@ func (p *Poller) Wait() error {
 	return nil
 }
 
-func (p *Poller) closeConn(c Conn) {
+func (m *NetPoll) closeConn(c Conn) {
 	if c == nil {
 		return
 	}
 
 	c.Close()
-	p.removeConn(c)
+	m.removeConn(c)
 
-	e := p.e.GetEventHandler()
+	e := m.ogreNet.GetEventHandler()
 	if e != nil {
 		e.OnClose(c.Context(), c)
 	}
 }
 
-func (p *Poller) removeConn(conn Conn) {
+func (m *NetPoll) removeConn(conn Conn) {
 	if conn == nil {
 		return
 	}
 
 	fd := conn.Fd()
-	if c := p.e.GetConn(fd); c != nil {
-		p.e.Remove(fd)
-		_ = p.Delete(fd)
+	if c := m.ogreNet.GetConn(fd); c != nil {
+		m.ogreNet.Remove(fd)
+		_ = m.Delete(fd)
 	}
 }
 
-func (p *Poller) Close() error {
-	p.shutdown.Store(true)
-	syscall.Close(p.wfd)
-	return syscall.Close(p.fd)
+func (m *NetPoll) Close() error {
+	m.shutdown.Store(true)
+	syscall.Close(m.wfd)
+	return syscall.Close(m.fd)
 }
 
-func (p *Poller) AddRead(fd int) error {
-	return syscall.EpollCtl(p.fd, syscall.EPOLL_CTL_ADD, fd, &syscall.EpollEvent{
+func (m *NetPoll) AddRead(fd int) error {
+	return syscall.EpollCtl(m.fd, syscall.EPOLL_CTL_ADD, fd, &syscall.EpollEvent{
 		Fd:     int32(fd),
 		Events: syscall.EPOLLERR | syscall.EPOLLHUP | syscall.EPOLLRDHUP | syscall.EPOLLPRI | syscall.EPOLLIN,
 	})
 }
 
-func (p *Poller) ModWrite(fd int) error {
-	return syscall.EpollCtl(p.fd, syscall.EPOLL_CTL_MOD, fd, &syscall.EpollEvent{
+func (m *NetPoll) ModWrite(fd int) error {
+	return syscall.EpollCtl(m.fd, syscall.EPOLL_CTL_MOD, fd, &syscall.EpollEvent{
 		Fd:     int32(fd),
 		Events: syscall.EPOLLERR | syscall.EPOLLHUP | syscall.EPOLLRDHUP | syscall.EPOLLPRI | syscall.EPOLLIN | syscall.EPOLLOUT,
 	})
 }
 
-func (p *Poller) ModRead(fd int) error {
-	return syscall.EpollCtl(p.fd, syscall.EPOLL_CTL_MOD, fd, &syscall.EpollEvent{
+func (m *NetPoll) ModRead(fd int) error {
+	return syscall.EpollCtl(m.fd, syscall.EPOLL_CTL_MOD, fd, &syscall.EpollEvent{
 		Fd:     int32(fd),
 		Events: syscall.EPOLLERR | syscall.EPOLLHUP | syscall.EPOLLRDHUP | syscall.EPOLLPRI | syscall.EPOLLIN,
 	})
 }
 
-func (p *Poller) Delete(fd int) error {
-	return syscall.EpollCtl(p.fd, syscall.EPOLL_CTL_DEL, fd, &syscall.EpollEvent{Fd: int32(fd)})
+func (m *NetPoll) Delete(fd int) error {
+	return syscall.EpollCtl(m.fd, syscall.EPOLL_CTL_DEL, fd, &syscall.EpollEvent{Fd: int32(fd)})
 }
