@@ -15,7 +15,7 @@ import (
 
 var (
 	ip            = flag.String("ip", "127.0.0.1", "server IP")
-	port          = flag.String("port", "5005", "server port")
+	port          = flag.String("port", "8090", "server port")
 	protocol      = flag.String("proto", "tcp", "server type tcp / udp")
 	connections   = flag.Int("conn", 1, "number of tcp connections")
 	caCrt         = flag.String("ca", "./certs/ca.crt", "tls ca cert")

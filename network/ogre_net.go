@@ -3,23 +3,23 @@ package network
 import (
 	"net"
 	"runtime"
+	"sync"
 
 	"github.com/qigao/ogrenet/buffer"
+	"golang.org/x/exp/maps"
 
 	"github.com/rs/zerolog/log"
 )
-
-var MaxOpenFiles = 1024 * 1024 * 2
 
 type OgreNet struct {
 	network string
 	addr    string
 
-	exitCh chan struct{}
-
+	exitCh      chan struct{}
+	mutex       sync.RWMutex
 	netListener *NetListener
 	poller      *NetPollManager
-	conns       []Conn
+	conns       map[int]Conn
 
 	options *Options
 }
@@ -35,7 +35,7 @@ func NewOgreNet(network, addr string, fns ...Option) *OgreNet {
 	e.exitCh = make(chan struct{})
 	e.network = network
 	e.addr = addr
-
+	e.mutex = sync.RWMutex{}
 	return e
 }
 
@@ -73,8 +73,7 @@ func (n *OgreNet) init() {
 	if n.options.eventHandler == nil {
 		n.options.eventHandler = new(DefaultEventHandler)
 	}
-
-	n.conns = make([]Conn, MaxOpenFiles)
+	n.conns = make(map[int]Conn)
 }
 
 func (n *OgreNet) Stop() error {
@@ -83,13 +82,12 @@ func (n *OgreNet) Stop() error {
 	n.netListener.Close()
 
 	// conns close
+	n.mutex.Lock()
 	for _, conn := range n.conns {
-		if conn == nil {
-			continue
-		}
 		conn.Close()
 	}
-
+	maps.Clear(n.conns)
+	n.mutex.Unlock()
 	// poller stop
 	n.poller.Stop()
 
@@ -101,17 +99,20 @@ func (n *OgreNet) GetEventHandler() EventHandler {
 }
 
 func (n *OgreNet) AddConn(conn Conn) {
+	n.mutex.Lock()
 	n.conns[conn.Fd()] = conn
+	n.mutex.Unlock()
 }
 
 func (n *OgreNet) Remove(pd int) {
-	n.conns[pd] = nil
+	n.mutex.Lock()
+	delete(n.conns, pd)
+	n.mutex.Unlock()
 }
 
 func (n *OgreNet) GetConn(pd int) Conn {
-	if pd >= len(n.conns) {
-		log.Fatal().Msgf("fd OgreConn is not exist")
-	}
+	n.mutex.RLock()
+	defer n.mutex.RUnlock()
 	return n.conns[pd]
 }
 
@@ -137,8 +138,8 @@ func (n *OgreNet) acceptPolling(localOSThread bool) error {
 				continue
 			}
 			ec := nc.(*OgreConn)
-			ec.raddr = ec.RemoteAddr()
-			ec.laddr = ec.LocalAddr()
+			ec.laddr = nc.LocalAddr()
+			ec.raddr = nc.RemoteAddr()
 			poller := n.poller.Pick(ec.Fd())
 			ec.poller = poller
 			ec.wBuf = buffer.NewSpscRingBuffer(capacity)

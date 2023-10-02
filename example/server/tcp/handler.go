@@ -12,6 +12,7 @@ import (
 type Handler struct{}
 
 func (h *Handler) OnOpen(c network.Conn) context.Context {
+	log.Info().Msgf("[Handler] remote %v connected", c.RemoteAddr())
 	return context.WithValue(context.Background(), CtxKey, Message{Msg: "helloword"})
 }
 
