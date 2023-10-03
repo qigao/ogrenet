@@ -49,7 +49,7 @@ type ExampleCodec struct {
 }
 
 // Marshal 编码消息
-func (t *ExampleCodec) Marshal() []byte {
+func (t *ExampleCodec) Encode() []byte {
 	if t.Id <= 0 {
 		t.Id = atomic.AddUint64(&messageId, 1)
 	}
@@ -83,7 +83,7 @@ func (t *ExampleCodec) MsgId() uint64 {
 }
 
 // SetData 设置消息体
-func (t *ExampleCodec) SetData(buf []byte) {
+func (t *ExampleCodec) SetBody(buf []byte) {
 	if t.Data == nil {
 		t.Data = buf
 	} else {

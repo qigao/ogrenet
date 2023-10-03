@@ -16,6 +16,6 @@ func SplitSliceBySep(b []byte, sep []byte) [][]byte {
 	return result
 }
 
-func trimSlieSuffix(b []byte, suffix string) []byte {
+func trimSliceSuffix(b []byte, suffix string) []byte {
 	return bytes.ReplaceAll(b, []byte(suffix), []byte{})
 }

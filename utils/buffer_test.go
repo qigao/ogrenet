@@ -46,7 +46,7 @@ func TestBytesSplit(t *testing.T) {
 	}
 }
 
-func TestEmpyByteSlice(t *testing.T) {
+func TestEmptyByteSlice(t *testing.T) {
 	testCases := []struct {
 		name     string
 		input    []byte
@@ -74,7 +74,7 @@ func TestEmpyByteSlice(t *testing.T) {
 	}
 }
 
-func TestTrimSlieSuffix(t *testing.T) {
+func TestTrimSliceSuffix(t *testing.T) {
 	testCases := []struct {
 		name   string
 		input  []byte
@@ -127,9 +127,9 @@ func TestTrimSlieSuffix(t *testing.T) {
 
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
-			got := trimSlieSuffix(tc.input, tc.suffix)
+			got := trimSliceSuffix(tc.input, tc.suffix)
 			if !bytes.Equal(got, tc.want) {
-				t.Errorf("trimSlieSuffix(%q, %q) = %q; want %q", tc.input, tc.suffix, got, tc.want)
+				t.Errorf("trimSliceSuffix(%q, %q) = %q; want %q", tc.input, tc.suffix, got, tc.want)
 			}
 		})
 	}

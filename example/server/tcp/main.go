@@ -5,18 +5,17 @@ import (
 	"os/signal"
 	"syscall"
 
+	"github.com/qigao/ogrenet/codecs/modbus"
 	"github.com/qigao/ogrenet/network"
 )
 
 func main() {
-	e := network.NewOgreNet("tcp", ":8090",
-		network.WithNumPoller(5), network.WithEventHandler(&Handler{}))
-
-	if err := e.Start(); err != nil {
-		panic(err)
+	opts := &network.Options{
+		Codec: modbus.NewEmptyModbusCodec(),
 	}
-
-	defer e.Stop()
+	net := network.NewOgreNet("0.0.0.0", 8090, &Handler{}, opts)
+	net.Run()
+	defer net.Close()
 
 	c := make(chan os.Signal, 1)
 	signal.Notify(c, syscall.SIGTERM, syscall.SIGQUIT, syscall.SIGINT)

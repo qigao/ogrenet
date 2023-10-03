@@ -1,0 +1,91 @@
+package ws
+
+import (
+	"encoding/binary"
+	"fmt"
+	"time"
+
+	"github.com/qigao/ogrenet/gof"
+
+	"github.com/rs/zerolog/log"
+)
+
+func ParseMsgType(buf []byte, c *gof.Conn) bool {
+	// 查询状态
+	msgtype := int((buf[0] << 4) >> 4)
+	// 查询掩码
+	mask := buf[1] >> 7
+
+	if mask != 1 { // 如果没有掩码，就直接将数据抛弃掉
+		return true
+	}
+	// 根据消息类型做处理
+	switch msgtype {
+	case CloseMessage:
+		// 获取关闭信息
+		closeReason := c.Handle.BytePool.Get().([]byte)
+		closeReason = c.DecodeMessage(buf[:])
+		c.CloseCode = binary.BigEndian.Uint16(closeReason[:2])
+		c.CloseReason = closeReason[2:]
+		closeReason = []byte{}
+		c.Handle.BytePool.Put(closeReason)
+		c.Handle.CloseChan <- c
+
+	case BinaryMessage, TextMessage: // 如果是二进制或者文本消息
+		msg := c.Handle.MessagePool.Get().(*Codec)
+		msg.MessageType = msgtype
+		msg.Content = c.DecodeMessage(buf[:])
+		// 发送内容
+		newTime := time.Now().Unix()
+		_ = c.Handle.CheckTimeOutTree.Set(c.UpdateTime, newTime, c.fd)
+		c.UpdateTime = newTime
+		if c.CanCompress == true && c.Handle.IsCompressOn == true {
+			// 一个缓存区压缩的内容
+			var err error
+			fmt.Printf("msg.Content===%b\n", msg.Content)
+			msg.Content, err = DeCompress(msg.Content)
+			if err != nil {
+				log.Fatal().Msgf("解压句柄为 %d 的消息失败：%+v", c.fd, err.Error())
+				return true
+			}
+		}
+		msg.Conn = c
+		c.Handle.ReadMessageChan <- msg
+		msg = &Codec{
+			Content: make([]byte, 0, c.Handle.WriteBufferSize),
+		}
+		c.Handle.MessagePool.Put(msg)
+	}
+	return false
+}
+
+func ParseWSMessage(buf []byte, c *gof.Conn) ([]byte, []byte) {
+	// 查询数据的长度
+	datalen := int64((buf[1] << 1) >> 1)
+	// 掩码默认从第二字节开始
+	maskStart := 2
+	// 如果data长度小于125，就直接取字节长度
+	if datalen == 126 { // 如果data长度等于126，就往后增加两个字节长度
+		datalen = int64(binary.BigEndian.Uint16(buf[2:3]))
+		maskStart = 4
+	} else if datalen == 127 {
+		datalen = int64(binary.BigEndian.Uint64(buf[2:9]))
+		maskStart = 10
+	}
+	// 4位的掩码
+	maskSlice := c.Handle.BytePool.Get().([]byte)
+
+	maskSlice = buf[maskStart : maskStart+4]
+	datastart := int64(maskStart + 4)
+	maskIndex := 0
+	content := c.Handle.BytePool.Get().([]byte)
+	for i := datastart; i < datalen+datastart; i++ {
+		content = append(content, buf[i]^maskSlice[maskIndex])
+		if maskIndex == 3 {
+			maskIndex = 0
+		} else {
+			maskIndex++
+		}
+	}
+	return maskSlice, content
+}

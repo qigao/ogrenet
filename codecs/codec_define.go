@@ -1,26 +1,9 @@
 package codecs
 
-const (
-	MagicHead = 0xAA
-	MagicTail = 0x55
-)
-
-type ModbusCodec struct {
-	Head *HeadCodec
-	Body []byte
-	Tail *TailCodec
-}
-
 type Codec interface {
-	Marshal() []byte
-	MsgId() uint64
-	HeaderLength() uint32
-	GetLength() uint32
-	SetData(buf []byte)
-}
-
-type Parser interface {
-	CheckHeader([]byte) (Codec, error)
+	Encode() ([]byte, error)
+	Decode(buf []byte) error
+	Length() uint16
 }
 
 // Codec format

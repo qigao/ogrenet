@@ -1,125 +1,137 @@
 package network
 
 import (
+	"bytes"
 	"context"
 	"net"
-	"sync/atomic"
 	"syscall"
 	"time"
 
-	"github.com/qigao/ogrenet/utils"
-
-	"github.com/pkg/errors"
-	"github.com/qigao/ogrenet/buffer"
+	"github.com/qigao/ogrenet/codecs/modbus"
+	"github.com/rs/zerolog/log"
 )
 
-// var _ OgreConn = (*OgreConn)(nil)
-type OgreConn struct {
-	ctx      context.Context
-	fd       int
-	laddr    net.Addr
-	raddr    net.Addr
-	isClosed atomic.Bool
-	rBuf     *buffer.SpscRingBuffer
-	wBuf     *buffer.SpscRingBuffer
-	poller   *NetPoll
+type Conn struct {
+	fd         int   // 当前连接的文件描述符 Fd
+	UpdateTime int64 // 最新的更新时间，判断超时用
+	ctx        interface{}
+	remoteAddr net.Addr
+	localAddr  net.Addr
+	bytePool   *MessagePool
 }
 
-func NewOgreConn(fd int, local, remote net.Addr) *OgreConn {
-	return &OgreConn{
-		fd:    fd,
-		laddr: local,
-		raddr: remote,
-		ctx:   context.Background(),
+func NewConn(fd int, msgPool *MessagePool) *Conn {
+	conn := &Conn{
+		fd:         fd,
+		UpdateTime: time.Now().Unix(),
+		bytePool:   msgPool,
+		ctx:        context.Background(),
 	}
+	return conn
 }
 
-func (c *OgreConn) LocalAddr() net.Addr {
-	return c.laddr
-}
-
-func (c *OgreConn) RemoteAddr() net.Addr {
-	return c.raddr
-}
-
-func (c *OgreConn) Context() context.Context {
-	return c.ctx
-}
-
-func (c *OgreConn) write(b []byte) (int, error) {
-	return syscall.Write(c.fd, b)
-}
-
-func (c *OgreConn) Flush() error {
-	if c.isClosed.Load() {
-		return net.ErrClosed
-	}
-	for i := 0; i < c.wBuf.Length(); i++ {
-		v, err := c.wBuf.Dequeue()
-		if err != nil {
-			return err
-		}
-		b, _ := v.([]byte)
-		_, err = c.write(b)
-		if err != nil && !errors.Is(err, syscall.EINTR) && !errors.Is(err, syscall.EAGAIN) {
-			_ = c.Close()
-			c.poller.removeConn(c)
-			return err
-		}
-	}
-	// reset to read
-	c.resetRead()
-	return nil
-}
-
-func (c *OgreConn) resetRead() {
-	if !c.isClosed.Load() {
-		c.poller.ModRead(c.fd)
-	}
-}
-
-func (c *OgreConn) Read(b []byte) (n int, err error) {
-	n, err = syscall.Read(c.fd, b)
-	return
-}
-
-func (c *OgreConn) Fd() int {
+func (c *Conn) Fd() int {
 	return c.fd
 }
 
-func (c *OgreConn) Write(b []byte) (int, error) {
-	if len(b) == 0 {
-		return 0, nil
-	}
-	bufLen := 0
-	buf := utils.SplitSliceBySep(b, []byte(NewLine))
-	for _, v := range buf {
-		err := c.wBuf.Enqueue(v)
-		if errors.Is(err, buffer.ErrIsFull) {
-			return bufLen, err
-		}
-		bufLen += len(v)
-	}
-	go c.Flush()
-	return bufLen, nil
+func (c *Conn) Context() interface{} {
+	return c.ctx
 }
 
-func (c *OgreConn) Close() error {
-	c.isClosed.Store(true)
+// SetContext sets the context associated with the connection.
+func (c *Conn) SetContext(ctx interface{}) {
+	c.ctx = ctx
+}
+
+func (c *Conn) ReadWorker() {
+	//<-c.ready
+	buf := c.bytePool.BytePool.Get().([]byte)
+	defer func() {
+		// buf = make([]byte, MaxPacketSize)
+		c.bytePool.BytePool.Put(buf)
+	}()
+	readPos := 0
+	for !c.bytePool.RBuf.IsEmpty() {
+		b, _ := c.bytePool.RBuf.ReadByte()
+		if b == modbus.MagicHead {
+			readPos++
+		}
+		if readPos > 0 {
+			buf = append(buf, b)
+		}
+		if b == modbus.MagicTail {
+			log.Info().Msgf("Conn ReadWorker received message:%x", buf)
+			data := bytes.Trim(buf, "\x00")
+			MessageChan <- &MsgConn{c, data}
+			readPos = 0
+		}
+	}
+	// close(c.ready)
+	// ClosedConn <- c
+}
+
+func (c *Conn) ReadToMemory() {
+	buf := c.bytePool.NetRBuf.Get().([]byte)
+	defer func() {
+		buf = make([]byte, MaxPacketSize)
+		c.bytePool.NetRBuf.Put(buf)
+	}()
+	n, err := c.Read(buf)
+	if err != nil {
+		log.Error().Msgf("read error,fd is %d", c.fd)
+		c.Close()
+		return
+	}
+	if n > 0 {
+		wn, err := c.bytePool.RBuf.Write(buf[:n])
+		log.Debug().Msgf("write to rbuf, wn:%d, err:%+v", wn, err)
+		// c.ready <- struct{}{}
+		c.UpdateTime = time.Now().Unix()
+		log.Debug().Msgf("Conn ReadToMemory received message:%x", buf[:n])
+		go c.ReadWorker()
+		// OpenedConn <- c
+	}
+}
+
+func (c *Conn) Read(b []byte) (n int, err error) {
+	n, err = syscall.Read(c.fd, b)
+	if err != nil {
+		log.Error().Msgf("Conn %d Read received  n:%d, err:%+v", c.fd, n, err)
+	}
+	return
+}
+
+// Write writes a message to the connection.
+func (c *Conn) Write(message []byte) (int, error) {
+	n, err := syscall.Write(c.fd, message)
+	log.Info().Msgf("Conn Write message:%x, n:%d, err:%+v", message, n, err)
+	return n, err
+}
+
+func (c *Conn) Close() error {
 	return syscall.Close(c.fd)
 }
 
-// SetDeadline unSupport
-func (c *OgreConn) SetDeadline(t time.Time) error {
+func (c *Conn) SetDeadline(t time.Time) error {
 	return nil
 }
 
-// SetReadDeadline unSupport
-func (c *OgreConn) SetReadDeadline(t time.Time) error {
+func (c *Conn) SetReadDeadline(t time.Time) error {
 	return nil
 }
 
-// SetWriteDeadline unSupport
-func (c *OgreConn) SetWriteDeadline(t time.Time) error {
+func (c *Conn) SetWriteDeadline(t time.Time) error {
 	return nil
+}
+
+func (c *Conn) LocalAddr() net.Addr {
+	return c.localAddr
+}
+
+func (c *Conn) RemoteAddr() net.Addr {
+	return c.remoteAddr
+}
+
+func (c *Conn) SetRemoteAddr(addr net.Addr) {
+	c.remoteAddr = addr
 }

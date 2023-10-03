@@ -1,157 +1,175 @@
 package network
 
 import (
-	"net"
-	"runtime"
 	"sync"
+	"time"
 
-	"github.com/qigao/ogrenet/buffer"
-	"golang.org/x/exp/maps"
+	"github.com/qigao/ogrenet/codecs"
 
+	"github.com/qigao/ogrenet/gopool"
+
+	"github.com/qigao/ogrenet/avl"
 	"github.com/rs/zerolog/log"
 )
 
 type OgreNet struct {
-	network string
-	addr    string
-
-	exitCh      chan struct{}
-	mutex       sync.RWMutex
-	netListener *NetListener
-	poller      *NetPollManager
-	conns       map[int]Conn
-
-	options *Options
+	ep          *OgreEpoll
+	conns       sync.Map // 当前的所有连接
+	TimeOutTree *avl.AVLTree
+	handle      EventHandle
+	timeOut     int64
+	BytePool    *sync.Pool //[]byte 的池子
+	codec       codecs.Codec
 }
 
-func NewOgreNet(network, addr string, fns ...Option) *OgreNet {
-	e := new(OgreNet)
-	opts := new(Options)
-	for _, opt := range fns {
-		opt(opts)
+func (n *OgreNet) Run() {
+	n.checkTimeOut() // 如果过期，就关闭conn
+	// n.checkMessage() // 如果有消息，就调用 conn.read方法解包
+	n.getMessage() // 如果有新的消息，就走消息处理的逻辑
+	// n.Push()
+	// n.closeConn()
+	n.EpollWait()
+}
+
+func NewOgreNet(ip string, port int, handle EventHandle, opts *Options) *OgreNet {
+	ep := NewOgreEpoll(ip, port)
+	net := &OgreNet{
+		ep:          ep,
+		handle:      handle,
+		conns:       sync.Map{},
+		TimeOutTree: avl.NewAvlTree(),
+		timeOut:     30,
 	}
-
-	e.options = opts
-	e.exitCh = make(chan struct{})
-	e.network = network
-	e.addr = addr
-	e.mutex = sync.RWMutex{}
-	return e
-}
-
-func (n *OgreNet) Start() (err error) {
-	log.Info().Msg("server started")
-	n.init()
-	// new a listener
-	ln, err := n.options.listener(n.network, n.addr)
-	if err != nil {
-		return err
-	}
-
-	listener := new(NetListener)
-	listener.listener = ln
-	n.netListener = listener
-
-	// init poller manger
-	if n.poller, err = NewNetPollManager(n, n.options.numPoller); err != nil {
-		return err
-	}
-
-	go n.acceptPolling(true)
-
-	return nil
-}
-
-func (n *OgreNet) init() {
-	if n.options.listener == nil {
-		n.options.listener = net.Listen
-	}
-
-	if n.options.numPoller <= 0 {
-		n.options.numPoller = runtime.NumCPU()
-	}
-	if n.options.eventHandler == nil {
-		n.options.eventHandler = new(DefaultEventHandler)
-	}
-	n.conns = make(map[int]Conn)
-}
-
-func (n *OgreNet) Stop() error {
-	close(n.exitCh)
-	// listener close
-	n.netListener.Close()
-
-	// conns close
-	n.mutex.Lock()
-	for _, conn := range n.conns {
-		conn.Close()
-	}
-	maps.Clear(n.conns)
-	n.mutex.Unlock()
-	// poller stop
-	n.poller.Stop()
-
-	return nil
-}
-
-func (n *OgreNet) GetEventHandler() EventHandler {
-	return n.options.eventHandler
-}
-
-func (n *OgreNet) AddConn(conn Conn) {
-	n.mutex.Lock()
-	n.conns[conn.Fd()] = conn
-	n.mutex.Unlock()
-}
-
-func (n *OgreNet) Remove(pd int) {
-	n.mutex.Lock()
-	delete(n.conns, pd)
-	n.mutex.Unlock()
-}
-
-func (n *OgreNet) GetConn(pd int) Conn {
-	n.mutex.RLock()
-	defer n.mutex.RUnlock()
-	return n.conns[pd]
-}
-
-func (n *OgreNet) acceptPolling(localOSThread bool) error {
-	if localOSThread {
-		runtime.LockOSThread()
-		defer runtime.UnlockOSThread()
-	}
-
-	handler := n.GetEventHandler()
-
-	for {
-		select {
-		case <-n.exitCh:
-			log.Info().Msg("exit polling")
-			return nil
-		default:
-			nc, err := n.netListener.Accept()
-			if err != nil {
-				continue
-			}
-			if nc == nil {
-				continue
-			}
-			ec := nc.(*OgreConn)
-			ec.laddr = nc.LocalAddr()
-			ec.raddr = nc.RemoteAddr()
-			poller := n.poller.Pick(ec.Fd())
-			ec.poller = poller
-			ec.wBuf = buffer.NewSpscRingBuffer(capacity)
-			ec.rBuf = buffer.NewSpscRingBuffer(capacity)
-			// set ctx
-			ec.ctx = handler.OnOpen(ec)
-			if err = poller.AddRead(ec.Fd()); err != nil {
-				log.Info().Msgf("poller.AddRead: %v", err)
-				nc.Close()
-				continue
-			}
-			n.conns[ec.Fd()] = ec
+	if opts != nil {
+		// if opts.ReadBufferSize > 0 {
+		// 	netaddr.readBufferSize = opts.ReadBufferSize
+		// }
+		// if opts.WriteBufferSize > 0 {
+		// 	netaddr.WriteBufferSize = opts.WriteBufferSize
+		// }
+		if opts.ConnectionTimeOut > 0 {
+			net.timeOut = opts.ConnectionTimeOut
+		}
+		if opts.Codec != nil {
+			net.codec = opts.Codec
 		}
 	}
+
+	return net
+}
+
+func (n *OgreNet) EpollWait() {
+	for {
+		err := n.ep.Wait(n.handler)
+		if err != nil {
+			log.Error().Msgf("epoll wait error: %handle", err)
+			continue
+		}
+	}
+}
+
+// 当wait方法取到内容后，会回调此方法，对fd进行处理
+func (n *OgreNet) handler(fd int, connType ConnStatus) {
+	switch connType {
+	case ConnNew:
+		nfd, err := n.ep.Accept(fd)
+		if err != nil {
+			log.Error().Msgf("accept error,fd is %d", fd)
+			return
+		}
+		n.onConnected(nfd)
+	case ConnMessage:
+		log.Info().Msgf("接收到描述符为%v的消息", fd)
+		c, ok := n.conns.Load(fd)
+		if !ok {
+			log.Info().Msgf("描述符fd 为 %d 的s.conns 不存在！", fd)
+			return
+		}
+		c.(*Conn).ReadToMemory()
+	default:
+		panic("no connType")
+	}
+}
+
+func (n *OgreNet) onConnected(nfd int) {
+	msgPool := NewMessagePool()
+	conn := NewConn(nfd, msgPool)
+	conn.SetRemoteAddr(n.ep.remoteAddr)
+	n.conns.Store(nfd, conn)
+	n.TimeOutTree.Add(conn.UpdateTime, nfd)
+	n.handle.OnConnect(conn)
+}
+
+// 如果有新的消息，就走消息处理的逻辑
+func (n *OgreNet) getMessage() {
+	go func() {
+		for dc := range MessageChan {
+			log.Info().Msgf("接收到消息:%x", dc.Msg)
+			n.handle.OnMessage(dc.Conn, dc.Msg)
+		}
+	}()
+}
+
+// 判断conn是否已经超时，如果超时就关闭这个conn
+func (n *OgreNet) checkTimeOut() {
+	gopool.Go(func() {
+		for {
+			//handle.conns.Range(func(k, v interface{}) bool {
+			//	if time.Now().Sub(v.(*Conn).updateTime) >= time.Second* handle.connTimeout {
+			//		log.Info().Msgf("fd 为 %d 的连接即将被断开\n", v.(*Conn).fd)
+			//		handle.closeFd(v.(*Conn))
+			//	}
+			//	return true
+			//})
+			//time.Sleep(time.Second * 2)
+			/**********************************更改删除超时连接的结构为平衡二叉树*************************************/
+			//给定一个值，获取小于该值的所有元素
+			timeOutint64 := time.Now().Unix() - n.timeOut
+			// fmt.Println("当前时间：", time.Now().Unix())
+			expiredKeys := n.TimeOutTree.GetLessThanKey(timeOutint64)
+			// 删除conns中的已超时的fd
+			for _, v := range expiredKeys {
+				slice := make([]int, 0, 1024)
+				slice = append(slice, n.TimeOutTree.Get(v)...)
+				for i := 0; i < len(slice); i++ {
+					c, _ := n.conns.Load(slice[i])
+					n.closeFd(c.(*Conn))
+				}
+
+			}
+			// 删除树中已超时的fd
+			// handle.checkTimeOutTree.RemoveOneNodeAndChilds(node.Key)
+
+			// fmt.Println(handle.checkTimeOutTree.InOrder(-1))
+
+			time.Sleep(time.Second)
+			/**********************************更改删除超时连接的结构为平衡二叉树END**********************************/
+		}
+	})
+}
+
+// Close
+// 系统发送Ctrl+c信号的时候，调用此方法关闭所有的连接
+func (n *OgreNet) Close() {
+	n.CloseFds()
+	n.ep.Close()
+}
+
+// CloseFds
+// 获取所有的conn 并调用关闭方法
+func (n *OgreNet) CloseFds() {
+	n.conns.Range(func(k, v interface{}) bool {
+		n.handle.OnClose(v.(*Conn))
+		n.closeFd(v.(*Conn))
+		return true
+	})
+}
+
+func (n *OgreNet) closeFd(c *Conn) {
+	n.ep.Del(c.fd)
+	c.Close()
+	log.Info().Msgf("正在删除fd=%d的连接", c.fd)
+	_ = n.TimeOutTree.RemoveNodeValue(c.UpdateTime, c.fd)
+	n.conns.Delete(c.fd)
+	n.handle.OnClose(c)
 }

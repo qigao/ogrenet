@@ -1,6 +1,6 @@
 version: 3
 tasks:
-  basic:
+  basic:build:
     desc: client example
     cmds:
       - go build -ldflags "${LD_FLAGS}" -o bin/client_example  example/client/basic/*.go
@@ -8,7 +8,11 @@ tasks:
     desc: client tls
     cmds:
       - go build -ldflags "${LD_FLAGS}" -o bin/client_tls  example/client/tls/*.go
-  easy:
+  easy:build:
     desc: client buffer
     cmds:
       - go build -ldflags "${LD_FLAGS}" -o bin/client_easy  example/client/easy/*.go
+  easy:run:
+    desc: client buffer
+    cmds:
+      - go run -ldflags "${LD_FLAGS}"  example/client/easy/*.go
