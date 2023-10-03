@@ -115,12 +115,12 @@ func (m *NetPoll) closeConn(c Conn) {
 	}
 }
 
-func (m *NetPoll) removeConn(conn Conn) {
-	if conn == nil {
+func (m *NetPoll) removeConn(c Conn) {
+	if c == nil {
 		return
 	}
 
-	fd := conn.Fd()
+	fd := c.Fd()
 	if c := m.ogreNet.GetConn(fd); c != nil {
 		m.ogreNet.Remove(fd)
 		_ = m.Delete(fd)

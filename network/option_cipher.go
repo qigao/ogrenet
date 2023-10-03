@@ -64,7 +64,7 @@ func WithPrivateKey(privateKey []byte) Cipher {
 // WithPublicKey 设置加解密公钥
 func WithPublicKey(publicKey []byte) Cipher {
 	return newFuncServerOption(func(o *CipherOption) {
-		if len(publicKey) < 0 {
+		if len(publicKey) == 0 {
 			log.Fatal().Msg("publicKey not be nil")
 		}
 		o.PublicKey = publicKey

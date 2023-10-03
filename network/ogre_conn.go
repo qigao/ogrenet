@@ -3,7 +3,6 @@ package network
 import (
 	"context"
 	"net"
-	"sync"
 	"sync/atomic"
 	"syscall"
 	"time"
@@ -21,7 +20,6 @@ type OgreConn struct {
 	laddr    net.Addr
 	raddr    net.Addr
 	isClosed atomic.Bool
-	mux      sync.RWMutex
 	rBuf     *buffer.SpscRingBuffer
 	wBuf     *buffer.SpscRingBuffer
 	poller   *NetPoll
