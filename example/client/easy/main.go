@@ -1,37 +1,104 @@
 package main
 
 import (
+	"flag"
 	"net"
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
 
 	"github.com/rs/zerolog/log"
 )
 
+var (
+	ip          = flag.String("ip", "127.0.0.1", "server IP")
+	port        = flag.String("port", "8090", "server port")
+	connections = flag.Int("conn", 100, "number of tcp connections")
+)
+
 func main() {
-	conn, err := net.Dial("tcp", ":8090")
-	if err != nil {
-		log.Error().Err(err)
-	}
-	for i := 0; i < 5000; i++ {
-		_, err := conn.Write(MyBody(body))
+	flag.Parse()
+	setLimit()
+
+	addr := *ip + ":" + *port
+	var err error
+	var conns []net.Conn
+
+	for i := 0; i < *connections; i++ {
+		var c net.Conn
+
+		c, err = net.DialTimeout("tcp", addr, 10*time.Second)
+
 		if err != nil {
-			log.Error().Err(err)
+			log.Info().Msgf("failed to connect %d %v", i, err)
+			i--
+			continue
 		}
-
-		go func() {
-			b := make([]byte, 256)
-			if n, err := conn.Read(b); err != nil {
-				log.Error().Err(err).Msgf("sent byte: %d err: %v", n, err)
-			}
-			log.Info().Msgf("recvd data: %d, %x", i, b)
-		}()
+		conns = append(conns, c)
+		time.Sleep(time.Millisecond)
 	}
-	defer conn.Close()
 
-	ch := make(chan os.Signal, 1)
-	signal.Notify(ch, syscall.SIGHUP, syscall.SIGINT, syscall.SIGTERM, syscall.SIGQUIT)
+	tts := time.Second
+	if *connections > 100 {
+		tts = time.Millisecond * 5
+	}
 
-	<-ch
+	func() {
+		for i := 0; i < len(conns); i++ {
+			conn := conns[i]
+			go send(conn, tts)
+		}
+	}()
+	func() {
+		for i := 0; i < len(conns); i++ {
+			conn := conns[i]
+			go recv(conn)
+		}
+	}()
+
+	c := make(chan os.Signal, 1)
+	signal.Notify(c, syscall.SIGHUP, syscall.SIGQUIT, syscall.SIGTERM, syscall.SIGINT)
+	for {
+		s := <-c
+		switch s {
+		case syscall.SIGQUIT, syscall.SIGTERM, syscall.SIGINT:
+			for conn := range conns {
+				conns[conn].Close()
+			}
+			return
+		case syscall.SIGHUP:
+		default:
+			return
+		}
+	}
+}
+
+func send(conn net.Conn, tts time.Duration) {
+	time.Sleep(tts)
+	send := DemoMsg(body)
+	n, err := conn.Write(send)
+	log.Info().Msgf(" send to server :%d %x %v", n, send, err)
+}
+
+func recv(conn net.Conn) {
+	buf := make([]byte, 1024)
+	n, err := conn.Read(buf[:])
+	if err != nil {
+		log.Fatal().Msgf("recvd from server err %v ", err)
+	}
+	data := buf[:n]
+	log.Info().Msgf("rvd from server :%d %x", n, data)
+	conn.Close()
+}
+
+func setLimit() {
+	var rLimit syscall.Rlimit
+	if err := syscall.Getrlimit(syscall.RLIMIT_NOFILE, &rLimit); err != nil {
+		log.Fatal().Err(err)
+	}
+	rLimit.Cur = rLimit.Max
+	if err := syscall.Setrlimit(syscall.RLIMIT_NOFILE, &rLimit); err != nil {
+		log.Fatal().Err(err)
+	}
 }

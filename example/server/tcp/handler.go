@@ -1,13 +1,10 @@
 package main
 
 import (
-	"time"
-
 	"github.com/qigao/ogrenet/network"
 	"github.com/rs/zerolog/log"
 )
 
-// var _ network_.EventHandler = (*Handler)(nil)
 type Handler struct{}
 
 func (h *Handler) OnConnect(c *network.Conn) {
@@ -15,11 +12,14 @@ func (h *Handler) OnConnect(c *network.Conn) {
 }
 
 func (h *Handler) OnMessage(c *network.Conn, bytes []byte) {
-	log.Info().Msgf("[Handler] remote %v send message: %x", c.RemoteAddr(), bytes)
-	c.Write(bytes)
-	c.UpdateTime = time.Now().Unix()
+	log.Info().Msgf("[Handler] remote id:%d, endpoint:%v message: %x", c.Fd(), c.RemoteAddr(), bytes)
+	n, err := c.Write(bytes)
+	if err != nil {
+		log.Error().Err(err).Msgf("write back error: %d, %v", n, err)
+		return
+	}
 }
 
 func (h *Handler) OnClose(c *network.Conn) {
-	log.Info().Msgf("[Handler] closed %d", c.Fd())
+	log.Info().Msgf("[Handler] Conn: %d closed", c.Fd())
 }

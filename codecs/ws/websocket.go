@@ -77,7 +77,7 @@ func (u *Upgrader) Upgrade(fd int, header map[string]string, s *network.OgreNet)
 	if challengeKey == "" {
 		return u.returnError(http.StatusBadRequest, "websocket: not a websocket handshake: 'Sec-EventHandle-Key' header is missing or blank")
 	}
-	c := network.NewConn(fd, s)
+	c := network.NewNetConn(fd, s)
 	// Use larger of hijacked buffer and connection write buffer for header.
 	wf := s.BytePool.Get().([]byte)
 	defer func() {

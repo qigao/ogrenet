@@ -10,12 +10,6 @@ import (
 
 	"github.com/dsnet/try"
 	"github.com/rs/zerolog/log"
-
-	"golang.org/x/sys/unix"
-)
-
-const (
-	EpollListener = syscall.EPOLLIN | syscall.EPOLLPRI | syscall.EPOLLERR | syscall.EPOLLHUP | unix.EPOLLET
 )
 
 type OgreEpoll struct {
@@ -69,7 +63,6 @@ func (e *OgreEpoll) Setup() *OgreEpoll {
 	return e
 }
 
-// 监听端口
 func (e *OgreEpoll) listen() *OgreEpoll {
 	if err := syscall.SetNonblock(e.socket, true); err != nil {
 		log.Fatal().Msgf("setnonblock err:%v", err)
@@ -115,10 +108,9 @@ func (e *OgreEpoll) Accept(fd int) (int, error) {
 	return nfd, e.add(nfd)
 }
 
-// 创建epollfd对象，并加入监听
 func (e *OgreEpoll) getGlobalFd() *OgreEpoll {
 	epfd, err := syscall.EpollCreate1(0)
-	log.Info().Msgf("getGlobalFd 创建的epfd为：%+v,e.fd:%d", epfd, e.socket)
+	log.Info().Msgf("GlobalFd epfd：%+v,e.fd:%d", epfd, e.socket)
 	if err != nil {
 		log.Error().Msgf("epoll_create1 err:%+v", err)
 		os.Exit(1)
