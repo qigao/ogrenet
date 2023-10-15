@@ -1,11 +1,11 @@
 = Readme
 
 == features ==
-
-- [x] linux epoll
-- [ ] windows/BSD
-- [ ] tcp/udp/tls
-- [x] aes128/aes192/aes256,gm_sm2/gm_sm3/gm_sm4
+ 
+  [x] linux epoll
+  [ ] windows/BSD
+  [ ] tcp/udp/tls
+  [x] aes128/aes192/aes256,gm_sm2/gm_sm3/gm_sm4
 
 == reference ==
 *  http://github.com/valyala/bytebufferpool[BufferPool]
