@@ -4,19 +4,21 @@ import (
 	"bytes"
 	"encoding/binary"
 
+	"github.com/qigao/ogrenet/codecs"
+
 	"github.com/qigao/ogrenet/errors"
 	"github.com/rs/zerolog/log"
 )
 
 func NewEmptyHeadCodec() *HeadCodec {
 	return &HeadCodec{
-		Magic: MagicHead,
+		Magic: codecs.DefaultMagicHead,
 	}
 }
 
 func NewHeadCodec(ver, cmd, port uint8, len uint16, cseq [12]byte) *HeadCodec {
 	return &HeadCodec{
-		Magic:   MagicHead,
+		Magic:   codecs.DefaultMagicHead,
 		Version: ver,
 		Type:    cmd,
 		Port:    port,
@@ -36,7 +38,7 @@ func (h *HeadCodec) Decode(buf []byte) error {
 		log.Error().Msgf("invalid head length %d", len(buf))
 		return errors.ErrIncompletePacket
 	}
-	if buf[0] != MagicHead {
+	if buf[0] != codecs.DefaultMagicHead {
 		log.Error().Msgf("invalid head magic number %v", buf[0])
 		return errors.ErrInvalidMagicNumber
 	}

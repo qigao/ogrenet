@@ -17,7 +17,7 @@ type OgreNet struct {
 	connMap     sync.Map // 当前的所有连接
 	TimeOutTree *avl.AVLTree
 	handle      EventHandle
-	timeOut     int64
+	limiter     Limiter
 	BytePool    *sync.Pool //[]byte 的池子
 	codec       codecs.Codec
 }
@@ -25,20 +25,26 @@ type OgreNet struct {
 func (n *OgreNet) Run() {
 	n.checkTimeOut() // 如果过期，就关闭conn
 	n.onMessage()    // 如果有新的消息，就走消息处理的逻辑
-	n.EpollWait()
+	n.Wait()
 }
 
 func NewOgreNet(ip string, port int, opts *Options) *OgreNet {
 	ep := NewOgreEpoll(ip, port)
+	defaultLimiter := Limiter{
+		Timeout: Timeout{
+			conn:   DefaultConnTimeout,
+			handle: DefaultHandleTimeout,
+		},
+	}
 	net := &OgreNet{
 		epoll:       ep,
 		connMap:     sync.Map{},
 		TimeOutTree: avl.NewAvlTree(),
-		timeOut:     10,
+		limiter:     defaultLimiter,
 	}
 	if opts != nil {
-		if opts.ConnTimeOut > 0 {
-			net.timeOut = opts.ConnTimeOut
+		if opts.Limit != (Limiter{}) {
+			net.limiter = opts.Limit
 		}
 		if opts.Codec != nil {
 			net.codec = opts.Codec
@@ -47,11 +53,10 @@ func NewOgreNet(ip string, port int, opts *Options) *OgreNet {
 			net.handle = opts.EventHandle
 		}
 	}
-
 	return net
 }
 
-func (n *OgreNet) EpollWait() {
+func (n *OgreNet) Wait() {
 	gopool.Go(func() {
 		for {
 			err := n.epoll.Wait(n.handler)
@@ -69,10 +74,12 @@ func (n *OgreNet) handler(fd int, connType ConnStatus) {
 	case ConnNew:
 		nfd, err := n.epoll.Accept(fd)
 		if err != nil {
-			log.Error().Msgf("accept error,fd is %d", fd)
+			log.Error().Msgf("Accept error,fd:%d", fd)
 			return
 		}
-		n.onConnected(nfd)
+		gopool.Go(func() {
+			n.onConnected(nfd)
+		})
 	case ConnMessage:
 		c, ok := n.connMap.Load(fd)
 		if !ok {
@@ -80,7 +87,9 @@ func (n *OgreNet) handler(fd int, connType ConnStatus) {
 			n.close(c.(*Conn))
 			return
 		}
-		go c.(*Conn).ReadAll()
+		gopool.Go(func() {
+			c.(*Conn).ReadAll()
+		})
 	default:
 		log.Fatal().Msgf("Invalid ConnType: %v", connType)
 	}
@@ -109,7 +118,7 @@ func (n *OgreNet) onMessage() {
 func (n *OgreNet) checkTimeOut() {
 	gopool.Go(func() {
 		for {
-			timeOut := time.Now().Unix() - n.timeOut
+			timeOut := time.Now().Unix() - int64(n.limiter.Timeout.conn.Seconds())
 			expiredKeys := n.TimeOutTree.GetLessThanKey(timeOut)
 			for _, v := range expiredKeys {
 				expiredFd := make([]int, 0, 1024)
