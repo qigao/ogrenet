@@ -1,5 +1,10 @@
 package codecs
 
+const (
+	DefaultMagicHead = 0xAA
+	DefaultMagicTail = 0x55
+)
+
 type Codec interface {
 	Encode() ([]byte, error)
 	Decode(buf []byte) error

@@ -1,13 +1,13 @@
 package network
 
 import (
-	"bytes"
 	"context"
 	"net"
 	"syscall"
 	"time"
 
-	"github.com/qigao/ogrenet/codecs/modbus"
+	"github.com/qigao/ogrenet/codecs"
+
 	"github.com/rs/zerolog/log"
 )
 
@@ -18,6 +18,7 @@ type Conn struct {
 	remoteAddr net.Addr
 	localAddr  net.Addr
 	msg        *MessagePool
+	limiter    Limiter
 }
 
 func NewNetConn(fd int, msgPool *MessagePool) *Conn {
@@ -26,6 +27,21 @@ func NewNetConn(fd int, msgPool *MessagePool) *Conn {
 		Updated: time.Now().Unix(),
 		msg:     msgPool,
 		ctx:     context.Background(),
+	}
+
+	conn.limiter.Packet.SepType = SepByHeadAndTail
+	conn.limiter.Packet.Head = codecs.DefaultMagicHead
+	conn.limiter.Packet.Tail = codecs.DefaultMagicTail
+	return conn
+}
+
+func NewNetConnWithTerm(fd int, msgPool *MessagePool, limiter Limiter) *Conn {
+	conn := &Conn{
+		fd:      fd,
+		Updated: time.Now().Unix(),
+		msg:     msgPool,
+		ctx:     context.Background(),
+		limiter: limiter,
 	}
 	return conn
 }
@@ -43,24 +59,44 @@ func (c *Conn) SetContext(ctx interface{}) {
 	c.ctx = ctx
 }
 
-func (c *Conn) ReadWorker() {
+func (c *Conn) terminateMsgByHeadAndTail() {
+	readPos := 0
 	buf := c.msg.BytePool.Get().([]byte)
 	defer func() {
-		buf = make([]byte, MaxPacketSize)
-		c.msg.BytePool.Put(buf)
+		// buf = make([]byte, MaxPacketSize)
+		c.msg.BytePool.Put(buf[:MaxPacketSize])
 	}()
-	readPos := 0
 	for !c.msg.RBuf.IsEmpty() {
 		b, _ := c.msg.RBuf.ReadByte()
-		if b == modbus.MagicHead {
+		if b == c.limiter.Packet.Head {
 			readPos++
 		}
 		if readPos > 0 {
 			buf = append(buf, b)
 		}
-		if b == modbus.MagicTail {
-			data := bytes.Trim(buf, "\x00")
-			log.Info().Msgf("Conn fd:%d ReadWorker will process:%x", c.fd, data)
+		if b == c.limiter.Packet.Tail {
+			data := buf[MaxPacketSize-readPos:]
+			log.Info().Msgf("Conn fd:%d ReadByHeadTail will process:%x", c.fd, data)
+			MessageChan <- &MsgConn{c, data}
+			readPos = 0
+		}
+	}
+}
+
+func (c *Conn) terminateMsgByTail() {
+	readPos := 0
+	buf := c.msg.BytePool.Get().([]byte)
+	defer func() {
+		// buf = make([]byte, MaxPacketSize)
+		c.msg.BytePool.Put(buf[:readPos])
+	}()
+	for !c.msg.RBuf.IsEmpty() {
+		b, _ := c.msg.RBuf.ReadByte()
+		buf = append(buf, b)
+		readPos++
+		if b == c.limiter.Packet.Tail {
+			data := buf[MaxPacketSize-readPos:]
+			log.Info().Msgf("Conn fd:%d ReadByTail will process:%x", c.fd, data)
 			MessageChan <- &MsgConn{c, data}
 			readPos = 0
 		}
@@ -70,8 +106,8 @@ func (c *Conn) ReadWorker() {
 func (c *Conn) ReadAll() {
 	buf := c.msg.NetRBuf.Get().([]byte)
 	defer func() {
-		buf = make([]byte, MaxPacketSize)
-		c.msg.NetRBuf.Put(buf)
+		// buf = make([]byte, MaxPacketSize)
+		c.msg.NetRBuf.Put(buf[:MaxPacketSize])
 	}()
 	n, err := c.Read(buf)
 	if err != nil {
@@ -87,7 +123,12 @@ func (c *Conn) ReadAll() {
 		}
 		c.Updated = time.Now().Unix()
 		log.Debug().Msgf("Conn fd: %d ReadAll:%x, store len:%d,", c.fd, buf[:n], wn)
-		go c.ReadWorker()
+		if c.limiter.Packet.Head != 0 && c.limiter.Packet.Tail != 0 && c.limiter.Packet.SepType == SepByHeadAndTail {
+			c.terminateMsgByHeadAndTail()
+		}
+		if c.limiter.Packet.Head == 0 && c.limiter.Packet.Tail != 0 && c.limiter.Packet.SepType == SepByTail {
+			c.terminateMsgByTail()
+		}
 	}
 }
 

@@ -6,11 +6,6 @@ type CodecModBus struct {
 	Tail *TailCodec
 }
 
-const (
-	MagicHead = 0xAA
-	MagicTail = 0x55
-)
-
 type HeadCodec struct {
 	Magic   uint8
 	Version uint8
