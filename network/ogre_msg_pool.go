@@ -15,11 +15,11 @@ type MessagePool struct {
 func NewMessagePool() *MessagePool {
 	pool := &MessagePool{}
 	pool.NetRBuf = &sync.Pool{New: func() interface{} {
-		return make([]byte, MaxPacketSize)
+		return make([]byte, MaxReadBufSize)
 	}}
 
 	pool.BytePool = &sync.Pool{New: func() interface{} {
-		return make([]byte, MaxPacketSize)
+		return make([]byte, MaxWriteBufSize)
 	}}
 	pool.RBuf = ringbuffer.New(MaxPacketSize)
 	return pool

@@ -18,7 +18,6 @@ type OgreNet struct {
 	TimeOutTree *avl.AVLTree
 	handle      EventHandle
 	limiter     Limiter
-	BytePool    *sync.Pool //[]byte 的池子
 	codec       codecs.Codec
 }
 
@@ -31,9 +30,14 @@ func (n *OgreNet) Run() {
 func NewOgreNet(ip string, port int, opts *Options) *OgreNet {
 	ep := NewOgreEpoll(ip, port)
 	defaultLimiter := Limiter{
-		Timeout: Timeout{
-			conn:   DefaultConnTimeout,
-			handle: DefaultHandleTimeout,
+		Timeout: TimeOut{
+			conn:   MaxConnTimeout,
+			handle: MaxHandleTimeout,
+		},
+		BufSize: BufSize{
+			PacketSize:   MaxPacketSize,
+			ReadBufSize:  MaxReadBufSize,
+			WriteBufSize: MaxWriteBufSize,
 		},
 	}
 	net := &OgreNet{
@@ -43,8 +47,14 @@ func NewOgreNet(ip string, port int, opts *Options) *OgreNet {
 		limiter:     defaultLimiter,
 	}
 	if opts != nil {
-		if opts.Limit != (Limiter{}) {
-			net.limiter = opts.Limit
+		if opts.TimeOut != (TimeOut{}) {
+			net.limiter.Timeout = opts.TimeOut
+		}
+		if opts.BufSize != (BufSize{}) {
+			net.limiter.BufSize = opts.BufSize
+		}
+		if opts.Packet != (Packet{}) {
+			net.limiter.Packet = opts.Packet
 		}
 		if opts.Codec != nil {
 			net.codec = opts.Codec

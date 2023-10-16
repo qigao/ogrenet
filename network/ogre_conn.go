@@ -63,8 +63,8 @@ func (c *Conn) terminateMsgByHeadAndTail() {
 	readPos := 0
 	buf := c.msg.BytePool.Get().([]byte)
 	defer func() {
-		// buf = make([]byte, MaxPacketSize)
-		c.msg.BytePool.Put(buf[:MaxPacketSize])
+		// buf = make([]byte, DefaultReadBufSize)
+		c.msg.BytePool.Put(buf[:MaxReadBufSize])
 	}()
 	for !c.msg.RBuf.IsEmpty() {
 		b, _ := c.msg.RBuf.ReadByte()
@@ -75,7 +75,7 @@ func (c *Conn) terminateMsgByHeadAndTail() {
 			buf = append(buf, b)
 		}
 		if b == c.limiter.Packet.Tail {
-			data := buf[MaxPacketSize-readPos:]
+			data := buf[MaxReadBufSize-readPos:]
 			log.Info().Msgf("Conn fd:%d ReadByHeadTail will process:%x", c.fd, data)
 			MessageChan <- &MsgConn{c, data}
 			readPos = 0
@@ -87,7 +87,7 @@ func (c *Conn) terminateMsgByTail() {
 	readPos := 0
 	buf := c.msg.BytePool.Get().([]byte)
 	defer func() {
-		// buf = make([]byte, MaxPacketSize)
+		// buf = make([]byte, DefaultReadBufSize)
 		c.msg.BytePool.Put(buf[:readPos])
 	}()
 	for !c.msg.RBuf.IsEmpty() {
@@ -95,7 +95,7 @@ func (c *Conn) terminateMsgByTail() {
 		buf = append(buf, b)
 		readPos++
 		if b == c.limiter.Packet.Tail {
-			data := buf[MaxPacketSize-readPos:]
+			data := buf[MaxReadBufSize-readPos:]
 			log.Info().Msgf("Conn fd:%d ReadByTail will process:%x", c.fd, data)
 			MessageChan <- &MsgConn{c, data}
 			readPos = 0
@@ -106,8 +106,8 @@ func (c *Conn) terminateMsgByTail() {
 func (c *Conn) ReadAll() {
 	buf := c.msg.NetRBuf.Get().([]byte)
 	defer func() {
-		// buf = make([]byte, MaxPacketSize)
-		c.msg.NetRBuf.Put(buf[:MaxPacketSize])
+		// buf = make([]byte, DefaultReadBufSize)
+		c.msg.NetRBuf.Put(buf[:MaxReadBufSize])
 	}()
 	n, err := c.Read(buf)
 	if err != nil {
