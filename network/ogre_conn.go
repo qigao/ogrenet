@@ -12,13 +12,13 @@ import (
 )
 
 type Conn struct {
-	fd         int   // 当前连接的文件描述符 Fd
-	Updated    int64 // 最新的更新时间，判断超时用
-	ctx        interface{}
-	remoteAddr net.Addr
-	localAddr  net.Addr
-	msg        *MessagePool
-	limiter    Limiter
+	fd      int   // 当前连接的文件描述符 Fd
+	Updated int64 // 最新的更新时间，判断超时用
+	ctx     interface{}
+	rAddr   net.Addr
+	lAddr   net.Addr
+	msg     *MessagePool
+	limiter Limiter
 }
 
 func NewNetConn(fd int, msgPool *MessagePool) *Conn {
@@ -163,13 +163,13 @@ func (c *Conn) SetWriteDeadline(t time.Time) error {
 }
 
 func (c *Conn) LocalAddr() net.Addr {
-	return c.localAddr
+	return c.lAddr
 }
 
 func (c *Conn) RemoteAddr() net.Addr {
-	return c.remoteAddr
+	return c.rAddr
 }
 
 func (c *Conn) SetRemoteAddr(addr net.Addr) {
-	c.remoteAddr = addr
+	c.rAddr = addr
 }

@@ -8,8 +8,8 @@ import (
 )
 
 const (
-	MaxConnTimeout   = 2 * time.Second
-	MaxHandleTimeout = 2 * time.Second
+	MaxConnTimeout   = 20 * time.Second
+	MaxHandleTimeout = 20 * time.Second
 	MaxPacketSize    = 512
 	MaxReadBufSize   = 1024
 	MaxWriteBufSize  = 1024

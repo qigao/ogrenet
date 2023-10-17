@@ -25,10 +25,10 @@ func NewEmptyModbusCodec() *CodecModBus {
 func (c *CodecModBus) Encode() ([]byte, error) {
 	buf := c.GetBody()
 	bodyOffset := c.Head.Length()
-	bodyLen := uint16(len(buf))
+	bodyLen := len(buf)
 	tailLen := c.Tail.Length()
 	msgLen := bodyOffset + bodyLen + tailLen
-	c.Head.BodyLen = bodyLen
+	c.Head.BodyLen = uint16(bodyLen)
 
 	// write head	bytes
 	data := make([]byte, msgLen)
@@ -47,7 +47,7 @@ func (c *CodecModBus) Encode() ([]byte, error) {
 
 func (c *CodecModBus) Decode(buf []byte) error {
 	bodyOffset := c.Head.Length()
-	if uint16(len(buf)) < bodyOffset+c.Tail.Length() {
+	if (len(buf)) < bodyOffset+c.Tail.Length() {
 		return errors.ErrIncompletePacket
 	}
 
@@ -55,10 +55,12 @@ func (c *CodecModBus) Decode(buf []byte) error {
 	if err != nil {
 		return err
 	}
-	bodyLen := c.Head.BodyLen
+	bodyLen := int(c.Head.BodyLen)
 	tailLen := c.Tail.Length()
 	msgLen := bodyOffset + bodyLen + tailLen
-
+	if bodyLen > len(buf) {
+		return errors.ErrIncompletePacket
+	}
 	body := buf[bodyOffset : msgLen-tailLen]
 	crc := utils.CheckSum(body)
 	tail := buf[msgLen-tailLen:]
@@ -71,8 +73,8 @@ func (c *CodecModBus) Decode(buf []byte) error {
 	return nil
 }
 
-func (c *CodecModBus) Length() uint16 {
-	return c.Head.Length() + uint16(c.Head.BodyLen) + c.Tail.Length()
+func (c *CodecModBus) Length() int {
+	return c.Head.Length() + int(c.Head.BodyLen) + c.Tail.Length()
 }
 
 func (c *CodecModBus) GetBody() []byte {
@@ -99,11 +101,10 @@ func (c *CodecModBus) SetTail(tail *TailCodec) {
 	c.Tail = tail
 }
 
-func (c *CodecModBus) HeaderLength() uint16 {
+func (c *CodecModBus) HeaderLength() int {
 	return c.Head.Length()
 }
 
-func (c *CodecModBus) MsgId() uint64 {
-	data := binary.BigEndian.Uint64(c.Head.Cseq[:])
-	return data
+func (c *CodecModBus) MsgId() uint32 {
+	return binary.BigEndian.Uint32(c.Head.Cseq[:])
 }

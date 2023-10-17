@@ -9,7 +9,7 @@ type CodecModBus struct {
 type HeadCodec struct {
 	Magic   uint8
 	Version uint8
-	Cseq    [12]byte
+	Cseq    [4]byte
 	Type    uint8
 	Port    uint8
 	BodyLen uint16

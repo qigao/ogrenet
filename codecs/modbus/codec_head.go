@@ -16,7 +16,7 @@ func NewEmptyHeadCodec() *HeadCodec {
 	}
 }
 
-func NewHeadCodec(ver, cmd, port uint8, len uint16, cseq [12]byte) *HeadCodec {
+func NewHeadCodec(ver, cmd, port uint8, len uint16, cseq [4]byte) *HeadCodec {
 	return &HeadCodec{
 		Magic:   codecs.DefaultMagicHead,
 		Version: ver,
@@ -34,7 +34,7 @@ func (h *HeadCodec) Encode() ([]byte, error) {
 }
 
 func (h *HeadCodec) Decode(buf []byte) error {
-	if uint16(len(buf)) < h.Length() {
+	if len(buf) < h.Length() {
 		log.Error().Msgf("invalid head length %d", len(buf))
 		return errors.ErrIncompletePacket
 	}
@@ -50,6 +50,6 @@ func (h *HeadCodec) Decode(buf []byte) error {
 	return nil
 }
 
-func (h *HeadCodec) Length() uint16 {
-	return uint16(binary.Size(h))
+func (h *HeadCodec) Length() int {
+	return binary.Size(h)
 }
