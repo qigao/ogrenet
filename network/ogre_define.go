@@ -1,40 +1,30 @@
 package network
 
 import (
-	"syscall"
-	"time"
+	"sync"
 
-	"golang.org/x/sys/unix"
+	"github.com/qigao/ogrenet/shared/avl"
+	"github.com/qigao/ogrenet/shared/bimap"
+
+	"github.com/qigao/ogrenet/options"
 )
 
-const (
-	MaxConnTimeout   = 20 * time.Second
-	MaxHandleTimeout = 20 * time.Second
-	MaxPacketSize    = 512
-	MaxReadBufSize   = 1024
-	MaxWriteBufSize  = 1024
-	EpollListener    = syscall.EPOLLIN | syscall.EPOLLPRI | syscall.EPOLLERR | syscall.EPOLLHUP | unix.EPOLLET
-)
-
-type Limiter struct {
-	Timeout TimeOut
-	Packet  Packet
-	BufSize BufSize
+type OgreNet struct {
+	epoll     *OgreEpoll
+	connMap   sync.Map
+	timerTree *avl.AVLTree
+	limiter   options.Limiter
+	handle    EventHandle
 }
 
-type TimeOut struct {
-	conn   time.Duration
-	handle time.Duration
-}
-
-type Packet struct {
-	SepType PacketType
-	Head    byte
-	Tail    byte
-}
-
-type BufSize struct {
-	PacketSize   int
-	ReadBufSize  int
-	WriteBufSize int
+type OgreNetProxy struct {
+	epoll     *OgreEpoll
+	connMap   sync.Map
+	timerTree *avl.AVLTree
+	limiter   options.Limiter
+	codecPool *CodecPool
+	handle    ProxyEventHandle
+	keepAlive bool
+	proxyAlgo options.AlgoType
+	endpoints *bimap.BiMap[int, string]
 }

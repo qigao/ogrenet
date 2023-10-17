@@ -8,6 +8,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/qigao/ogrenet/codecs/passthru"
 	"github.com/rs/zerolog/log"
 )
 
@@ -39,23 +40,18 @@ func main() {
 		time.Sleep(time.Millisecond)
 	}
 
-	tts := time.Second
-	if *connections > 100 {
-		tts = time.Millisecond * 5
-	}
-
 	func() {
 		for i := 0; i < len(conns); i++ {
 			conn := conns[i]
-			go send(conn, tts)
+			go register(conn)
 		}
 	}()
-	func() {
-		for i := 0; i < len(conns); i++ {
-			conn := conns[i]
-			go recv(conn)
-		}
-	}()
+	// func() {
+	// 	for i := 0; i < len(conns); i++ {
+	// 		conn := conns[i]
+	// 		go recv(conn)
+	// 	}
+	// }()
 
 	c := make(chan os.Signal, 1)
 	signal.Notify(c, syscall.SIGHUP, syscall.SIGQUIT, syscall.SIGTERM, syscall.SIGINT)
@@ -77,6 +73,16 @@ func main() {
 func send(conn net.Conn, tts time.Duration) {
 	time.Sleep(tts)
 	send := DemoMsg(body)
+	n, err := conn.Write(send)
+	log.Info().Msgf("send to server :%d %x %v", n, send, err)
+}
+
+func register(conn net.Conn) {
+	time.Sleep(time.Second)
+	send, err := passthru.NewRegisterCodec([4]byte{0x00, 0x00, 0x00, 0x00}).Encode()
+	if err != nil {
+		log.Fatal().Msgf("register err %v ", err)
+	}
 	n, err := conn.Write(send)
 	log.Info().Msgf("send to server :%d %x %v", n, send, err)
 }

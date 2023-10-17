@@ -6,3 +6,5 @@ type MsgConn struct {
 }
 
 var MessageChan = make(chan *MsgConn, 1024)
+
+var ProxyChan = make(chan *MsgConn, 1024)

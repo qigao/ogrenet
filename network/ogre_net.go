@@ -1,68 +1,43 @@
 package network
 
 import (
-	"io"
-	"net"
 	"sync"
 	"time"
 
-	"github.com/qigao/ogrenet/gopool"
+	"github.com/qigao/ogrenet/shared/gopool"
 
-	"github.com/qigao/ogrenet/avl"
+	"github.com/qigao/ogrenet/shared/avl"
+
+	"github.com/qigao/ogrenet/options"
+
 	"github.com/rs/zerolog/log"
 )
-
-type OgreNet struct {
-	epoll       *OgreEpoll
-	connMap     sync.Map
-	TimeOutTree *avl.AVLTree
-	handle      EventHandle
-	limiter     Limiter
-}
 
 func (n *OgreNet) Run() {
 	n.onTimeOut()
 	n.onMessage()
-	n.Wait()
+	n.wait()
 }
 
-func NewOgreNet(ip string, port int, opts *Options) *OgreNet {
+func NewOgreNet(ip string, port int, handle EventHandle, opts *options.Options) *OgreNet {
 	ep := NewOgreEpoll(ip, port)
-	defaultLimiter := Limiter{
-		Timeout: TimeOut{
-			conn:   MaxConnTimeout,
-			handle: MaxHandleTimeout,
-		},
-		BufSize: BufSize{
-			PacketSize:   MaxPacketSize,
-			ReadBufSize:  MaxReadBufSize,
-			WriteBufSize: MaxWriteBufSize,
-		},
+	defaultLimiter := options.DefaultLimiter()
+	ogre := &OgreNet{
+		epoll:     ep,
+		connMap:   sync.Map{},
+		timerTree: avl.NewAvlTree(),
+		limiter:   defaultLimiter,
 	}
-	net := &OgreNet{
-		epoll:       ep,
-		connMap:     sync.Map{},
-		TimeOutTree: avl.NewAvlTree(),
-		limiter:     defaultLimiter,
+	if handle != nil {
+		ogre.handle = handle
+	} else {
+		log.Fatal().Msgf("EventHandle is nil")
 	}
-	if opts != nil {
-		if opts.TimeOut != (TimeOut{}) {
-			net.limiter.Timeout = opts.TimeOut
-		}
-		if opts.BufSize != (BufSize{}) {
-			net.limiter.BufSize = opts.BufSize
-		}
-		if opts.Packet != (Packet{}) {
-			net.limiter.Packet = opts.Packet
-		}
-		if opts.EventHandle != nil {
-			net.handle = opts.EventHandle
-		}
-	}
-	return net
+	ogre.limiter = options.SetupLimiterOptions(opts)
+	return ogre
 }
 
-func (n *OgreNet) Wait() {
+func (n *OgreNet) wait() {
 	gopool.Go(func() {
 		for {
 			err := n.epoll.Wait(n.handler)
@@ -74,9 +49,9 @@ func (n *OgreNet) Wait() {
 	})
 }
 
-func (n *OgreNet) handler(fd int, connType ConnStatus) {
+func (n *OgreNet) handler(fd int, connType options.ConnStatus) {
 	switch connType {
-	case ConnNew:
+	case options.ConnNew:
 		nfd, err := n.epoll.Accept(fd)
 		if err != nil {
 			log.Error().Msgf("Accept error,fd:%d", fd)
@@ -85,13 +60,14 @@ func (n *OgreNet) handler(fd int, connType ConnStatus) {
 		gopool.Go(func() {
 			n.onConnected(nfd)
 		})
-	case ConnMessage:
+	case options.ConnMessage:
 		c, ok := n.connMap.Load(fd)
 		if !ok {
 			log.Info().Msgf("Conn fd:%d is not exists", fd)
 			n.close(c.(*Conn))
 			return
 		}
+		n.timerTree.Add(c.(*Conn).updated, fd)
 		gopool.Go(func() {
 			c.(*Conn).ReadAll()
 		})
@@ -102,10 +78,10 @@ func (n *OgreNet) handler(fd int, connType ConnStatus) {
 
 func (n *OgreNet) onConnected(nfd int) {
 	msgPool := NewMessagePool()
-	conn := NewNetConn(nfd, msgPool)
+	conn := NewNetConn(nfd, msgPool, MessageChan)
 	conn.SetRemoteAddr(n.epoll.remoteAddr)
 	n.connMap.Store(nfd, conn)
-	n.TimeOutTree.Add(conn.Updated, nfd)
+	n.timerTree.Add(conn.updated, nfd)
 	n.handle.OnConnect(conn)
 }
 
@@ -113,7 +89,7 @@ func (n *OgreNet) onMessage() {
 	gopool.Go(func() {
 		for dc := range MessageChan {
 			log.Info().Msgf("msg rvd:%d,%x", dc.Conn.fd, dc.Msg)
-			n.handle.OnMessage(dc.Conn, dc.Msg)
+			n.handle.OnData(dc.Conn, dc.Msg)
 		}
 	})
 }
@@ -121,11 +97,11 @@ func (n *OgreNet) onMessage() {
 func (n *OgreNet) onTimeOut() {
 	gopool.Go(func() {
 		for {
-			timeOut := time.Now().Unix() - int64(n.limiter.Timeout.conn.Seconds())
-			expiredKeys := n.TimeOutTree.GetLessThanKey(timeOut)
+			timeOut := time.Now().Unix() - int64(n.limiter.Timeout.Conn.Seconds())
+			expiredKeys := n.timerTree.GetLessThanKey(timeOut)
 			for _, v := range expiredKeys {
 				expiredFd := make([]int, 0, 1024)
-				expiredFd = append(expiredFd, n.TimeOutTree.Get(v)...)
+				expiredFd = append(expiredFd, n.timerTree.Get(v)...)
 				for i := 0; i < len(expiredFd); i++ {
 					c, ok := n.connMap.Load(expiredFd[i])
 					if ok {
@@ -151,16 +127,6 @@ func (n *OgreNet) close(c *Conn) {
 	n.epoll.Del(c.fd)
 	n.handle.OnClose(c)
 	c.Close()
-	_ = n.TimeOutTree.RemoveNodeValue(c.Updated, c.fd)
+	_ = n.timerTree.RemoveNodeValue(c.updated, c.fd)
 	n.connMap.Delete(c.fd)
-}
-
-func (n *OgreNet) JoinConn(local *net.TCPConn, remote *net.TCPConn) {
-	defer local.Close()
-	defer remote.Close()
-	_, err := io.Copy(local, remote)
-	if err != nil {
-		log.Err(err).Msgf("copy failed ", err.Error())
-		return
-	}
 }

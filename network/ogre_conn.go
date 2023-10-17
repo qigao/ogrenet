@@ -6,39 +6,40 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/qigao/ogrenet/codecs"
+	"github.com/qigao/ogrenet/options"
 
 	"github.com/rs/zerolog/log"
 )
 
 type Conn struct {
 	fd      int   // 当前连接的文件描述符 Fd
-	Updated int64 // 最新的更新时间，判断超时用
+	updated int64 // 最新的更新时间，判断超时用
 	ctx     interface{}
 	rAddr   net.Addr
 	lAddr   net.Addr
 	msg     *MessagePool
-	limiter Limiter
+	limiter options.Limiter
+	msgChan chan *MsgConn
 }
 
-func NewNetConn(fd int, msgPool *MessagePool) *Conn {
+func NewNetConn(fd int, msgPool *MessagePool, msgChan chan *MsgConn) *Conn {
 	conn := &Conn{
 		fd:      fd,
-		Updated: time.Now().Unix(),
+		updated: time.Now().Unix(),
 		msg:     msgPool,
 		ctx:     context.Background(),
 	}
-
-	conn.limiter.Packet.SepType = SepByHeadAndTail
-	conn.limiter.Packet.Head = codecs.DefaultMagicHead
-	conn.limiter.Packet.Tail = codecs.DefaultMagicTail
+	conn.msgChan = msgChan
+	conn.limiter.Packet.CutType = options.CutByHeadAndTail
+	conn.limiter.Packet.Head = options.DefaultMagicHead
+	conn.limiter.Packet.Tail = options.DefaultMagicTail
 	return conn
 }
 
-func NewNetConnWithTerm(fd int, msgPool *MessagePool, limiter Limiter) *Conn {
+func NewNetConnWithTerm(fd int, msgPool *MessagePool, limiter options.Limiter) *Conn {
 	conn := &Conn{
 		fd:      fd,
-		Updated: time.Now().Unix(),
+		updated: time.Now().Unix(),
 		msg:     msgPool,
 		ctx:     context.Background(),
 		limiter: limiter,
@@ -59,45 +60,46 @@ func (c *Conn) SetContext(ctx interface{}) {
 	c.ctx = ctx
 }
 
-func (c *Conn) terminateMsgByHeadAndTail() {
+func (c *Conn) cutMsgByHeadAndTail() {
 	readPos := 0
 	buf := c.msg.BytePool.Get().([]byte)
 	defer func() {
-		// buf = make([]byte, DefaultReadBufSize)
-		c.msg.BytePool.Put(buf[:MaxReadBufSize])
+		c.msg.BytePool.Put(buf[:readPos])
 	}()
 	for !c.msg.RBuf.IsEmpty() {
 		b, _ := c.msg.RBuf.ReadByte()
 		if b == c.limiter.Packet.Head {
-			readPos++
+			buf[0] = b
+			readPos = 1
+			continue
 		}
 		if readPos > 0 {
-			buf = append(buf, b)
+			buf[readPos] = b
+			readPos++
 		}
 		if b == c.limiter.Packet.Tail {
-			data := buf[MaxReadBufSize-readPos:]
-			log.Info().Msgf("Conn fd:%d ReadByHeadTail will process:%x", c.fd, data)
-			MessageChan <- &MsgConn{c, data}
+			data := buf[:readPos]
+			log.Debug().Msgf("[CutMsgByHeadAndTail] Conn fd:%d  pos: %d shared:%x", c.fd, readPos, data)
+			c.msgChan <- &MsgConn{c, data}
 			readPos = 0
 		}
 	}
 }
 
-func (c *Conn) terminateMsgByTail() {
+func (c *Conn) cutMsgByTail() {
 	readPos := 0
 	buf := c.msg.BytePool.Get().([]byte)
 	defer func() {
-		// buf = make([]byte, DefaultReadBufSize)
 		c.msg.BytePool.Put(buf[:readPos])
 	}()
 	for !c.msg.RBuf.IsEmpty() {
 		b, _ := c.msg.RBuf.ReadByte()
-		buf = append(buf, b)
+		buf[readPos] = b
 		readPos++
 		if b == c.limiter.Packet.Tail {
-			data := buf[MaxReadBufSize-readPos:]
-			log.Info().Msgf("Conn fd:%d ReadByTail will process:%x", c.fd, data)
-			MessageChan <- &MsgConn{c, data}
+			data := buf[:readPos]
+			log.Debug().Msgf("[CutMsgByTail] Conn fd:%d  shared:%x", c.fd, data)
+			c.msgChan <- &MsgConn{c, data}
 			readPos = 0
 		}
 	}
@@ -106,8 +108,7 @@ func (c *Conn) terminateMsgByTail() {
 func (c *Conn) ReadAll() {
 	buf := c.msg.NetRBuf.Get().([]byte)
 	defer func() {
-		// buf = make([]byte, DefaultReadBufSize)
-		c.msg.NetRBuf.Put(buf[:MaxReadBufSize])
+		c.msg.NetRBuf.Put(buf[:options.MaxReadBufSize])
 	}()
 	n, err := c.Read(buf)
 	if err != nil {
@@ -121,15 +122,29 @@ func (c *Conn) ReadAll() {
 			log.Error().Msgf("Conn fd:%d write to rbuf error:%+v", c.fd, err)
 			return
 		}
-		c.Updated = time.Now().Unix()
-		log.Debug().Msgf("Conn fd: %d ReadAll:%x, store len:%d,", c.fd, buf[:n], wn)
-		if c.limiter.Packet.Head != 0 && c.limiter.Packet.Tail != 0 && c.limiter.Packet.SepType == SepByHeadAndTail {
-			c.terminateMsgByHeadAndTail()
+		c.updated = time.Now().Unix()
+		log.Debug().Msgf("[ReadAll] Conn fd: %d shared:%x, store len:%d,", c.fd, buf[:n], wn)
+		if c.shouldCutByHeadAndTail() {
+			c.cutMsgByHeadAndTail()
 		}
-		if c.limiter.Packet.Head == 0 && c.limiter.Packet.Tail != 0 && c.limiter.Packet.SepType == SepByTail {
-			c.terminateMsgByTail()
+		if c.shouldCutByTail() {
+			c.cutMsgByTail()
 		}
 	}
+}
+
+func (c *Conn) shouldCutByTail() bool {
+	headNotAv := c.limiter.Packet.Head == 0
+	tailAv := c.limiter.Packet.Tail != 0
+	cutByTail := c.limiter.Packet.CutType == options.CutByTail
+	return headNotAv && tailAv && cutByTail
+}
+
+func (c *Conn) shouldCutByHeadAndTail() bool {
+	headAv := c.limiter.Packet.Head != 0
+	tailAv := c.limiter.Packet.Tail != 0
+	cutByHeadAndTail := c.limiter.Packet.CutType == options.CutByHeadAndTail
+	return headAv && tailAv && cutByHeadAndTail
 }
 
 func (c *Conn) Read(b []byte) (n int, err error) {

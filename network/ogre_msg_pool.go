@@ -3,7 +3,9 @@ package network
 import (
 	"sync"
 
-	"github.com/qigao/ogrenet/ringbuffer"
+	"github.com/qigao/ogrenet/shared/ringbuffer"
+
+	"github.com/qigao/ogrenet/options"
 )
 
 type MessagePool struct {
@@ -15,12 +17,12 @@ type MessagePool struct {
 func NewMessagePool() *MessagePool {
 	pool := &MessagePool{}
 	pool.NetRBuf = &sync.Pool{New: func() interface{} {
-		return make([]byte, MaxReadBufSize)
+		return make([]byte, options.MaxReadBufSize)
 	}}
 
 	pool.BytePool = &sync.Pool{New: func() interface{} {
-		return make([]byte, MaxWriteBufSize)
+		return make([]byte, options.MaxWriteBufSize)
 	}}
-	pool.RBuf = ringbuffer.New(MaxPacketSize)
+	pool.RBuf = ringbuffer.New(options.MaxPacketSize)
 	return pool
 }

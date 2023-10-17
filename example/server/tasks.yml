@@ -8,6 +8,14 @@ tasks:
     desc: tcp server example
     cmds:
       - go run -ldflags "${LD_FLAGS}"   example/server/tcp/*.go
+  proxy:build:
+    desc: tcp proxy example
+    cmds:
+      - go build -ldflags "${LD_FLAGS}" -o bin/proxy_server  example/server/proxy/*.go
+  proxy:run:
+    desc: tcp proxy example
+    cmds:
+      - go run -ldflags "${LD_FLAGS}"   example/server/proxy/*.go
   tls:
     desc: tcp server tls
     cmds:

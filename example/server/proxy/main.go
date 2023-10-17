@@ -12,7 +12,7 @@ import (
 
 func main() {
 	opts := &options.Options{}
-	net := network.NewOgreNet("0.0.0.0", 8090, &Handler{}, opts)
+	net := network.NewOgreNetProxy("0.0.0.0", 8090, &Handler{}, opts)
 	net.Run()
 	defer net.Close()
 

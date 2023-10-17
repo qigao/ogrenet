@@ -11,7 +11,7 @@ func (h *Handler) OnConnect(c *network.Conn) {
 	log.Info().Msgf("[Handler] remote %v connected", c.RemoteAddr())
 }
 
-func (h *Handler) OnMessage(c *network.Conn, bytes []byte) {
+func (h *Handler) OnData(c *network.Conn, bytes []byte) {
 	log.Info().Msgf("[Handler] remote id:%d, endpoint:%v message: %x", c.Fd(), c.RemoteAddr(), bytes)
 	n, err := c.Write(bytes)
 	if err != nil {

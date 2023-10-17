@@ -1,4 +1,4 @@
-package modbus
+package passthru
 
 import (
 	"encoding/binary"
@@ -9,20 +9,20 @@ import (
 	"github.com/rs/zerolog/log"
 )
 
-func NewModbusCodec(head *HeadCodec, tail *TailCodec) *CodecModBus {
-	return &CodecModBus{
+func NewModbusCodec(head *HeadCodec, tail *TailCodec) *CodecPassThru {
+	return &CodecPassThru{
 		Head: head,
 		Tail: tail,
 	}
 }
 
-func NewEmptyModbusCodec() *CodecModBus {
+func NewEmptyModbusCodec() *CodecPassThru {
 	head := NewEmptyHeadCodec()
 	tail := NewEmptyTailCodec()
 	return NewModbusCodec(head, tail)
 }
 
-func (c *CodecModBus) Encode() ([]byte, error) {
+func (c *CodecPassThru) Encode() ([]byte, error) {
 	buf := c.GetBody()
 	bodyOffset := c.Head.Length()
 	bodyLen := len(buf)
@@ -45,7 +45,7 @@ func (c *CodecModBus) Encode() ([]byte, error) {
 	return data, nil
 }
 
-func (c *CodecModBus) Decode(buf []byte) error {
+func (c *CodecPassThru) Decode(buf []byte) error {
 	bodyOffset := c.Head.Length()
 	if (len(buf)) < bodyOffset+c.Tail.Length() {
 		return errors.ErrIncompletePacket
@@ -73,38 +73,38 @@ func (c *CodecModBus) Decode(buf []byte) error {
 	return nil
 }
 
-func (c *CodecModBus) Length() int {
+func (c *CodecPassThru) Length() int {
 	return c.Head.Length() + int(c.Head.BodyLen) + c.Tail.Length()
 }
 
-func (c *CodecModBus) GetBody() []byte {
+func (c *CodecPassThru) GetBody() []byte {
 	return c.Body
 }
 
-func (c *CodecModBus) SetBody(body []byte) {
+func (c *CodecPassThru) SetBody(body []byte) {
 	c.Body = body
 }
 
-func (c *CodecModBus) GetHead() *HeadCodec {
+func (c *CodecPassThru) GetHead() *HeadCodec {
 	return c.Head
 }
 
-func (c *CodecModBus) SetHead(head *HeadCodec) {
+func (c *CodecPassThru) SetHead(head *HeadCodec) {
 	c.Head = head
 }
 
-func (c *CodecModBus) GetTail() *TailCodec {
+func (c *CodecPassThru) GetTail() *TailCodec {
 	return c.Tail
 }
 
-func (c *CodecModBus) SetTail(tail *TailCodec) {
+func (c *CodecPassThru) SetTail(tail *TailCodec) {
 	c.Tail = tail
 }
 
-func (c *CodecModBus) HeaderLength() int {
+func (c *CodecPassThru) HeaderLength() int {
 	return c.Head.Length()
 }
 
-func (c *CodecModBus) MsgId() uint32 {
+func (c *CodecPassThru) MsgId() uint32 {
 	return binary.BigEndian.Uint32(c.Head.Cseq[:])
 }

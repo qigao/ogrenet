@@ -1,4 +1,4 @@
-package modbus
+package passthru
 
 import (
 	"bytes"

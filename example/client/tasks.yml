@@ -16,3 +16,11 @@ tasks:
     desc: client buffer
     cmds:
       - go run -ldflags "${LD_FLAGS}"  example/client/easy/*.go
+  proxy:build:
+    desc: client buffer
+    cmds:
+      - go build -ldflags "${LD_FLAGS}" -o bin/client_easy  example/client/proxy/*.go
+  proxy:run:
+    desc: client buffer
+    cmds:
+      - go run -ldflags "${LD_FLAGS}"  example/client/proxy/*.go

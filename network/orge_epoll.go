@@ -7,7 +7,9 @@ import (
 	"sync"
 	"syscall"
 
-	"github.com/qigao/ogrenet/sockaddr"
+	"github.com/qigao/ogrenet/shared/sockaddr"
+
+	"github.com/qigao/ogrenet/options"
 
 	"github.com/dsnet/try"
 	"github.com/rs/zerolog/log"
@@ -112,7 +114,7 @@ func (e *OgreEpoll) getGlobalFd() *OgreEpoll {
 }
 
 func (e *OgreEpoll) add(fd int) error {
-	if err := syscall.EpollCtl(e.epId, syscall.EPOLL_CTL_ADD, fd, &syscall.EpollEvent{Events: EpollListener, Fd: int32(fd)}); err != nil {
+	if err := syscall.EpollCtl(e.epId, syscall.EPOLL_CTL_ADD, fd, &syscall.EpollEvent{Events: options.EpollListener, Fd: int32(fd)}); err != nil {
 		log.Error().Msgf("epoll_ctl add err:%+v,fd:%+v", err, fd)
 		return err
 	}
@@ -120,7 +122,7 @@ func (e *OgreEpoll) add(fd int) error {
 }
 
 func (e *OgreEpoll) Del(fd int) error {
-	if err := syscall.EpollCtl(e.epId, syscall.EPOLL_CTL_DEL, fd, &syscall.EpollEvent{Events: EpollListener, Fd: int32(fd)}); err != nil {
+	if err := syscall.EpollCtl(e.epId, syscall.EPOLL_CTL_DEL, fd, &syscall.EpollEvent{Events: options.EpollListener, Fd: int32(fd)}); err != nil {
 		log.Error().Msgf("epoll_ctl del err:%+v,fd:%+v", err, fd)
 		return err
 	}
@@ -128,7 +130,7 @@ func (e *OgreEpoll) Del(fd int) error {
 }
 
 // Wait epoll wait all events
-func (e *OgreEpoll) Wait(handle func(fd int, connType ConnStatus)) error {
+func (e *OgreEpoll) Wait(handle func(fd int, connType options.ConnStatus)) error {
 	events := e.eventPool.Get().([]syscall.EpollEvent)
 	defer func() {
 		events := make([]syscall.EpollEvent, 1024)
@@ -140,10 +142,9 @@ func (e *OgreEpoll) Wait(handle func(fd int, connType ConnStatus)) error {
 		return err
 	}
 	for i := 0; i < n; i++ {
-		// 如果是系统描述符，就建立一个新的连接
-		connType := ConnMessage // 默认是读内容
+		connType := options.ConnMessage // 默认是读内容
 		if int(events[i].Fd) == e.socket {
-			connType = ConnNew
+			connType = options.ConnNew
 		}
 		handle(int(events[i].Fd), connType)
 	}
