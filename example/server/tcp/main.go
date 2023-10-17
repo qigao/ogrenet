@@ -5,14 +5,11 @@ import (
 	"os/signal"
 	"syscall"
 
-	"github.com/qigao/ogrenet/codecs/modbus"
-
 	"github.com/qigao/ogrenet/network"
 )
 
 func main() {
 	opts := &network.Options{
-		Codec:       modbus.NewEmptyModbusCodec(),
 		EventHandle: &Handler{},
 	}
 	net := network.NewOgreNet("0.0.0.0", 8090, opts)

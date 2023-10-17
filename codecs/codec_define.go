@@ -8,7 +8,7 @@ const (
 type Codec interface {
 	Encode() ([]byte, error)
 	Decode(buf []byte) error
-	Length() uint16
+	Length() int
 }
 
 // Codec format

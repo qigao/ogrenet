@@ -29,12 +29,12 @@ func (t *TailCodec) Encode() ([]byte, error) {
 }
 
 func (t *TailCodec) Decode(buf []byte) error {
-	if uint16(len(buf)) < t.Length() {
+	if (len(buf)) < t.Length() {
 		return errors.ErrInvalidCodecTail
 	}
 	return binary.Read(bytes.NewBuffer(buf), binary.BigEndian, t)
 }
 
-func (t *TailCodec) Length() uint16 {
-	return uint16(binary.Size(t))
+func (t *TailCodec) Length() int {
+	return (binary.Size(t))
 }

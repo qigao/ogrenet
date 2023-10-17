@@ -1,6 +1,7 @@
 package modbus
 
 import (
+	"encoding/binary"
 	"reflect"
 	"testing"
 
@@ -9,6 +10,7 @@ import (
 )
 
 func TestHeadCodecEncode(t *testing.T) {
+	binary.BigEndian.PutUint32(cseq[:], uint32(current))
 	t.Run("Test encode", func(t *testing.T) {
 		h := NewHeadCodec(1, 2, 3, 4, cseq)
 		expected := testHeader()
@@ -19,11 +21,12 @@ func TestHeadCodecEncode(t *testing.T) {
 	})
 	t.Run("Test Binary Size", func(t *testing.T) {
 		h := NewHeadCodec(1, 2, 3, 4, cseq)
-		assert.Equal(t, 18, h.Length())
+		assert.Equal(t, 10, h.Length())
 	})
 }
 
 func TestHeadCodecDecode(t *testing.T) {
+	binary.BigEndian.PutUint32(cseq[:], uint32(current))
 	t.Run("Test decode", func(t *testing.T) {
 		h := &HeadCodec{}
 		buf := testHeader()

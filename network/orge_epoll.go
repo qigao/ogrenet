@@ -1,6 +1,7 @@
 package network
 
 import (
+	"fmt"
 	"net"
 	"os"
 	"sync"
@@ -13,11 +14,11 @@ import (
 )
 
 type OgreEpoll struct {
-	socket     int        // socket连接
-	epId       int        // epoll 创建的唯一描述符
-	ip         string     // socket监听的地址
-	port       int        // socket监听的端口
-	eventPool  *sync.Pool // 接收epoll消息
+	socket     int
+	epId       int
+	ip         string
+	port       int
+	eventPool  *sync.Pool
 	localAddr  net.Addr
 	remoteAddr net.Addr
 }
@@ -68,22 +69,12 @@ func (e *OgreEpoll) listen() *OgreEpoll {
 		log.Fatal().Msgf("setnonblock err:%v", err)
 	}
 	q := try.E1(sockaddr.ResolveAddr("ip", e.ip))
-
 	e.localAddr = q
-	addr := syscall.SockaddrInet4{Port: e.port}
-	ip := "0.0.0.0"
-	if e.ip != "" {
-		ip = e.ip
+	addrd := e.resolveSockAddr4()
+	if err := syscall.Bind(e.socket, addrd); err != nil {
+		log.Error().Msgf("bind err:%v", err)
+		os.Exit(1)
 	}
-	copy(addr.Addr[:], net.ParseIP(ip).To4())
-	if err := syscall.Bind(e.socket, &addr); err != nil {
-		log.Fatal().Err(err).Msgf("bind err:%v", err)
-	}
-	// addr := netaddr.NetAddrToSockaddr(q)
-	// if err := syscall.Bind(e.socket, addr.(unix.Sockaddr)); err != nil {
-	// 	log.Error().Msgf("bind err:%v", err)
-	// 	os.Exit(1)
-	// }
 	if err := syscall.Listen(e.socket, 10); err != nil {
 		log.Error().Msgf("listen err:%v", err)
 		os.Exit(1)
@@ -169,4 +160,19 @@ func (e *OgreEpoll) LocalAddr() net.Addr {
 
 func (e *OgreEpoll) Close() error {
 	return syscall.Close(e.epId)
+}
+
+func (e *OgreEpoll) resolveSockAddr4() syscall.Sockaddr {
+	ipaddr := fmt.Sprintf("%s:%d", e.ip, e.port)
+	addr, err := net.ResolveTCPAddr("tcp4", ipaddr)
+	if err != nil {
+		return nil
+	}
+	ip := addr.IP
+	if len(ip) == 0 {
+		ip = net.IPv4zero
+	}
+	sa4 := &syscall.SockaddrInet4{Port: addr.Port}
+	copy(sa4.Addr[:], ip.To4())
+	return sa4
 }

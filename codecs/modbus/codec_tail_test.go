@@ -25,7 +25,7 @@ func TestTailPart(t *testing.T) {
 	})
 	t.Run("tail length", func(t *testing.T) {
 		tailPart := &TailCodec{}
-		expected := uint16(3)
+		expected := 3
 		assert.Equal(t, expected, tailPart.Length())
 	})
 }

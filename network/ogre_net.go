@@ -1,10 +1,10 @@
 package network
 
 import (
+	"io"
+	"net"
 	"sync"
 	"time"
-
-	"github.com/qigao/ogrenet/codecs"
 
 	"github.com/qigao/ogrenet/gopool"
 
@@ -14,16 +14,15 @@ import (
 
 type OgreNet struct {
 	epoll       *OgreEpoll
-	connMap     sync.Map // 当前的所有连接
+	connMap     sync.Map
 	TimeOutTree *avl.AVLTree
 	handle      EventHandle
 	limiter     Limiter
-	codec       codecs.Codec
 }
 
 func (n *OgreNet) Run() {
-	n.checkTimeOut() // 如果过期，就关闭conn
-	n.onMessage()    // 如果有新的消息，就走消息处理的逻辑
+	n.onTimeOut()
+	n.onMessage()
 	n.Wait()
 }
 
@@ -56,9 +55,6 @@ func NewOgreNet(ip string, port int, opts *Options) *OgreNet {
 		if opts.Packet != (Packet{}) {
 			net.limiter.Packet = opts.Packet
 		}
-		if opts.Codec != nil {
-			net.codec = opts.Codec
-		}
 		if opts.EventHandle != nil {
 			net.handle = opts.EventHandle
 		}
@@ -78,7 +74,6 @@ func (n *OgreNet) Wait() {
 	})
 }
 
-// 当wait方法取到内容后，会回调此方法，对fd进行处理
 func (n *OgreNet) handler(fd int, connType ConnStatus) {
 	switch connType {
 	case ConnNew:
@@ -114,7 +109,6 @@ func (n *OgreNet) onConnected(nfd int) {
 	n.handle.OnConnect(conn)
 }
 
-// 如果有新的消息，就走消息处理的逻辑
 func (n *OgreNet) onMessage() {
 	gopool.Go(func() {
 		for dc := range MessageChan {
@@ -124,8 +118,7 @@ func (n *OgreNet) onMessage() {
 	})
 }
 
-// 判断conn是否已经超时，如果超时就关闭这个conn
-func (n *OgreNet) checkTimeOut() {
+func (n *OgreNet) onTimeOut() {
 	gopool.Go(func() {
 		for {
 			timeOut := time.Now().Unix() - int64(n.limiter.Timeout.conn.Seconds())
@@ -145,8 +138,6 @@ func (n *OgreNet) checkTimeOut() {
 	})
 }
 
-// Close
-// 系统发送Ctrl+c信号的时候，调用此方法关闭所有的连接
 func (n *OgreNet) Close() {
 	n.connMap.Range(func(k, v interface{}) bool {
 		n.close(v.(*Conn))
@@ -155,8 +146,6 @@ func (n *OgreNet) Close() {
 	n.epoll.Close()
 }
 
-// CloseFds
-// 获取所有的conn 并调用关闭方法
 func (n *OgreNet) close(c *Conn) {
 	log.Info().Msgf("Deleting Conn fd: %d", c.fd)
 	n.epoll.Del(c.fd)
@@ -164,4 +153,14 @@ func (n *OgreNet) close(c *Conn) {
 	c.Close()
 	_ = n.TimeOutTree.RemoveNodeValue(c.Updated, c.fd)
 	n.connMap.Delete(c.fd)
+}
+
+func (n *OgreNet) JoinConn(local *net.TCPConn, remote *net.TCPConn) {
+	defer local.Close()
+	defer remote.Close()
+	_, err := io.Copy(local, remote)
+	if err != nil {
+		log.Err(err).Msgf("copy failed ", err.Error())
+		return
+	}
 }
