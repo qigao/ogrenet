@@ -3,6 +3,8 @@ package passthru
 import (
 	"encoding/binary"
 	"time"
+
+	"github.com/qigao/ogrenet/codecs"
 )
 
 func NewPassThruHead(cmd CodecType, id [4]byte, len uint16) *HeadCodec {
@@ -14,7 +16,7 @@ func NewPassThruHead(cmd CodecType, id [4]byte, len uint16) *HeadCodec {
 
 func NewEmptyPassThruCodec() *CodecPassThru {
 	tail := NewTailCodec(zeroBytes)
-	head := NewHeadCodec(0, Unknow, [4]byte{0x00, 0x00, 0x00, 0x00}, 1, [4]byte{0x00, 0x00, 0x00, 0x00})
+	head := NewHeadCodec(0, Unknow, codecs.Empty, 1, codecs.Empty)
 	return &CodecPassThru{
 		Head: head,
 		Body: zeroBytes,

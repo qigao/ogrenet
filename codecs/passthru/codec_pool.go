@@ -17,3 +17,7 @@ func NewCodecPool() *CodecPool {
 		},
 	}
 }
+
+func (p *CodecPool) PutPassthru(c *CodecPassThru) {
+	p.Passthru.Put(c)
+}

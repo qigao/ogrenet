@@ -8,7 +8,7 @@ import (
 )
 
 func TestInvalidSimpleCodec(t *testing.T) {
-	codec := NewEmptyPassThru()
+	codec := NewEmptyPassThruCodec()
 	t.Run("Incomplete packet", func(t *testing.T) {
 		packet := []byte{
 			0xAA, 0x34, 0x56, 0x79, // Incomplete MagicHeadBytes
