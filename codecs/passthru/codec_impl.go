@@ -9,15 +9,6 @@ import (
 	"github.com/rs/zerolog/log"
 )
 
-var codecPool = NewCodecPool()
-
-func NewEmptyPassThru() *CodecPassThru {
-	// head := NewEmptyHeadCodec()
-	// tail := NewEmptyTailCodec()
-	codec := codecPool.Passthru.Get().(*CodecPassThru)
-	return codec
-}
-
 func (c *CodecPassThru) Encode() ([]byte, error) {
 	buf := c.GetBody()
 	bodyOffset := c.Head.Length()
