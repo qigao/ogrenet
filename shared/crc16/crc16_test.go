@@ -27,3 +27,12 @@ func TestCRC16(t *testing.T) {
 		assert.Equal(t, uint16(0x40bf), crc16)
 	})
 }
+
+func BenchmarkCheckSum(b *testing.B) {
+	data := []byte("Modbus CRC16 generation")
+	for n := 0; n < b.N; n++ {
+		for i := 0; i < 1000; i++ {
+			CheckSum(data)
+		}
+	}
+}

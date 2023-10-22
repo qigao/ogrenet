@@ -40,3 +40,7 @@ func (t *TailCodec) Decode(buf []byte) error {
 func (t *TailCodec) Length() int {
 	return (binary.Size(t))
 }
+
+func (t *TailCodec) SetCRC(data []byte) {
+	t.CRC = crc16.CheckSum(data)
+}

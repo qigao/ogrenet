@@ -92,7 +92,7 @@ func (n *OgreNetProxy) onData() {
 	gopool.Go(func() {
 		for dc := range ProxyChan {
 			log.Info().Msgf("msg rvd:%d,%x", dc.Conn.fd, dc.Msg)
-			codec := n.codecPool.Passthru.Get().(*passthru.CodecPassThru)
+			codec := n.codecPool.NewEmptyPassThruCodecFromPool()
 			codec.Decode(dc.Msg)
 			switch codec.Head.CodecType {
 			case passthru.Register:

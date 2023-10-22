@@ -15,31 +15,34 @@ func NewPassThruHead(cmd CodecType, id [4]byte, len uint16) *HeadCodec {
 }
 
 func NewEmptyPassThruCodec() *CodecPassThru {
-	tail := NewTailCodec(zeroBytes)
-	head := NewHeadCodec(0, Unknow, codecs.Empty, 1, codecs.Empty)
+	tail := NewTailCodec(codecs.ZeroBytes)
+	head := NewHeadCodec(0, Unknown, codecs.Empty, 1, codecs.Empty)
+
 	return &CodecPassThru{
 		Head: head,
-		Body: zeroBytes,
+		Body: codecs.ZeroBytes,
 		Tail: tail,
 	}
 }
 
 func NewRegisterCodec(id [4]byte) *CodecPassThru {
-	registerTail := NewTailCodec(zeroBytes)
+	registerTail := NewTailCodec(codecs.ZeroBytes)
 	registerHead := NewPassThruHead(Register, id, 1)
+
 	return &CodecPassThru{
 		Head: registerHead,
-		Body: zeroBytes,
+		Body: codecs.ZeroBytes,
 		Tail: registerTail,
 	}
 }
 
 func NewUnRegisterCodec(id [4]byte) *CodecPassThru {
-	unregisterTail := NewTailCodec(zeroBytes)
+	unregisterTail := NewTailCodec(codecs.ZeroBytes)
 	unregisterHead := NewPassThruHead(UnRegister, id, 1)
+
 	return &CodecPassThru{
 		Head: unregisterHead,
-		Body: zeroBytes,
+		Body: codecs.ZeroBytes,
 		Tail: unregisterTail,
 	}
 }
@@ -47,19 +50,21 @@ func NewUnRegisterCodec(id [4]byte) *CodecPassThru {
 func NewAckCodec(id [4]byte, data []byte) *CodecPassThru {
 	dataTail := NewTailCodec(data)
 	dataHead := NewPassThruHead(Ack, id, uint16(len(data)))
+
 	return &CodecPassThru{
 		Head: dataHead,
-		Body: data,
+		Body: codecs.ZeroBytes,
 		Tail: dataTail,
 	}
 }
 
 func NewHeartBeatCodec(id [4]byte) *CodecPassThru {
-	heartbeatTail := NewTailCodec(zeroBytes)
+	heartbeatTail := NewTailCodec(codecs.ZeroBytes)
 	heartbeatHead := NewPassThruHead(HeartBeat, id, 1)
+
 	return &CodecPassThru{
 		Head: heartbeatHead,
-		Body: zeroBytes,
+		Body: codecs.ZeroBytes,
 		Tail: heartbeatTail,
 	}
 }
@@ -68,6 +73,7 @@ func NewDataCodec(id [4]byte, data []byte) *CodecPassThru {
 	dataTail := NewTailCodec(data)
 	dataLen := len(data)
 	dataHead := NewPassThruHead(Data, id, uint16(dataLen))
+
 	return &CodecPassThru{
 		Head: dataHead,
 		Body: data,
@@ -76,21 +82,23 @@ func NewDataCodec(id [4]byte, data []byte) *CodecPassThru {
 }
 
 func NewCloseCodec(id [4]byte) *CodecPassThru {
-	closeTail := NewTailCodec(zeroBytes)
+	closeTail := NewTailCodec(codecs.ZeroBytes)
 	closeHead := NewPassThruHead(Close, id, 1)
+
 	return &CodecPassThru{
 		Head: closeHead,
-		Body: zeroBytes,
+		Body: codecs.ZeroBytes,
 		Tail: closeTail,
 	}
 }
 
 func NewReConnectCodec(id [4]byte) *CodecPassThru {
-	reconnectTail := NewTailCodec(zeroBytes)
+	reconnectTail := NewTailCodec(codecs.ZeroBytes)
 	reconnectHead := NewPassThruHead(ReConnect, id, 1)
+
 	return &CodecPassThru{
 		Head: reconnectHead,
-		Body: zeroBytes,
+		Body: codecs.ZeroBytes,
 		Tail: reconnectTail,
 	}
 }
