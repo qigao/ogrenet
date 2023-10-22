@@ -3,9 +3,10 @@ package network
 import (
 	"sync"
 
+	"github.com/qigao/ogrenet/shared/avl"
+
 	"github.com/qigao/ogrenet/codecs/passthru"
 
-	"github.com/qigao/ogrenet/shared/avl"
 	"github.com/qigao/ogrenet/shared/bimap"
 
 	"github.com/qigao/ogrenet/options"

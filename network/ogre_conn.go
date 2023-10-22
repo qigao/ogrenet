@@ -1,6 +1,7 @@
 package network
 
 import (
+	"bytes"
 	"context"
 	"net"
 	"syscall"
@@ -17,7 +18,7 @@ type Conn struct {
 	ctx     interface{}
 	rAddr   net.Addr
 	lAddr   net.Addr
-	msg     *MessagePool
+	pool    *MessagePool
 	limiter options.Limiter
 	msgChan chan *MsgConn
 }
@@ -26,7 +27,7 @@ func NewNetConn(fd int, msgPool *MessagePool, msgChan chan *MsgConn) *Conn {
 	conn := &Conn{
 		fd:      fd,
 		updated: time.Now().Unix(),
-		msg:     msgPool,
+		pool:    msgPool,
 		ctx:     context.Background(),
 	}
 	conn.msgChan = msgChan
@@ -40,7 +41,7 @@ func NewNetConnWithTerm(fd int, msgPool *MessagePool, limiter options.Limiter) *
 	conn := &Conn{
 		fd:      fd,
 		updated: time.Now().Unix(),
-		msg:     msgPool,
+		pool:    msgPool,
 		ctx:     context.Background(),
 		limiter: limiter,
 	}
@@ -62,24 +63,25 @@ func (c *Conn) SetContext(ctx interface{}) {
 
 func (c *Conn) cutMsgByHeadAndTail() {
 	readPos := 0
-	buf := c.msg.BytePool.Get().([]byte)
+	buf := c.pool.BytePool.Get().(*bytes.Buffer)
 	defer func() {
-		c.msg.BytePool.Put(buf[:readPos])
+		buf.Reset()
+		c.pool.BytePool.Put(buf)
 	}()
-	for !c.msg.RBuf.IsEmpty() {
-		b, _ := c.msg.RBuf.ReadByte()
+	for !c.pool.RBuf.IsEmpty() {
+		b, _ := c.pool.RBuf.ReadByte()
 		if b == c.limiter.Packet.Head {
-			buf[0] = b
+			buf.WriteByte(b)
 			readPos = 1
 			continue
 		}
 		if readPos > 0 {
-			buf[readPos] = b
+			buf.WriteByte(b)
 			readPos++
 		}
 		if b == c.limiter.Packet.Tail {
-			data := buf[:readPos]
-			log.Debug().Msgf("[CutMsgByHeadAndTail] Conn fd:%d  pos: %d shared:%x", c.fd, readPos, data)
+			data := buf.Bytes()
+			log.Debug().Msgf("[CutMsgByHeadAndTail] Conn fd:%d  pos:%d msg:%x", c.fd, readPos, data)
 			c.msgChan <- &MsgConn{c, data}
 			readPos = 0
 		}
@@ -88,17 +90,18 @@ func (c *Conn) cutMsgByHeadAndTail() {
 
 func (c *Conn) cutMsgByTail() {
 	readPos := 0
-	buf := c.msg.BytePool.Get().([]byte)
+	buf := c.pool.BytePool.Get().(*bytes.Buffer)
 	defer func() {
-		c.msg.BytePool.Put(buf[:readPos])
+		buf.Reset()
+		c.pool.BytePool.Put(buf)
 	}()
-	for !c.msg.RBuf.IsEmpty() {
-		b, _ := c.msg.RBuf.ReadByte()
-		buf[readPos] = b
+	for !c.pool.RBuf.IsEmpty() {
+		b, _ := c.pool.RBuf.ReadByte()
+		buf.WriteByte(b)
 		readPos++
 		if b == c.limiter.Packet.Tail {
-			data := buf[:readPos]
-			log.Debug().Msgf("[CutMsgByTail] Conn fd:%d  shared:%x", c.fd, data)
+			data := buf.Bytes()
+			log.Debug().Msgf("[CutMsgByTail] Conn fd:%d  msg:%x", c.fd, data)
 			c.msgChan <- &MsgConn{c, data}
 			readPos = 0
 		}
@@ -106,9 +109,9 @@ func (c *Conn) cutMsgByTail() {
 }
 
 func (c *Conn) ReadAll() {
-	buf := c.msg.NetRBuf.Get().([]byte)
+	buf := make([]byte, options.MaxReadBufSize)
 	defer func() {
-		c.msg.NetRBuf.Put(buf[:options.MaxReadBufSize])
+		buf = nil
 	}()
 	n, err := c.Read(buf)
 	if err != nil {
@@ -117,7 +120,7 @@ func (c *Conn) ReadAll() {
 		return
 	}
 	if n > 0 {
-		wn, err := c.msg.RBuf.Write(buf[:n])
+		wn, err := c.pool.RBuf.Write(buf[:n])
 		if err != nil {
 			log.Error().Msgf("Conn fd:%d write to rbuf error:%+v", c.fd, err)
 			return
@@ -158,6 +161,7 @@ func (c *Conn) Write(message []byte) (int, error) {
 	if err != nil {
 		log.Error().Msgf("Conn fd:%d Write error:%+v", c.fd, err)
 	}
+	c.updated = time.Now().Unix()
 	return n, err
 }
 
