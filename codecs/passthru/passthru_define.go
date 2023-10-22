@@ -1,6 +1,8 @@
 package passthru
 
-import "github.com/qigao/ogrenet/codecs"
+import (
+	"github.com/qigao/ogrenet/codecs"
+)
 
 type CodecPassThru struct {
 	Head *HeadCodec
@@ -25,7 +27,7 @@ type TailCodec struct {
 type CodecType uint8
 
 const (
-	Unknow CodecType = iota
+	Unknown CodecType = iota
 	Register
 	UnRegister
 	HeartBeat
@@ -39,8 +41,6 @@ const (
 const (
 	version uint8 = 0x01
 )
-
-var zeroBytes = []byte{0x00}
 
 // Codec format
 // [head] [version] [cseq] [Codec type] [client id] [length] [data] [crc] [tail]

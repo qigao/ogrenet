@@ -3,6 +3,8 @@ package passthru
 import (
 	"testing"
 
+	"github.com/qigao/ogrenet/codecs"
+
 	"github.com/stretchr/testify/assert"
 )
 
@@ -13,8 +15,8 @@ var (
 )
 
 func TestNewPassThruCodec(t *testing.T) {
-	codec := NewPassThruHead(Unknow, id, 0)
-	assert.Equal(t, codec.CodecType, Unknow)
+	codec := NewPassThruHead(Unknown, id, 0)
+	assert.Equal(t, codec.CodecType, Unknown)
 	assert.Equal(t, codec.ID, id)
 	assert.Equal(t, codec.BodyLen, uint16(0))
 	assert.Equal(t, codec.Magic, uint8(HEAD))
@@ -26,7 +28,7 @@ func TestNewRegisterCodec(t *testing.T) {
 	assert.Equal(t, codec.Head.ID, id)
 	assert.Equal(t, codec.Head.BodyLen, uint16(1))
 	assert.Equal(t, uint8(HEAD), codec.Head.Magic)
-	assert.Equal(t, []byte{0x00}, codec.Body)
+	assert.Equal(t, codecs.ZeroBytes, codec.Body)
 	assert.Equal(t, uint16(0x40bf), codec.Tail.CRC)
 	assert.Equal(t, uint8(TAIL), codec.Tail.Magic)
 	revCodec := NewEmptyPassThruCodec()
@@ -36,7 +38,7 @@ func TestNewRegisterCodec(t *testing.T) {
 	assert.Equal(t, id, revCodec.Head.ID)
 	assert.Equal(t, uint16(1), revCodec.Head.BodyLen)
 	assert.Equal(t, uint8(HEAD), revCodec.Head.Magic)
-	assert.Equal(t, []byte{0x00}, revCodec.Body)
+	assert.Equal(t, codecs.ZeroBytes, revCodec.Body)
 	assert.Equal(t, uint16(0x40bf), revCodec.Tail.CRC)
 	assert.Equal(t, uint8(TAIL), revCodec.Tail.Magic)
 }
@@ -49,7 +51,7 @@ func TestNewAckCodec(t *testing.T) {
 		assert.Equal(t, id, codec.Head.ID)
 		assert.Equal(t, uint16(3), codec.Head.BodyLen)
 		assert.Equal(t, uint8(HEAD), codec.Head.Magic)
-		assert.Equal(t, data, codec.Body)
+		assert.Equal(t, codecs.ZeroBytes, codec.Body)
 		assert.Equal(t, uint8(TAIL), codec.Tail.Magic)
 	})
 	t.Run("simple ack tst when data is codectype", func(t *testing.T) {
@@ -59,7 +61,7 @@ func TestNewAckCodec(t *testing.T) {
 		assert.Equal(t, id, codec.Head.ID)
 		assert.Equal(t, uint16(1), codec.Head.BodyLen)
 		assert.Equal(t, uint8(HEAD), codec.Head.Magic)
-		assert.Equal(t, data, codec.Body)
+		assert.Equal(t, codecs.ZeroBytes, codec.Body)
 		assert.Equal(t, uint8(TAIL), codec.Tail.Magic)
 	})
 }
@@ -70,7 +72,7 @@ func TestNewUnRegisterCodec(t *testing.T) {
 	assert.Equal(t, id, codec.Head.ID)
 	assert.Equal(t, uint16(1), codec.Head.BodyLen)
 	assert.Equal(t, uint8(HEAD), codec.Head.Magic)
-	assert.Equal(t, []byte{0x00}, codec.Body)
+	assert.Equal(t, codecs.ZeroBytes, codec.Body)
 	assert.Equal(t, uint16(0x40bf), codec.Tail.CRC)
 	assert.Equal(t, uint8(TAIL), codec.Tail.Magic)
 	revCodec := NewEmptyPassThruCodec()
@@ -80,7 +82,7 @@ func TestNewUnRegisterCodec(t *testing.T) {
 	assert.Equal(t, id, revCodec.Head.ID)
 	assert.Equal(t, uint16(1), revCodec.Head.BodyLen)
 	assert.Equal(t, uint8(HEAD), revCodec.Head.Magic)
-	assert.Equal(t, []byte{0x00}, revCodec.Body)
+	assert.Equal(t, codecs.ZeroBytes, revCodec.Body)
 	assert.Equal(t, uint16(0x40bf), revCodec.Tail.CRC)
 	assert.Equal(t, uint8(TAIL), revCodec.Tail.Magic)
 }
@@ -91,7 +93,7 @@ func TestNewHeartBeatCodec(t *testing.T) {
 	assert.Equal(t, id, codec.Head.ID)
 	assert.Equal(t, uint16(1), codec.Head.BodyLen)
 	assert.Equal(t, uint8(HEAD), codec.Head.Magic)
-	assert.Equal(t, []byte{0x00}, codec.Body)
+	assert.Equal(t, codecs.ZeroBytes, codec.Body)
 	assert.Equal(t, uint16(0x40bf), codec.Tail.CRC)
 	assert.Equal(t, uint8(TAIL), codec.Tail.Magic)
 	revCodec := NewEmptyPassThruCodec()
@@ -101,7 +103,7 @@ func TestNewHeartBeatCodec(t *testing.T) {
 	assert.Equal(t, id, revCodec.Head.ID)
 	assert.Equal(t, uint16(1), revCodec.Head.BodyLen)
 	assert.Equal(t, uint8(HEAD), revCodec.Head.Magic)
-	assert.Equal(t, []byte{0x00}, revCodec.Body)
+	assert.Equal(t, codecs.ZeroBytes, revCodec.Body)
 	assert.Equal(t, uint16(0x40bf), revCodec.Tail.CRC)
 	assert.Equal(t, uint8(TAIL), revCodec.Tail.Magic)
 }
@@ -133,7 +135,7 @@ func TestNewCloseCodec(t *testing.T) {
 	assert.Equal(t, id, codec.Head.ID)
 	assert.Equal(t, uint16(1), codec.Head.BodyLen)
 	assert.Equal(t, uint8(HEAD), codec.Head.Magic)
-	assert.Equal(t, []byte{0x00}, codec.Body)
+	assert.Equal(t, codecs.ZeroBytes, codec.Body)
 	assert.Equal(t, uint16(0x40bf), codec.Tail.CRC)
 	assert.Equal(t, uint8(TAIL), codec.Tail.Magic)
 	revCodec := NewEmptyPassThruCodec()
@@ -143,7 +145,7 @@ func TestNewCloseCodec(t *testing.T) {
 	assert.Equal(t, id, revCodec.Head.ID)
 	assert.Equal(t, uint16(1), revCodec.Head.BodyLen)
 	assert.Equal(t, uint8(HEAD), revCodec.Head.Magic)
-	assert.Equal(t, []byte{0x00}, revCodec.Body)
+	assert.Equal(t, codecs.ZeroBytes, revCodec.Body)
 	assert.Equal(t, uint16(0x40bf), revCodec.Tail.CRC)
 	assert.Equal(t, uint8(TAIL), revCodec.Tail.Magic)
 }
@@ -154,7 +156,7 @@ func TestNewReConnectCodec(t *testing.T) {
 	assert.Equal(t, id, codec.Head.ID)
 	assert.Equal(t, uint16(1), codec.Head.BodyLen)
 	assert.Equal(t, uint8(HEAD), codec.Head.Magic)
-	assert.Equal(t, []byte{0x00}, codec.Body)
+	assert.Equal(t, codecs.ZeroBytes, codec.Body)
 	assert.Equal(t, uint16(0x40bf), codec.Tail.CRC)
 	assert.Equal(t, uint8(TAIL), codec.Tail.Magic)
 	revCodec := NewEmptyPassThruCodec()
@@ -164,32 +166,7 @@ func TestNewReConnectCodec(t *testing.T) {
 	assert.Equal(t, id, revCodec.Head.ID)
 	assert.Equal(t, uint16(1), revCodec.Head.BodyLen)
 	assert.Equal(t, uint8(HEAD), revCodec.Head.Magic)
-	assert.Equal(t, []byte{0x00}, revCodec.Body)
+	assert.Equal(t, codecs.ZeroBytes, revCodec.Body)
 	assert.Equal(t, uint16(0x40bf), revCodec.Tail.CRC)
 	assert.Equal(t, uint8(TAIL), revCodec.Tail.Magic)
-}
-
-func BenchmarkWithoutPool(b *testing.B) {
-	for i := 0; i < b.N; i++ {
-		for j := 0; j < 10000; j++ {
-			codec := NewEmptyPassThruCodec()
-			b.StopTimer()
-			codec.Encode()
-			b.StartTimer()
-		}
-	}
-}
-
-func BenchmarkWithPool(b *testing.B) {
-	var s *CodecPassThru
-	pool := NewCodecPool()
-	for i := 0; i < b.N; i++ {
-		for j := 0; j < 10000; j++ {
-			s = codecPool.Passthru.Get().(*CodecPassThru)
-			b.StopTimer()
-			s.Encode()
-			b.StartTimer()
-			pool.PutPassthru(s)
-		}
-	}
 }
