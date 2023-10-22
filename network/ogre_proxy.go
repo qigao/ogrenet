@@ -140,15 +140,17 @@ func (n *OgreNetProxy) onData() {
 func (n *OgreNetProxy) onTimeOut() {
 	gopool.Go(func() {
 		for {
-			timeOut := time.Now().Unix() - int64(n.limiter.Timeout.Conn.Seconds())
-			expiredKeys := n.timerTree.GetLessThanKey(timeOut)
-			for _, v := range expiredKeys {
-				expiredFd := make([]int, 0, 1024)
-				expiredFd = append(expiredFd, n.timerTree.Get(v)...)
-				for i := 0; i < len(expiredFd); i++ {
-					c, ok := n.connMap.Load(expiredFd[i])
+			timeCriteria := time.Now().Add(-options.MaxConnTimeout).Unix()
+			expiredKeys := n.timerTree.GetLessThanKey(timeCriteria)
+			for _, key := range expiredKeys {
+				fd := n.timerTree.Get(key)
+				for i := 0; i < len(fd); i++ {
+					c, ok := n.connMap.Load(fd[i])
 					if ok {
 						n.close(c.(*Conn))
+					} else {
+						n.connMap.Delete(fd[i])
+						n.timerTree.Remove(key)
 					}
 				}
 			}
@@ -170,7 +172,7 @@ func (n *OgreNetProxy) close(c *Conn) {
 	n.epoll.Del(c.fd)
 	n.handle.OnClose(c)
 	c.Close()
-	_ = n.timerTree.RemoveNodeValue(c.updated, c.fd)
+	n.timerTree.Remove(c.updated)
 	n.connMap.Delete(c.fd)
 	n.endpoints.Delete(c.fd)
 }
