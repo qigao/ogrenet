@@ -46,12 +46,12 @@ func main() {
 			go register(conn)
 		}
 	}()
-	// func() {
-	// 	for i := 0; i < len(conns); i++ {
-	// 		conn := conns[i]
-	// 		go recv(conn)
-	// 	}
-	// }()
+	func() {
+		for i := 0; i < len(conns); i++ {
+			conn := conns[i]
+			go recv(conn)
+		}
+	}()
 
 	c := make(chan os.Signal, 1)
 	signal.Notify(c, syscall.SIGHUP, syscall.SIGQUIT, syscall.SIGTERM, syscall.SIGINT)
