@@ -9,6 +9,12 @@ require (
 	github.com/pkg/errors v0.9.1
 	github.com/rs/zerolog v1.31.0
 	github.com/stretchr/testify v1.8.4
+	github.com/zyedidia/generic v1.2.1
+)
+
+require (
+	github.com/segmentio/fasthash v1.0.3 // indirect
+	golang.org/x/exp v0.0.0-20220218215828-6cf2b201936e // indirect
 )
 
 require (

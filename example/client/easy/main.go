@@ -53,7 +53,7 @@ func main() {
 	func() {
 		for i := 0; i < len(conns); i++ {
 			conn := conns[i]
-			go recv(conn)
+			go rvd(conn)
 		}
 	}()
 
@@ -81,7 +81,7 @@ func send(conn net.Conn, tts time.Duration) {
 	log.Info().Msgf("send to server :%d %x %v", n, send, err)
 }
 
-func recv(conn net.Conn) {
+func rvd(conn net.Conn) {
 	buf := make([]byte, 1024)
 	n, err := conn.Read(buf[:])
 	if err != nil {
@@ -89,7 +89,7 @@ func recv(conn net.Conn) {
 	}
 	data := buf[:n]
 	log.Info().Msgf("rvd from server :%d %x", n, data)
-	conn.Close()
+	// conn.Close()
 }
 
 func setLimit() {

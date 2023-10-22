@@ -2,7 +2,7 @@ package modbus
 
 import "github.com/qigao/ogrenet/codecs"
 
-type CodecModBus struct {
+type ModBusCodec struct {
 	Head *HeadCodec
 	Body []byte
 	Tail *TailCodec

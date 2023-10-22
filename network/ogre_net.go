@@ -4,9 +4,9 @@ import (
 	"sync"
 	"time"
 
-	"github.com/qigao/ogrenet/shared/gopool"
-
 	"github.com/qigao/ogrenet/shared/avl"
+
+	"github.com/qigao/ogrenet/shared/gopool"
 
 	"github.com/qigao/ogrenet/options"
 
@@ -88,7 +88,7 @@ func (n *OgreNet) onConnected(nfd int) {
 func (n *OgreNet) onMessage() {
 	gopool.Go(func() {
 		for dc := range MessageChan {
-			log.Info().Msgf("msg rvd:%d,%x", dc.Conn.fd, dc.Msg)
+			log.Info().Msgf("rvd fd:%d,msg:%x", dc.Conn.fd, dc.Msg)
 			n.handle.OnData(dc.Conn, dc.Msg)
 		}
 	})
@@ -97,15 +97,17 @@ func (n *OgreNet) onMessage() {
 func (n *OgreNet) onTimeOut() {
 	gopool.Go(func() {
 		for {
-			timeOut := time.Now().Unix() - int64(n.limiter.Timeout.Conn.Seconds())
-			expiredKeys := n.timerTree.GetLessThanKey(timeOut)
-			for _, v := range expiredKeys {
-				expiredFd := make([]int, 0, 1024)
-				expiredFd = append(expiredFd, n.timerTree.Get(v)...)
-				for i := 0; i < len(expiredFd); i++ {
-					c, ok := n.connMap.Load(expiredFd[i])
+			timeCriteria := time.Now().Add(-options.MaxConnTimeout).Unix()
+			expiredKeys := n.timerTree.GetLessThanKey(timeCriteria)
+			for _, key := range expiredKeys {
+				fd := n.timerTree.Get(key)
+				for i := 0; i < len(fd); i++ {
+					c, ok := n.connMap.Load(fd[i])
 					if ok {
 						n.close(c.(*Conn))
+					} else {
+						n.connMap.Delete(fd[i])
+						n.timerTree.Remove(key)
 					}
 				}
 			}
@@ -127,6 +129,6 @@ func (n *OgreNet) close(c *Conn) {
 	n.epoll.Del(c.fd)
 	n.handle.OnClose(c)
 	c.Close()
-	_ = n.timerTree.RemoveNodeValue(c.updated, c.fd)
+	n.timerTree.Remove(c.updated)
 	n.connMap.Delete(c.fd)
 }

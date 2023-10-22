@@ -91,7 +91,7 @@ func (n *OgreNetProxy) onConnected(nfd int) {
 func (n *OgreNetProxy) onData() {
 	gopool.Go(func() {
 		for dc := range ProxyChan {
-			log.Info().Msgf("msg rvd:%d,%x", dc.Conn.fd, dc.Msg)
+			log.Info().Msgf("pool rvd:%d,%x", dc.Conn.fd, dc.Msg)
 			codec := n.codecPool.NewEmptyPassThruCodecFromPool()
 			codec.Decode(dc.Msg)
 			switch codec.Head.CodecType {
