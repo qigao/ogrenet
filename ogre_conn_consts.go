@@ -1,4 +1,4 @@
-package options
+package ogrenet
 
 import (
 	"syscall"
@@ -14,9 +14,4 @@ const (
 	MaxReadBufSize   = 256
 	MaxWriteBufSize  = 256
 	EpollListener    = syscall.EPOLLIN | syscall.EPOLLPRI | syscall.EPOLLERR | syscall.EPOLLHUP | unix.EPOLLET
-)
-
-const (
-	DefaultMagicHead = 0xAA
-	DefaultMagicTail = 0x55
 )

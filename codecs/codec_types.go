@@ -11,3 +11,7 @@ var (
 )
 
 const ZeroCRC16 = 0x40bf
+const (
+	DefaultMagicHead = 0xAA
+	DefaultMagicTail = 0x55
+)

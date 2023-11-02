@@ -1,12 +1,10 @@
-package network
+package ogrenet
 
 import (
 	"bytes"
 	"sync"
 
 	"github.com/qigao/ogrenet/shared/ringbuffer"
-
-	"github.com/qigao/ogrenet/options"
 )
 
 type MessagePool struct {
@@ -19,6 +17,6 @@ func NewMessagePool() *MessagePool {
 	pool.BytePool = &sync.Pool{New: func() interface{} {
 		return &bytes.Buffer{}
 	}}
-	pool.RBuf = ringbuffer.New(options.MaxPacketSize)
+	pool.RBuf = ringbuffer.New(MaxPacketSize)
 	return pool
 }

@@ -4,7 +4,6 @@ import (
 	"sync"
 
 	"github.com/qigao/ogrenet/codecs"
-	"github.com/qigao/ogrenet/options"
 	"github.com/qigao/ogrenet/shared/crc16"
 )
 
@@ -48,13 +47,13 @@ func (c *CodecPool) NewRegisterCodec(id [4]byte, cseq [4]byte) CodecPassThru {
 	h := c.HeadPool.Get().(*HeadCodec)
 	t := c.TailPool.Get().(*TailCodec)
 
-	h.Magic = options.DefaultMagicHead
+	h.Magic = codecs.DefaultMagicHead
 	h.Version = 0
 	h.CodecType = Register
 	h.ID = id
 	h.BodyLen = 1
 	h.Cseq = cseq
-	t.Magic = options.DefaultMagicTail
+	t.Magic = codecs.DefaultMagicTail
 	t.CRC = codecs.ZeroCRC16
 	return CodecPassThru{
 		Head: h,
@@ -67,14 +66,14 @@ func (c *CodecPool) NewUnRegisterCodec(id [4]byte, cseq [4]byte) CodecPassThru {
 	h := c.HeadPool.Get().(*HeadCodec)
 	t := c.TailPool.Get().(*TailCodec)
 
-	h.Magic = options.DefaultMagicHead
+	h.Magic = codecs.DefaultMagicHead
 	h.Version = 0
 	h.CodecType = UnRegister
 	h.ID = id
 	h.BodyLen = 1
 	h.Cseq = cseq
 
-	t.Magic = options.DefaultMagicTail
+	t.Magic = codecs.DefaultMagicTail
 	t.CRC = codecs.ZeroCRC16
 
 	return CodecPassThru{
@@ -88,14 +87,14 @@ func (c *CodecPool) NewAckCodec(id [4]byte, cseq [4]byte, data []byte) CodecPass
 	h := c.HeadPool.Get().(*HeadCodec)
 	t := c.TailPool.Get().(*TailCodec)
 
-	h.Magic = options.DefaultMagicHead
+	h.Magic = codecs.DefaultMagicHead
 	h.Version = 0
 	h.CodecType = Ack
 	h.ID = id
 	h.BodyLen = uint16(len(data))
 	h.Cseq = cseq
 
-	t.Magic = options.DefaultMagicTail
+	t.Magic = codecs.DefaultMagicTail
 	t.CRC = codecs.ZeroCRC16
 
 	return CodecPassThru{
@@ -109,14 +108,14 @@ func (c *CodecPool) NewHeartBeatCodec(id [4]byte, cseq [4]byte) CodecPassThru {
 	h := c.HeadPool.Get().(*HeadCodec)
 	t := c.TailPool.Get().(*TailCodec)
 
-	h.Magic = options.DefaultMagicHead
+	h.Magic = codecs.DefaultMagicHead
 	h.Version = 0
 	h.CodecType = HeartBeat
 	h.ID = id
 	h.BodyLen = 1
 	h.Cseq = cseq
 
-	t.Magic = options.DefaultMagicTail
+	t.Magic = codecs.DefaultMagicTail
 	t.CRC = codecs.ZeroCRC16
 
 	return CodecPassThru{
@@ -130,14 +129,14 @@ func (c *CodecPool) NewDataCodec(id [4]byte, cseq [4]byte, data []byte) CodecPas
 	h := c.HeadPool.Get().(*HeadCodec)
 	t := c.TailPool.Get().(*TailCodec)
 
-	h.Magic = options.DefaultMagicHead
+	h.Magic = codecs.DefaultMagicHead
 	h.Version = 0
 	h.CodecType = Data
 	h.ID = id
 	h.BodyLen = uint16(len(data))
 	h.Cseq = cseq
 
-	t.Magic = options.DefaultMagicTail
+	t.Magic = codecs.DefaultMagicTail
 	t.CRC = crc16.CheckSum(data)
 	return CodecPassThru{
 		Head: h,
@@ -150,14 +149,14 @@ func (c *CodecPool) NewCloseCodec(id [4]byte, cseq [4]byte) CodecPassThru {
 	h := c.HeadPool.Get().(*HeadCodec)
 	t := c.TailPool.Get().(*TailCodec)
 
-	h.Magic = options.DefaultMagicHead
+	h.Magic = codecs.DefaultMagicHead
 	h.Version = 0
 	h.CodecType = Close
 	h.ID = id
 	h.BodyLen = 1
 	h.Cseq = cseq
 
-	t.Magic = options.DefaultMagicTail
+	t.Magic = codecs.DefaultMagicTail
 	t.CRC = codecs.ZeroCRC16
 
 	return CodecPassThru{
@@ -171,14 +170,14 @@ func (c *CodecPool) NewReConnectCodec(id [4]byte) CodecPassThru {
 	h := c.HeadPool.Get().(*HeadCodec)
 	t := c.TailPool.Get().(*TailCodec)
 
-	h.Magic = options.DefaultMagicHead
+	h.Magic = codecs.DefaultMagicHead
 	h.Version = 0
 	h.CodecType = ReConnect
 	h.ID = id
 	h.BodyLen = 1
 	h.Cseq = codecs.Empty
 
-	t.Magic = options.DefaultMagicTail
+	t.Magic = codecs.DefaultMagicTail
 	t.CRC = codecs.ZeroCRC16
 
 	return CodecPassThru{

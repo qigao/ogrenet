@@ -5,16 +5,14 @@ import (
 	"os/signal"
 	"syscall"
 
-	"github.com/qigao/ogrenet/options"
-
-	"github.com/qigao/ogrenet/network"
+	"github.com/qigao/ogrenet"
 )
 
 func main() {
-	opts := &options.Options{}
-	net := network.NewOgreNetProxy("0.0.0.0", 8090, &Handler{}, opts)
-	net.Run()
-	defer net.Close()
+	opts := &ogrenet.Options{}
+	proxyNet := ogrenet.NewOgreNetProxy("0.0.0.0", 8090, &Handler{}, opts)
+	proxyNet.Run()
+	defer proxyNet.Close()
 
 	c := make(chan os.Signal, 1)
 	signal.Notify(c, syscall.SIGTERM, syscall.SIGQUIT, syscall.SIGINT)

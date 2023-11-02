@@ -1,4 +1,4 @@
-package network
+package ogrenet
 
 // EventHandle 事件处理接口
 type EventHandle interface {
