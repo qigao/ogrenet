@@ -27,7 +27,7 @@ type TailCodec struct {
 type CodecType uint8
 
 const (
-	Unknown CodecType = iota
+	CodecUnknown CodecType = iota
 	Register
 	UnRegister
 	HeartBeat

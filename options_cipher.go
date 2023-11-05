@@ -1,4 +1,4 @@
-package options
+package ogrenet
 
 import (
 	"time"

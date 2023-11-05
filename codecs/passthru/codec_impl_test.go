@@ -3,7 +3,8 @@ package passthru
 import (
 	"testing"
 
-	"github.com/qigao/ogrenet/errors"
+	"github.com/qigao/ogrenet/shared/errors"
+
 	"github.com/stretchr/testify/assert"
 )
 

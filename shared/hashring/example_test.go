@@ -1,33 +1,54 @@
 package hashring
 
 import (
-	"crypto/sha1"
-	"fmt"
+	"log"
+	"testing"
+
+	"github.com/stretchr/testify/assert"
 )
 
-func ExampleGetAllNodes() {
-	hashRing := New([]string{"node1", "node2", "node3"})
-	nodes, _ := hashRing.GetNodes("key", hashRing.Size())
-	fmt.Printf("%v", nodes)
-	// Output: [node3 node2 node1]
+func TestExampleHashRing(t *testing.T) {
+	c := NewHashRing()
+
+	// adds the hosts to the ring
+	c.Add("127.0.0.1:8000")
+	c.Add("92.0.0.1:8000")
+
+	// Returns the host that owns `key`.
+	//
+	// As described in https://en.wikipedia.org/wiki/Consistent_hashing
+	//
+	// It returns ErrNoHosts if the ring has no hosts in it.
+	host, err := c.Get("/test/app.html")
+	if err != nil {
+		log.Fatal(err)
+	}
+	t.Log(host)
+	assert.Equal(t, "127.0.0.1:8000", host)
 }
 
-func ExampleCustomHashError() {
-	_, err := NewHash(sha1.New).Use(NewInt64PairHashKey)
-	fmt.Printf("%s", err.Error())
-	// Output: can't use given hash.Hash with given hashKeyFunc: expected 16 bytes, got 20 bytes
-}
+func TestExampleBounded(t *testing.T) {
+	c := NewHashRing()
 
-func ExampleCustomHash() {
-	hashFunc, _ := NewHash(sha1.New).FirstBytes(16).Use(NewInt64PairHashKey)
-	hashRing := NewWithHash([]string{"node1", "node2", "node3"}, hashFunc)
-	nodes, _ := hashRing.GetNodes("key", hashRing.Size())
-	fmt.Printf("%v", nodes)
-	// Output: [node2 node1 node3]
-}
+	// adds the hosts to the ring
+	c.Add("127.0.0.1:8000")
+	c.Add("92.0.0.1:8000")
 
-func ExampleNewHashFunc() {
-	hashFunc, _ := NewHash(sha1.New).FirstBytes(16).Use(NewInt64PairHashKey)
-	fmt.Printf("%v\n", hashFunc([]byte("test")))
-	// Output: &{-6441359348440544599 -8653224871661646820}
+	// It uses Consistent Hashing With Bounded loads
+	// https://research.googleblog.com/2017/04/consistent-hashing-with-bounded-loads.html
+	// to pick the least loaded host that can serve the key
+	//
+	// It returns ErrNoHosts if the ring has no hosts in it.
+	//
+	host, err := c.GetLeast("/test/app.html")
+	if err != nil {
+		log.Fatal(err)
+	}
+	// increases the load of `host`, we have to call it before sending the request
+	c.Inc(host)
+	// send request or do whatever
+	log.Println("send request to", host)
+	// call it when the work is done, to update the load of `host`.
+	defer c.Done(host)
+	assert.Equal(t, "127.0.0.1:8000", host)
 }

@@ -1,4 +1,4 @@
-package network
+package ogrenet
 
 import (
 	"sync"
@@ -7,8 +7,6 @@ import (
 	"github.com/qigao/ogrenet/shared/avl"
 
 	"github.com/qigao/ogrenet/shared/gopool"
-
-	"github.com/qigao/ogrenet/options"
 
 	"github.com/rs/zerolog/log"
 )
@@ -19,9 +17,9 @@ func (n *OgreNet) Run() {
 	n.wait()
 }
 
-func NewOgreNet(ip string, port int, handle EventHandle, opts *options.Options) *OgreNet {
+func NewOgreNet(ip string, port int, handle EventHandle, opts *Options) *OgreNet {
 	ep := NewOgreEpoll(ip, port)
-	defaultLimiter := options.DefaultLimiter()
+	defaultLimiter := DefaultLimiter()
 	ogre := &OgreNet{
 		epoll:     ep,
 		connMap:   sync.Map{},
@@ -33,7 +31,7 @@ func NewOgreNet(ip string, port int, handle EventHandle, opts *options.Options) 
 	} else {
 		log.Fatal().Msgf("EventHandle is nil")
 	}
-	ogre.limiter = options.SetupLimiterOptions(opts)
+	ogre.limiter = SetupLimiterOptions(opts)
 	return ogre
 }
 
@@ -49,9 +47,9 @@ func (n *OgreNet) wait() {
 	})
 }
 
-func (n *OgreNet) handler(fd int, connType options.ConnStatus) {
+func (n *OgreNet) handler(fd int, connType ConnStatus) {
 	switch connType {
-	case options.ConnNew:
+	case ConnNew:
 		nfd, err := n.epoll.Accept(fd)
 		if err != nil {
 			log.Error().Msgf("Accept error,fd:%d", fd)
@@ -60,7 +58,7 @@ func (n *OgreNet) handler(fd int, connType options.ConnStatus) {
 		gopool.Go(func() {
 			n.onConnected(nfd)
 		})
-	case options.ConnMessage:
+	case ConnMessage:
 		c, ok := n.connMap.Load(fd)
 		if !ok {
 			log.Info().Msgf("Conn fd:%d is not exists", fd)
@@ -78,7 +76,9 @@ func (n *OgreNet) handler(fd int, connType options.ConnStatus) {
 
 func (n *OgreNet) onConnected(nfd int) {
 	msgPool := NewMessagePool()
-	conn := NewNetConn(nfd, msgPool, MessageChan)
+	messageChan := make(chan *MsgConn, 1024)
+	n.msgChan = messageChan
+	conn := NewNetConn(nfd, msgPool, messageChan)
 	conn.SetRemoteAddr(n.epoll.remoteAddr)
 	n.connMap.Store(nfd, conn)
 	n.timerTree.Add(conn.updated, nfd)
@@ -87,7 +87,7 @@ func (n *OgreNet) onConnected(nfd int) {
 
 func (n *OgreNet) onMessage() {
 	gopool.Go(func() {
-		for dc := range MessageChan {
+		for dc := range n.msgChan {
 			log.Info().Msgf("rvd fd:%d,msg:%x", dc.Conn.fd, dc.Msg)
 			n.handle.OnData(dc.Conn, dc.Msg)
 		}
@@ -97,7 +97,7 @@ func (n *OgreNet) onMessage() {
 func (n *OgreNet) onTimeOut() {
 	gopool.Go(func() {
 		for {
-			timeCriteria := time.Now().Add(-options.MaxConnTimeout).Unix()
+			timeCriteria := time.Now().Add(-MaxConnTimeout).Unix()
 			expiredKeys := n.timerTree.GetLessThanKey(timeCriteria)
 			for _, key := range expiredKeys {
 				fd := n.timerTree.Get(key)

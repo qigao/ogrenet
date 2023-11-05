@@ -1,4 +1,4 @@
-package network
+package ogrenet
 
 import (
 	"bytes"
@@ -7,21 +7,10 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/qigao/ogrenet/options"
+	"github.com/qigao/ogrenet/codecs"
 
 	"github.com/rs/zerolog/log"
 )
-
-type Conn struct {
-	fd      int   // 当前连接的文件描述符 Fd
-	updated int64 // 最新的更新时间，判断超时用
-	ctx     interface{}
-	rAddr   net.Addr
-	lAddr   net.Addr
-	pool    *MessagePool
-	limiter options.Limiter
-	msgChan chan *MsgConn
-}
 
 func NewNetConn(fd int, msgPool *MessagePool, msgChan chan *MsgConn) *Conn {
 	conn := &Conn{
@@ -31,20 +20,18 @@ func NewNetConn(fd int, msgPool *MessagePool, msgChan chan *MsgConn) *Conn {
 		ctx:     context.Background(),
 	}
 	conn.msgChan = msgChan
-	conn.limiter.Packet.CutType = options.CutByHeadAndTail
-	conn.limiter.Packet.Head = options.DefaultMagicHead
-	conn.limiter.Packet.Tail = options.DefaultMagicTail
+	conn.limiter.Packet.CutType = CutByHeadAndTail
+	conn.limiter.Packet.Head = codecs.DefaultMagicHead
+	conn.limiter.Packet.Tail = codecs.DefaultMagicTail
 	return conn
 }
 
-func NewNetConnWithTerm(fd int, msgPool *MessagePool, limiter options.Limiter) *Conn {
-	conn := &Conn{
-		fd:      fd,
-		updated: time.Now().Unix(),
-		pool:    msgPool,
-		ctx:     context.Background(),
-		limiter: limiter,
+func NewNetConnWithTerm(fd int, msgPool *MessagePool, msgChan chan *MsgConn, limiter *Limiter) *Conn {
+	if limiter == nil {
+		return NewNetConn(fd, msgPool, msgChan)
 	}
+	conn := NewNetConn(fd, msgPool, msgChan)
+	conn.limiter = *limiter
 	return conn
 }
 
@@ -52,12 +39,12 @@ func (c *Conn) Fd() int {
 	return c.fd
 }
 
-func (c *Conn) Context() interface{} {
+func (c *Conn) Context() context.Context {
 	return c.ctx
 }
 
 // SetContext sets the context associated with the connection.
-func (c *Conn) SetContext(ctx interface{}) {
+func (c *Conn) SetContext(ctx context.Context) {
 	c.ctx = ctx
 }
 
@@ -109,7 +96,7 @@ func (c *Conn) cutMsgByTail() {
 }
 
 func (c *Conn) ReadAll() {
-	buf := make([]byte, options.MaxReadBufSize)
+	buf := make([]byte, MaxReadBufSize)
 	defer func() {
 		buf = nil
 	}()
@@ -139,14 +126,14 @@ func (c *Conn) ReadAll() {
 func (c *Conn) shouldCutByTail() bool {
 	headNotAv := c.limiter.Packet.Head == 0
 	tailAv := c.limiter.Packet.Tail != 0
-	cutByTail := c.limiter.Packet.CutType == options.CutByTail
+	cutByTail := c.limiter.Packet.CutType == CutByTail
 	return headNotAv && tailAv && cutByTail
 }
 
 func (c *Conn) shouldCutByHeadAndTail() bool {
 	headAv := c.limiter.Packet.Head != 0
 	tailAv := c.limiter.Packet.Tail != 0
-	cutByHeadAndTail := c.limiter.Packet.CutType == options.CutByHeadAndTail
+	cutByHeadAndTail := c.limiter.Packet.CutType == CutByHeadAndTail
 	return headAv && tailAv && cutByHeadAndTail
 }
 

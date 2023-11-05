@@ -1,294 +1,269 @@
+// An implementation of Consistent Hashing and
+// Consistent Hashing With Bounded Loads.
+//
+// https://en.wikipedia.org/wiki/Consistent_hashing
+//
+// https://research.googleblog.com/2017/04/consistent-hashing-with-bounded-loads.html
 package hashring
 
 import (
-	"crypto/md5"
+	"encoding/binary"
 	"fmt"
+	"math"
 	"sort"
-	"strconv"
+	"sync"
+	"sync/atomic"
+
+	"github.com/qigao/ogrenet/shared/errors"
+
+	blake2b "github.com/minio/blake2b-simd"
 )
 
-var defaultHashFunc = func() HashFunc {
-	hashFunc, err := NewHash(md5.New).Use(NewInt64PairHashKey)
-	if err != nil {
-		panic(fmt.Sprintf("failed to create defaultHashFunc: %s", err.Error()))
-	}
-	return hashFunc
-}()
+const replicationFactor = 10
 
-type HashKey interface {
-	Less(other HashKey) bool
+type Host struct {
+	Name string
+	Load int64
 }
-type HashKeyOrder []HashKey
-
-func (h HashKeyOrder) Len() int      { return len(h) }
-func (h HashKeyOrder) Swap(i, j int) { h[i], h[j] = h[j], h[i] }
-func (h HashKeyOrder) Less(i, j int) bool {
-	return h[i].Less(h[j])
-}
-
-type HashFunc func([]byte) HashKey
 
 type HashRing struct {
-	ring       map[HashKey]string
-	sortedKeys []HashKey
-	nodes      []string
-	weights    map[string]int
-	hashFunc   HashFunc
+	hosts     map[uint64]string
+	sortedSet []uint64
+	loadMap   map[string]*Host
+	totalLoad int64
+
+	sync.RWMutex
 }
 
-type Uint32HashKey uint32
-
-func (k Uint32HashKey) Less(other HashKey) bool {
-	return k < other.(Uint32HashKey)
-}
-
-func New(nodes []string) *HashRing {
-	return NewWithHash(nodes, defaultHashFunc)
-}
-
-func NewWithHash(
-	nodes []string,
-	hashKey HashFunc,
-) *HashRing {
-	hashRing := &HashRing{
-		ring:       make(map[HashKey]string),
-		sortedKeys: make([]HashKey, 0),
-		nodes:      nodes,
-		weights:    make(map[string]int),
-		hashFunc:   hashKey,
+func NewHashRing() *HashRing {
+	return &HashRing{
+		hosts:     map[uint64]string{},
+		sortedSet: []uint64{},
+		loadMap:   map[string]*Host{},
 	}
-	hashRing.generateCircle()
-	return hashRing
 }
 
-func NewWithWeights(weights map[string]int) *HashRing {
-	return NewWithHashAndWeights(weights, defaultHashFunc)
-}
+func (c *HashRing) Add(host string) {
+	c.Lock()
+	defer c.Unlock()
 
-func NewWithHashAndWeights(
-	weights map[string]int,
-	hashFunc HashFunc,
-) *HashRing {
-	nodes := make([]string, 0, len(weights))
-	for node := range weights {
-		nodes = append(nodes, node)
+	if _, ok := c.loadMap[host]; ok {
+		return
 	}
-	hashRing := &HashRing{
-		ring:       make(map[HashKey]string),
-		sortedKeys: make([]HashKey, 0),
-		nodes:      nodes,
-		weights:    weights,
-		hashFunc:   hashFunc,
+
+	c.loadMap[host] = &Host{Name: host, Load: 0}
+	for i := 0; i < replicationFactor; i++ {
+		h := c.hash(fmt.Sprintf("%s%d", host, i))
+		c.hosts[h] = host
+		c.sortedSet = append(c.sortedSet, h)
+
 	}
-	hashRing.generateCircle()
-	return hashRing
+	// sort hashes ascendingly
+	sort.Slice(c.sortedSet, func(i int, j int) bool {
+		return c.sortedSet[i] < c.sortedSet[j]
+	})
 }
 
-func (h *HashRing) Size() int {
-	return len(h.nodes)
+// Returns the host that owns `key`.
+//
+// As described in https://en.wikipedia.org/wiki/Consistent_hashing
+//
+// It returns ErrNoHosts if the ring has no hosts in it.
+func (c *HashRing) Get(key string) (string, error) {
+	c.RLock()
+	defer c.RUnlock()
+
+	if len(c.hosts) == 0 {
+		return "", errors.ErrNoHostsAdded
+	}
+
+	h := c.hash(key)
+	idx := c.search(h)
+	return c.hosts[c.sortedSet[idx]], nil
 }
 
-func (h *HashRing) UpdateWithWeights(weights map[string]int) {
-	nodesChgFlg := false
-	if len(weights) != len(h.weights) {
-		nodesChgFlg = true
-	} else {
-		for node, newWeight := range weights {
-			oldWeight, ok := h.weights[node]
-			if !ok || oldWeight != newWeight {
-				nodesChgFlg = true
-				break
-			}
+// It uses Consistent Hashing With Bounded loads
+//
+// https://research.googleblog.com/2017/04/consistent-hashing-with-bounded-loads.html
+//
+// to pick the least loaded host that can serve the key
+//
+// It returns ErrNoHosts if the ring has no hosts in it.
+func (c *HashRing) GetLeast(key string) (string, error) {
+	c.RLock()
+	defer c.RUnlock()
+
+	if len(c.hosts) == 0 {
+		return "", errors.ErrNoHostsAdded
+	}
+
+	h := c.hash(key)
+	idx := c.search(h)
+
+	i := idx
+	for {
+		host := c.hosts[c.sortedSet[i]]
+		if c.loadOK(host) {
+			return host, nil
+		}
+		i++
+		if i >= len(c.hosts) {
+			i = 0
 		}
 	}
-
-	if nodesChgFlg {
-		newhring := NewWithHashAndWeights(weights, h.hashFunc)
-		h.weights = newhring.weights
-		h.nodes = newhring.nodes
-		h.ring = newhring.ring
-		h.sortedKeys = newhring.sortedKeys
-	}
 }
 
-func (h *HashRing) generateCircle() {
-	totalWeight := 0
-	for _, node := range h.nodes {
-		if weight, ok := h.weights[node]; ok {
-			totalWeight += weight
-		} else {
-			totalWeight += 1
-			h.weights[node] = 1
-		}
+func (c *HashRing) search(key uint64) int {
+	idx := sort.Search(len(c.sortedSet), func(i int) bool {
+		return c.sortedSet[i] >= key
+	})
+
+	if idx >= len(c.sortedSet) {
+		idx = 0
 	}
-
-	for _, node := range h.nodes {
-		weight := h.weights[node]
-
-		for j := 0; j < weight; j++ {
-			nodeKey := node + "-" + strconv.FormatInt(int64(j), 10)
-			key := h.hashFunc([]byte(nodeKey))
-			h.ring[key] = node
-			h.sortedKeys = append(h.sortedKeys, key)
-		}
-	}
-
-	sort.Sort(HashKeyOrder(h.sortedKeys))
+	return idx
 }
 
-func (h *HashRing) GetNode(stringKey string) (node string, ok bool) {
-	pos, ok := h.GetNodePos(stringKey)
+// Sets the load of `host` to the given `load`
+func (c *HashRing) UpdateLoad(host string, load int64) {
+	c.Lock()
+	defer c.Unlock()
+
+	if _, ok := c.loadMap[host]; !ok {
+		return
+	}
+	c.totalLoad -= c.loadMap[host].Load
+	c.loadMap[host].Load = load
+	c.totalLoad += load
+}
+
+// Increments the load of host by 1
+//
+// should only be used with if you obtained a host with GetLeast
+func (c *HashRing) Inc(host string) {
+	c.Lock()
+	defer c.Unlock()
+
+	if _, ok := c.loadMap[host]; !ok {
+		return
+	}
+	atomic.AddInt64(&c.loadMap[host].Load, 1)
+	atomic.AddInt64(&c.totalLoad, 1)
+}
+
+// Decrements the load of host by 1
+//
+// should only be used with if you obtained a host with GetLeast
+func (c *HashRing) Done(host string) {
+	c.Lock()
+	defer c.Unlock()
+
+	if _, ok := c.loadMap[host]; !ok {
+		return
+	}
+	atomic.AddInt64(&c.loadMap[host].Load, -1)
+	atomic.AddInt64(&c.totalLoad, -1)
+}
+
+// Deletes host from the ring
+func (c *HashRing) Remove(host string) bool {
+	c.Lock()
+	defer c.Unlock()
+
+	for i := 0; i < replicationFactor; i++ {
+		h := c.hash(fmt.Sprintf("%s%d", host, i))
+		delete(c.hosts, h)
+		c.delSlice(h)
+	}
+	delete(c.loadMap, host)
+	return true
+}
+
+// Return the list of hosts in the ring
+func (c *HashRing) Hosts() (hosts []string) {
+	c.RLock()
+	defer c.RUnlock()
+	for k := range c.loadMap {
+		hosts = append(hosts, k)
+	}
+	return hosts
+}
+
+// Returns the loads of all the hosts
+func (c *HashRing) GetLoads() map[string]int64 {
+	loads := map[string]int64{}
+
+	for k, v := range c.loadMap {
+		loads[k] = v.Load
+	}
+	return loads
+}
+
+// Returns the maximum load of the single host
+// which is:
+// (total_load/number_of_hosts)*1.25
+// total_load = is the total number of active requests served by hosts
+// for more info:
+// https://research.googleblog.com/2017/04/consistent-hashing-with-bounded-loads.html
+func (c *HashRing) MaxLoad() int64 {
+	if c.totalLoad == 0 {
+		c.totalLoad = 1
+	}
+	var avgLoadPerNode float64
+	avgLoadPerNode = float64(c.totalLoad / int64(len(c.loadMap)))
+	if avgLoadPerNode == 0 {
+		avgLoadPerNode = 1
+	}
+	avgLoadPerNode = math.Ceil(avgLoadPerNode * 1.25)
+	return int64(avgLoadPerNode)
+}
+
+func (c *HashRing) loadOK(host string) bool {
+	// a safety check if someone performed c.Done more than needed
+	if c.totalLoad < 0 {
+		c.totalLoad = 0
+	}
+
+	var avgLoadPerNode float64
+	avgLoadPerNode = float64((c.totalLoad + 1) / int64(len(c.loadMap)))
+	if avgLoadPerNode == 0 {
+		avgLoadPerNode = 1
+	}
+	avgLoadPerNode = math.Ceil(avgLoadPerNode * 1.25)
+
+	bhost, ok := c.loadMap[host]
 	if !ok {
-		return "", false
+		panic(fmt.Sprintf("given host(%s) not in loadsMap", bhost.Name))
 	}
-	return h.ring[h.sortedKeys[pos]], true
+
+	if float64(bhost.Load)+1 <= avgLoadPerNode {
+		return true
+	}
+
+	return false
 }
 
-func (h *HashRing) GetNodePos(stringKey string) (pos int, ok bool) {
-	if len(h.ring) == 0 {
-		return 0, false
-	}
-
-	key := h.GenKey(stringKey)
-
-	nodes := h.sortedKeys
-	pos = sort.Search(len(nodes), func(i int) bool { return key.Less(nodes[i]) })
-
-	if pos == len(nodes) {
-		// Wrap the search, should return First node
-		return 0, true
-	} else {
-		return pos, true
-	}
-}
-
-func (h *HashRing) GenKey(key string) HashKey {
-	return h.hashFunc([]byte(key))
-}
-
-// GetNodes iterates over the hash ring and returns the nodes in the order
-// which is determined by the key. GetNodes is thread safe if the hash
-// which was used to configure the hash ring is thread safe.
-func (h *HashRing) GetNodes(stringKey string, size int) (nodes []string, ok bool) {
-	pos, ok := h.GetNodePos(stringKey)
-	if !ok {
-		return nil, false
-	}
-
-	if size > len(h.nodes) {
-		return nil, false
-	}
-
-	returnedValues := make(map[string]bool, size)
-	// mergedSortedKeys := append(h.sortedKeys[pos:], h.sortedKeys[:pos]...)
-	resultSlice := make([]string, 0, size)
-
-	for i := pos; i < pos+len(h.sortedKeys); i++ {
-		key := h.sortedKeys[i%len(h.sortedKeys)]
-		val := h.ring[key]
-		if !returnedValues[val] {
-			returnedValues[val] = true
-			resultSlice = append(resultSlice, val)
-		}
-		if len(returnedValues) == size {
+func (c *HashRing) delSlice(val uint64) {
+	idx := -1
+	l := 0
+	r := len(c.sortedSet) - 1
+	for l <= r {
+		m := (l + r) / 2
+		if c.sortedSet[m] == val {
+			idx = m
 			break
+		} else if c.sortedSet[m] < val {
+			l = m + 1
+		} else if c.sortedSet[m] > val {
+			r = m - 1
 		}
 	}
-
-	return resultSlice, len(resultSlice) == size
+	if idx != -1 {
+		c.sortedSet = append(c.sortedSet[:idx], c.sortedSet[idx+1:]...)
+	}
 }
 
-func (h *HashRing) AddNode(node string) *HashRing {
-	return h.AddWeightedNode(node, 1)
-}
-
-func (h *HashRing) AddWeightedNode(node string, weight int) *HashRing {
-	if weight <= 0 {
-		return h
-	}
-
-	if _, ok := h.weights[node]; ok {
-		return h
-	}
-
-	nodes := make([]string, len(h.nodes), len(h.nodes)+1)
-	copy(nodes, h.nodes)
-	nodes = append(nodes, node)
-
-	weights := make(map[string]int)
-	for eNode, eWeight := range h.weights {
-		weights[eNode] = eWeight
-	}
-	weights[node] = weight
-
-	hashRing := &HashRing{
-		ring:       make(map[HashKey]string),
-		sortedKeys: make([]HashKey, 0),
-		nodes:      nodes,
-		weights:    weights,
-		hashFunc:   h.hashFunc,
-	}
-	hashRing.generateCircle()
-	return hashRing
-}
-
-func (h *HashRing) UpdateWeightedNode(node string, weight int) *HashRing {
-	if weight <= 0 {
-		return h
-	}
-
-	/* node is not need to update for node is not existed or weight is not changed */
-	if oldWeight, ok := h.weights[node]; (!ok) || (ok && oldWeight == weight) {
-		return h
-	}
-
-	nodes := make([]string, len(h.nodes))
-	copy(nodes, h.nodes)
-
-	weights := make(map[string]int)
-	for eNode, eWeight := range h.weights {
-		weights[eNode] = eWeight
-	}
-	weights[node] = weight
-
-	hashRing := &HashRing{
-		ring:       make(map[HashKey]string),
-		sortedKeys: make([]HashKey, 0),
-		nodes:      nodes,
-		weights:    weights,
-		hashFunc:   h.hashFunc,
-	}
-	hashRing.generateCircle()
-	return hashRing
-}
-
-func (h *HashRing) RemoveNode(node string) *HashRing {
-	/* if node isn't exist in hashring, don't refresh hashring */
-	if _, ok := h.weights[node]; !ok {
-		return h
-	}
-
-	nodes := make([]string, 0)
-	for _, eNode := range h.nodes {
-		if eNode != node {
-			nodes = append(nodes, eNode)
-		}
-	}
-
-	weights := make(map[string]int)
-	for eNode, eWeight := range h.weights {
-		if eNode != node {
-			weights[eNode] = eWeight
-		}
-	}
-
-	hashRing := &HashRing{
-		ring:       make(map[HashKey]string),
-		sortedKeys: make([]HashKey, 0),
-		nodes:      nodes,
-		weights:    weights,
-		hashFunc:   h.hashFunc,
-	}
-	hashRing.generateCircle()
-	return hashRing
+func (c *HashRing) hash(key string) uint64 {
+	out := blake2b.Sum512([]byte(key))
+	return binary.LittleEndian.Uint64(out[:])
 }

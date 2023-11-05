@@ -4,20 +4,21 @@ import (
 	"bytes"
 	"encoding/binary"
 
-	"github.com/qigao/ogrenet/errors"
-	"github.com/qigao/ogrenet/options"
+	"github.com/qigao/ogrenet/shared/errors"
+
+	"github.com/qigao/ogrenet/codecs"
 )
 
 func NewTailCodec(crc uint16) *TailCodec {
 	return &TailCodec{
 		CRC:   crc,
-		Magic: options.DefaultMagicTail,
+		Magic: codecs.DefaultMagicTail,
 	}
 }
 
 func NewEmptyTailCodec() *TailCodec {
 	return &TailCodec{
-		Magic: options.DefaultMagicTail,
+		Magic: codecs.DefaultMagicTail,
 	}
 }
 
