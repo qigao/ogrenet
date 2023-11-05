@@ -7,16 +7,14 @@
 package hashring
 
 import (
-	"encoding/binary"
 	"fmt"
 	"math"
 	"sort"
 	"sync"
 	"sync/atomic"
 
+	"github.com/cespare/xxhash"
 	"github.com/qigao/ogrenet/shared/errors"
-
-	blake2b "github.com/minio/blake2b-simd"
 )
 
 const replicationFactor = 10
@@ -264,6 +262,5 @@ func (c *HashRing) delSlice(val uint64) {
 }
 
 func (c *HashRing) hash(key string) uint64 {
-	out := blake2b.Sum512([]byte(key))
-	return binary.LittleEndian.Uint64(out[:])
+	return xxhash.Sum64([]byte(key))
 }
