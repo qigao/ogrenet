@@ -24,7 +24,7 @@ func TestExampleHashRing(t *testing.T) {
 		log.Fatal(err)
 	}
 	t.Log(host)
-	assert.Equal(t, "127.0.0.1:8000", host)
+	assert.Equal(t, "92.0.0.1:8000", host)
 }
 
 func TestExampleBounded(t *testing.T) {
@@ -50,5 +50,5 @@ func TestExampleBounded(t *testing.T) {
 	log.Println("send request to", host)
 	// call it when the work is done, to update the load of `host`.
 	defer c.Done(host)
-	assert.Equal(t, "127.0.0.1:8000", host)
+	assert.Equal(t, "92.0.0.1:8000", host)
 }
