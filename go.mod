@@ -4,6 +4,7 @@ go 1.20
 
 require (
 	github.com/ZZMarquis/gm v1.3.2
+	github.com/cespare/xxhash/v2 v2.2.0
 	github.com/dsnet/try v0.0.3
 	github.com/google/go-cmp v0.6.0
 	github.com/pkg/errors v0.9.1
@@ -12,8 +13,6 @@ require (
 )
 
 require (
-	github.com/buraksezer/consistent v0.10.0
-	github.com/cespare/xxhash v1.1.0
 	github.com/davecgh/go-spew v1.1.1 // indirect
 	github.com/mattn/go-colorable v0.1.13 // indirect
 	github.com/mattn/go-isatty v0.0.20 // indirect

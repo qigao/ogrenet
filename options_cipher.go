@@ -5,15 +5,15 @@ import (
 
 	"github.com/rs/zerolog/log"
 
-	"github.com/qigao/ogrenet/encrypt"
+	"github.com/qigao/ogrenet/tls"
 )
 
 // CipherOption   Server初始化参数
 type CipherOption struct {
-	EncryptMethod encrypt.MethodInterface // 数据加解密算法
-	Timeout       time.Duration           // 连接读写超时时间
-	PrivateKey    []byte                  // 加解密算法私钥
-	PublicKey     []byte                  // 加解密算法公钥
+	EncryptMethod tls.MethodInterface // 数据加解密算法
+	Timeout       time.Duration       // 连接读写超时时间
+	PrivateKey    []byte              // 加解密算法私钥
+	PublicKey     []byte              // 加解密算法公钥
 }
 
 type Cipher interface {
@@ -35,7 +35,7 @@ func newFuncServerOption(f func(*CipherOption)) *funcServerOption {
 }
 
 // WithEncryptMethod 设置加解密方法
-func WithEncryptMethod(encryptMethod encrypt.MethodInterface) Cipher {
+func WithEncryptMethod(encryptMethod tls.MethodInterface) Cipher {
 	return newFuncServerOption(func(o *CipherOption) {
 		o.EncryptMethod = encryptMethod
 	})

@@ -3,20 +3,21 @@ package ogrenet
 import (
 	"testing"
 
-	"github.com/buraksezer/consistent"
+	"github.com/qigao/ogrenet/shared/hashring"
+
 	"github.com/stretchr/testify/assert"
 )
 
 func TestHashRing(t *testing.T) {
 	t.Run("test add", func(t *testing.T) {
 		// Create a new consistent instance
-		cfg := consistent.Config{
+		cfg := hashring.Config{
 			PartitionCount:    7,
 			ReplicationFactor: 20,
 			Load:              1.25,
 			Hasher:            hasher{},
 		}
-		c := consistent.New(nil, cfg)
+		c := hashring.New(nil, cfg)
 
 		// Add some members to the consistent hash table.
 		// Add function calculates average load and distributes partitions over members

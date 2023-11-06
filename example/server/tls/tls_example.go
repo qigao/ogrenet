@@ -11,9 +11,9 @@ import (
 
 func main() {
 	//svr := ogrenet.NewServe(":5005", new(Handle),
-	//	//options.WithEncryptMethod(new(encrypt.AES256CFBMethod)),
-	//	//options.WithEncryptMethodPublicKey([]byte(encrypt.MagicKey)),
-	//	//options.WithEncryptMethodPrivateKey([]byte(encrypt.MagicKey[:16])),
+	//	//options.WithEncryptMethod(new(tls.AES256CFBMethod)),
+	//	//options.WithEncryptMethodPublicKey([]byte(tls.MagicKey)),
+	//	//options.WithEncryptMethodPrivateKey([]byte(tls.MagicKey[:16])),
 	//	options.WithTimeout(5*time.Second),
 	//)
 	caCertFile, err := os.ReadFile("./certs/CertAuth.crt")

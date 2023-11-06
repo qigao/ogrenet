@@ -1,4 +1,4 @@
-package encrypt
+package tls
 
 import (
 	"bytes"
@@ -6,25 +6,19 @@ import (
 	"crypto/cipher"
 )
 
-type AES256CFBMethod struct {
-	block cipher.Block
+type AES128CFBMethod struct {
 	iv    []byte
+	block cipher.Block
 }
 
-func (m *AES256CFBMethod) Init(key, iv []byte) error {
+func (m *AES128CFBMethod) Init(key, iv []byte) error {
 	// 判断key是否为32长度
 	l := len(key)
-	if l > 32 {
-		key = key[:32]
-	} else if l < 32 {
-		key = append(key, bytes.Repeat([]byte{' '}, 32-l)...)
+	if l > 16 {
+		key = key[:16]
+	} else if l < 16 {
+		key = append(key, bytes.Repeat([]byte{' '}, 16-l)...)
 	}
-
-	block, err := aes.NewCipher(key)
-	if err != nil {
-		return err
-	}
-	m.block = block
 
 	// 判断iv长度
 	l2 := len(iv)
@@ -33,12 +27,20 @@ func (m *AES256CFBMethod) Init(key, iv []byte) error {
 	} else if l2 < aes.BlockSize {
 		iv = append(iv, bytes.Repeat([]byte{' '}, aes.BlockSize-l2)...)
 	}
+
 	m.iv = iv
+
+	// block
+	block, err := aes.NewCipher(key)
+	if err != nil {
+		return err
+	}
+	m.block = block
 
 	return nil
 }
 
-func (m *AES256CFBMethod) Encrypt(src []byte) (dst []byte, err error) {
+func (m *AES128CFBMethod) Encrypt(src []byte) (dst []byte, err error) {
 	if len(src) == 0 {
 		return
 	}
@@ -48,14 +50,13 @@ func (m *AES256CFBMethod) Encrypt(src []byte) (dst []byte, err error) {
 	}()
 
 	dst = make([]byte, len(src))
-
 	encrypter := cipher.NewCFBEncrypter(m.block, m.iv)
 	encrypter.XORKeyStream(dst, src)
 
 	return
 }
 
-func (m *AES256CFBMethod) Decrypt(dst []byte) (src []byte, err error) {
+func (m *AES128CFBMethod) Decrypt(dst []byte) (src []byte, err error) {
 	if len(dst) == 0 {
 		return
 	}
@@ -65,12 +66,12 @@ func (m *AES256CFBMethod) Decrypt(dst []byte) (src []byte, err error) {
 	}()
 
 	src = make([]byte, len(dst))
-	decrypter := cipher.NewCFBDecrypter(m.block, m.iv)
-	decrypter.XORKeyStream(src, dst)
+	encrypter := cipher.NewCFBDecrypter(m.block, m.iv)
+	encrypter.XORKeyStream(src, dst)
 
 	return
 }
 
-func (m *AES256CFBMethod) Method() uint8 {
-	return encryptMethodAES256CFB
+func (m *AES128CFBMethod) Method() uint8 {
+	return encryptMethodAES128CFB
 }

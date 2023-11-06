@@ -12,7 +12,7 @@ includes:
   golang: tasks/golang.yml
   client: example/client/tasks.yml
   server: example/server/tasks.yml
-  tls-cert: tls-cert/tasks.yml
+  tls-cert: shared/tls-cert/tasks.yml
 
 tasks:
   format:
