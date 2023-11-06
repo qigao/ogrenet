@@ -5,10 +5,15 @@ import (
 	"testing"
 )
 
+const (
+	host01 = "127.0.0.1:8000"
+	host02 = "127.0.0.1:8000"
+)
+
 func TestAdd(t *testing.T) {
 	c := NewHashRing()
 
-	c.Add("127.0.0.1:8000")
+	c.Add(host01)
 	if len(c.sortedSet) != replicationFactor {
 		t.Fatal("vnodes number is incorrect")
 	}
@@ -17,13 +22,13 @@ func TestAdd(t *testing.T) {
 func TestGet(t *testing.T) {
 	c := NewHashRing()
 
-	c.Add("127.0.0.1:8000")
-	host, err := c.Get("127.0.0.1:8000")
+	c.Add(host01)
+	host, err := c.Get(host01)
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	if host != "127.0.0.1:8000" {
+	if host != host01 {
 		t.Fatal("returned host is not what expected")
 	}
 }
@@ -31,8 +36,8 @@ func TestGet(t *testing.T) {
 func TestRemove(t *testing.T) {
 	c := NewHashRing()
 
-	c.Add("127.0.0.1:8000")
-	c.Remove("127.0.0.1:8000")
+	c.Add(host01)
+	c.Remove(host01)
 
 	if len(c.sortedSet) != 0 && len(c.hosts) != 0 {
 		t.Fatal(("remove is not working"))
@@ -42,8 +47,8 @@ func TestRemove(t *testing.T) {
 func TestGetLeast(t *testing.T) {
 	c := NewHashRing()
 
-	c.Add("127.0.0.1:8000")
-	c.Add("92.0.0.1:8000")
+	c.Add(host01)
+	c.Add(host02)
 
 	for i := 0; i < 100; i++ {
 		host, err := c.GetLeast("92.0.0.1:80001")
@@ -65,8 +70,8 @@ func TestGetLeast(t *testing.T) {
 func TestIncDone(t *testing.T) {
 	c := NewHashRing()
 
-	c.Add("127.0.0.1:8000")
-	c.Add("92.0.0.1:8000")
+	c.Add(host01)
+	c.Add(host02)
 
 	host, err := c.GetLeast("92.0.0.1:80001")
 	if err != nil {
@@ -86,8 +91,8 @@ func TestIncDone(t *testing.T) {
 
 func TestHosts(t *testing.T) {
 	hosts := []string{
-		"127.0.0.1:8000",
-		"92.0.0.1:8000",
+		host01,
+		host02,
 	}
 
 	c := NewHashRing()
@@ -109,7 +114,7 @@ func TestHosts(t *testing.T) {
 			t.Fatal("missing host", h)
 		}
 	}
-	c.Remove("127.0.0.1:8000")
+	c.Remove(host01)
 	fmt.Println("hosts in the ring", c.Hosts())
 }
 

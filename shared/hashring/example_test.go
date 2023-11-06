@@ -11,8 +11,8 @@ func TestExampleHashRing(t *testing.T) {
 	c := NewHashRing()
 
 	// adds the hosts to the ring
-	c.Add("127.0.0.1:8000")
-	c.Add("92.0.0.1:8000")
+	c.Add(host01)
+	c.Add(host02)
 
 	// Returns the host that owns `key`.
 	//
@@ -24,15 +24,15 @@ func TestExampleHashRing(t *testing.T) {
 		log.Fatal(err)
 	}
 	t.Log(host)
-	assert.Equal(t, "92.0.0.1:8000", host)
+	assert.Equal(t, host02, host)
 }
 
 func TestExampleBounded(t *testing.T) {
 	c := NewHashRing()
 
 	// adds the hosts to the ring
-	c.Add("127.0.0.1:8000")
-	c.Add("92.0.0.1:8000")
+	c.Add(host01)
+	c.Add(host02)
 
 	// It uses Consistent Hashing With Bounded loads
 	// https://research.googleblog.com/2017/04/consistent-hashing-with-bounded-loads.html
@@ -50,5 +50,5 @@ func TestExampleBounded(t *testing.T) {
 	log.Println("send request to", host)
 	// call it when the work is done, to update the load of `host`.
 	defer c.Done(host)
-	assert.Equal(t, "92.0.0.1:8000", host)
+	assert.Equal(t, host02, host)
 }
