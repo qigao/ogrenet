@@ -7,7 +7,7 @@ import (
 
 const (
 	host01 = "127.0.0.1:8000"
-	host02 = "127.0.0.1:8000"
+	host02 = "92.0.0.1:8000"
 )
 
 func TestAdd(t *testing.T) {
