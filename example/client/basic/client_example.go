@@ -9,7 +9,7 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/qigao/ogrenet/encrypt"
+	"github.com/qigao/ogrenet/tls"
 	"github.com/rs/zerolog/log"
 )
 
@@ -30,11 +30,11 @@ func main() {
 	setLimit()
 
 	addr := *ip + ":" + *port
-	var enc encrypt.MethodInterface
+	var enc tls.MethodInterface
 	var err error
 	var conns []net.Conn
 	if *encryptMethod != "" {
-		enc, err = encrypt.NewMethodInstance(*encryptMethod, encrypt.MagicKey, encrypt.MagicKey[:16])
+		enc, err = tls.NewMethodInstance(*encryptMethod, tls.MagicKey, tls.MagicKey[:16])
 		if err != nil {
 			log.Fatal().Err(err).Msgf("set encryptMethod method errrr: %v", err)
 		}

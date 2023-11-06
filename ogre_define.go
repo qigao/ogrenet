@@ -5,10 +5,10 @@ import (
 	"net"
 	"sync"
 
-	"github.com/buraksezer/consistent"
-	"github.com/qigao/ogrenet/shared/avl"
+	"github.com/qigao/ogrenet/shared/hashring"
 
 	"github.com/qigao/ogrenet/codecs/passthru"
+	"github.com/qigao/ogrenet/shared/avl"
 
 	"github.com/qigao/ogrenet/shared/bimap"
 )
@@ -43,7 +43,7 @@ type Proxy struct {
 	keepAlive   bool
 	proxyMethod ProxyMode
 	pattern     string
-	hashRing    *consistent.Consistent
+	hashRing    *hashring.Consistent
 	endpoints   *bimap.BiMap[int, string]
 	msgChan     chan *MsgConn
 }

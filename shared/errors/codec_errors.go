@@ -14,6 +14,6 @@ var (
 	ErrBufferInvalidStart  = errors.New("buffer: invalid start byte")
 	ErrBufferInvalidHeader = errors.New("buffer: invalid header")
 	ErrBufferDataTooLong   = errors.New("buffer: data too long bytes")
-	ErrDecryptFailed       = errors.New("encrypt: decrypt byte failed")
+	ErrDecryptFailed       = errors.New("tls: decrypt byte failed")
 	ErrBufferInvalidId     = errors.New("buffer: invalid id")
 )

@@ -1,4 +1,4 @@
-package encrypt
+package tls
 
 const (
 	MagicKey = "f1c8eafb543f03023e97b7be864a4e9b"

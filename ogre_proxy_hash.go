@@ -3,7 +3,7 @@ package ogrenet
 import (
 	"fmt"
 
-	"github.com/cespare/xxhash"
+	"github.com/cespare/xxhash/v2"
 )
 
 // In your distributed system, you probably have a custom data type

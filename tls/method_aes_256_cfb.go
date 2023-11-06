@@ -1,4 +1,4 @@
-package encrypt
+package tls
 
 import (
 	"bytes"
@@ -6,18 +6,18 @@ import (
 	"crypto/cipher"
 )
 
-type AES192CFBMethod struct {
+type AES256CFBMethod struct {
 	block cipher.Block
 	iv    []byte
 }
 
-func (m *AES192CFBMethod) Init(key, iv []byte) error {
-	// 判断key是否为24长度
+func (m *AES256CFBMethod) Init(key, iv []byte) error {
+	// 判断key是否为32长度
 	l := len(key)
-	if l > 24 {
-		key = key[:24]
-	} else if l < 24 {
-		key = append(key, bytes.Repeat([]byte{' '}, 24-l)...)
+	if l > 32 {
+		key = key[:32]
+	} else if l < 32 {
+		key = append(key, bytes.Repeat([]byte{' '}, 32-l)...)
 	}
 
 	block, err := aes.NewCipher(key)
@@ -33,13 +33,12 @@ func (m *AES192CFBMethod) Init(key, iv []byte) error {
 	} else if l2 < aes.BlockSize {
 		iv = append(iv, bytes.Repeat([]byte{' '}, aes.BlockSize-l2)...)
 	}
-
 	m.iv = iv
 
 	return nil
 }
 
-func (m *AES192CFBMethod) Encrypt(src []byte) (dst []byte, err error) {
+func (m *AES256CFBMethod) Encrypt(src []byte) (dst []byte, err error) {
 	if len(src) == 0 {
 		return
 	}
@@ -50,13 +49,13 @@ func (m *AES192CFBMethod) Encrypt(src []byte) (dst []byte, err error) {
 
 	dst = make([]byte, len(src))
 
-	encrypted := cipher.NewCFBEncrypter(m.block, m.iv)
-	encrypted.XORKeyStream(dst, src)
+	encrypter := cipher.NewCFBEncrypter(m.block, m.iv)
+	encrypter.XORKeyStream(dst, src)
 
 	return
 }
 
-func (m *AES192CFBMethod) Decrypt(dst []byte) (src []byte, err error) {
+func (m *AES256CFBMethod) Decrypt(dst []byte) (src []byte, err error) {
 	if len(dst) == 0 {
 		return
 	}
@@ -66,13 +65,12 @@ func (m *AES192CFBMethod) Decrypt(dst []byte) (src []byte, err error) {
 	}()
 
 	src = make([]byte, len(dst))
-
-	decrypted := cipher.NewCFBDecrypter(m.block, m.iv)
-	decrypted.XORKeyStream(src, dst)
+	decrypter := cipher.NewCFBDecrypter(m.block, m.iv)
+	decrypter.XORKeyStream(src, dst)
 
 	return
 }
 
-func (m *AES192CFBMethod) Method() uint8 {
-	return encryptMethodAES192CFB
+func (m *AES256CFBMethod) Method() uint8 {
+	return encryptMethodAES256CFB
 }

@@ -6,7 +6,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/buraksezer/consistent"
+	"github.com/qigao/ogrenet/shared/hashring"
+
 	"github.com/qigao/ogrenet/shared/gopool"
 
 	"github.com/qigao/ogrenet/codecs/passthru"
@@ -37,13 +38,13 @@ func NewOgreNetProxy(ip string, port int, handle ProxyEventHandle, opts *Options
 		ogre.pattern = opts.proxy.pattern
 	}
 	if opts.rotateCfg.Load != 0 {
-		cfg := consistent.Config{
+		cfg := hashring.Config{
 			PartitionCount:    opts.rotateCfg.PartitionCount,
 			ReplicationFactor: opts.rotateCfg.ReplicationFactor,
 			Load:              opts.rotateCfg.Load,
 			Hasher:            hasher{},
 		}
-		ogre.hashRing = consistent.New(nil, cfg)
+		ogre.hashRing = hashring.New(nil, cfg)
 	}
 	ogre.codecPool = passthru.NewCodecPool()
 	ogre.endpoints = bimap.NewBiMap[int, string]()

@@ -1,4 +1,4 @@
-package encrypt
+package tls
 
 import (
 	"github.com/ZZMarquis/gm/sm3"

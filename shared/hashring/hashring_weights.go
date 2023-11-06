@@ -23,7 +23,7 @@ type HashRingWithWeight struct {
 	weights    map[string]int
 }
 
-func New(nodes []string) *HashRingWithWeight {
+func NewHashRingWithWeight(nodes []string) *HashRingWithWeight {
 	hashRing := &HashRingWithWeight{
 		ring:       make(map[HashKey]string),
 		sortedKeys: make([]HashKey, 0),
