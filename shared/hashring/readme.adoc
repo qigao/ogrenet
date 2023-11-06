@@ -1,0 +1,4 @@
+== reference ==
+
+- https://github.com/lafikl/consistent[consistent hash]
+- https://github.com/buraksezer/consistent[consistent]
