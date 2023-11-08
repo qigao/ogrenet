@@ -38,6 +38,14 @@ const (
 	ReConnect
 )
 
+var (
+	HeartbeatCMD  = []byte{byte(HeartBeat)}
+	RegisterCMD   = []byte{byte(Register)}
+	UnregisterCMD = []byte{byte(UnRegister)}
+	CloseCMD      = []byte{byte(Close)}
+	DataCMD       = []byte{byte(Data)}
+)
+
 const (
 	version uint8 = 0x01
 )

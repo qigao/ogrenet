@@ -9,8 +9,8 @@ type Options struct {
 	Packet        Packet
 	BufSize       BufSize
 	KeepAlive     bool
-	proxy         ProxyOptions
-	rotateCfg     RotateConfig
+	proxyMode     ProxyMode
+	rotateCfg     RotateOptions
 	CompressLevel int
 	numPoller     int
 }
@@ -38,12 +38,7 @@ type BufSize struct {
 	WriteBufSize int
 }
 
-type ProxyOptions struct {
-	mode    ProxyMode
-	pattern string
-}
-
-type RotateConfig struct {
+type RotateOptions struct {
 	// Keys are distributed among partitions. Prime numbers are good to
 	// distribute keys uniformly. Select a big PartitionCount if you have
 	// too many keys.

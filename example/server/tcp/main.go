@@ -5,12 +5,12 @@ import (
 	"os/signal"
 	"syscall"
 
-	"github.com/qigao/ogrenet"
+	ogre "github.com/qigao/ogrenet"
 )
 
 func main() {
-	opts := &ogrenet.Options{}
-	net := ogrenet.NewOgreNet("0.0.0.0", 8090, &Handler{}, opts)
+	opts := &ogre.Options{}
+	net := ogre.NewOgreNet("0.0.0.0", 8090, &Handler{}, opts)
 	net.Run()
 	defer net.Close()
 

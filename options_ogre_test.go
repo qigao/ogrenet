@@ -6,22 +6,6 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
-func TestProxyOptions(t *testing.T) {
-	t.Run("test default values", func(t *testing.T) {
-		po := ProxyOptions{}
-		assert.Equal(t, ProxyNone, po.mode)
-		assert.Equal(t, "", po.pattern)
-	})
-	t.Run("test setting values", func(t *testing.T) {
-		po := ProxyOptions{
-			mode:    Publish,
-			pattern: "example.com",
-		}
-		assert.Equal(t, Publish, po.mode)
-		assert.Equal(t, "example.com", po.pattern)
-	})
-}
-
 func TestOptions(t *testing.T) {
 	t.Run("test default values", func(t *testing.T) {
 		o := Options{}
@@ -29,11 +13,9 @@ func TestOptions(t *testing.T) {
 		assert.Equal(t, Packet{}, o.Packet)
 		assert.Equal(t, BufSize{}, o.BufSize)
 		assert.False(t, o.KeepAlive)
-		assert.Equal(t, ProxyOptions{}, o.proxy)
-		assert.Equal(t, ProxyNone, o.proxy.mode)
 		assert.Equal(t, 0, o.CompressLevel)
 		assert.Equal(t, 0, o.numPoller)
-		assert.Equal(t, RotateConfig{}, o.rotateCfg)
+		assert.Equal(t, RotateOptions{}, o.rotateCfg)
 		assert.Equal(t, 0, o.rotateCfg.PartitionCount)
 	})
 }
