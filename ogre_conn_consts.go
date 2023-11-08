@@ -13,5 +13,7 @@ const (
 	MaxPacketSize    = 1024
 	MaxReadBufSize   = 256
 	MaxWriteBufSize  = 256
-	EpollListener    = syscall.EPOLLIN | syscall.EPOLLPRI | syscall.EPOLLERR | syscall.EPOLLHUP | unix.EPOLLET
+	MaxChanSize      = MaxPacketSize * MaxPacketSize * 2
+
+	EpollListener = syscall.EPOLLIN | syscall.EPOLLPRI | syscall.EPOLLERR | syscall.EPOLLHUP | unix.EPOLLET
 )

@@ -30,8 +30,7 @@ func NewOgreNet(ip string, port int, handle EventHandle, opts *Options) *OgreNet
 	}
 	limiter := SetupLimiterOptions(opts)
 	ogre.limiter = limiter
-	ogre.mode = ServerMode
-	ogre.msgChan = make(chan *MsgConn, MaxPacketSize*MaxPacketSize*2)
+	ogre.msgChan = make(chan *MsgConn, MaxChanSize)
 	if opts.rotateCfg.Load != 0 {
 		cfg := hashring.Config{
 			PartitionCount:    opts.rotateCfg.PartitionCount,
