@@ -6,11 +6,14 @@ import (
 	"syscall"
 
 	"github.com/qigao/ogrenet"
+	codec "github.com/qigao/ogrenet/codecs/passthru"
 )
 
 func main() {
 	opts := &ogrenet.Options{}
-	proxyNet := ogrenet.NewOgreNetProxy("0.0.0.0", 8090, &Handler{}, opts)
+	codecPool := codec.NewCodecPool()
+	handle := NewProxyHandler(codecPool)
+	proxyNet := ogrenet.NewOgreNet("0.0.0.0", 8090, handle, opts)
 	proxyNet.Run()
 	defer proxyNet.Close()
 

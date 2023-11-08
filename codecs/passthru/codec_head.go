@@ -17,14 +17,14 @@ func NewEmptyHeadCodec() *HeadCodec {
 	}
 }
 
-func NewHeadCodec(ver uint8, cmd CodecType, id [4]byte, len uint16, cseq [4]byte) *HeadCodec {
+func NewHeadCodec(ver uint8, cmd CmdType, id [4]byte, len uint16, cseq [4]byte) *HeadCodec {
 	return &HeadCodec{
-		Magic:     codecs.DefaultMagicHead,
-		Version:   ver,
-		CodecType: cmd,
-		ID:        id,
-		BodyLen:   len,
-		Cseq:      cseq,
+		Magic:   codecs.DefaultMagicHead,
+		Version: ver,
+		CMD:     cmd,
+		ID:      id,
+		BodyLen: len,
+		Cseq:    cseq,
 	}
 }
 

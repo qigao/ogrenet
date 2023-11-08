@@ -16,7 +16,7 @@ var (
 
 func TestNewPassThruCodec(t *testing.T) {
 	codec := NewPassThruHead(CodecUnknown, id, 0)
-	assert.Equal(t, codec.CodecType, CodecUnknown)
+	assert.Equal(t, codec.CMD, CodecUnknown)
 	assert.Equal(t, codec.ID, id)
 	assert.Equal(t, codec.BodyLen, uint16(0))
 	assert.Equal(t, codec.Magic, uint8(HEAD))
@@ -24,7 +24,7 @@ func TestNewPassThruCodec(t *testing.T) {
 
 func TestNewRegisterCodec(t *testing.T) {
 	codec := NewRegisterCodec(id)
-	assert.Equal(t, codec.Head.CodecType, Register)
+	assert.Equal(t, codec.Head.CMD, Register)
 	assert.Equal(t, codec.Head.ID, id)
 	assert.Equal(t, codec.Head.BodyLen, uint16(1))
 	assert.Equal(t, uint8(HEAD), codec.Head.Magic)
@@ -34,7 +34,7 @@ func TestNewRegisterCodec(t *testing.T) {
 	revCodec := NewEmptyPassThruCodec()
 	data, _ := codec.Encode()
 	revCodec.Decode(data)
-	assert.Equal(t, Register, revCodec.Head.CodecType)
+	assert.Equal(t, Register, revCodec.Head.CMD)
 	assert.Equal(t, id, revCodec.Head.ID)
 	assert.Equal(t, uint16(1), revCodec.Head.BodyLen)
 	assert.Equal(t, uint8(HEAD), revCodec.Head.Magic)
@@ -47,7 +47,7 @@ func TestNewAckCodec(t *testing.T) {
 	t.Run("simple ack test", func(t *testing.T) {
 		data := []byte{0x01, 0x02, 0x03}
 		codec := NewAckCodec(id, data)
-		assert.Equal(t, Ack, codec.Head.CodecType)
+		assert.Equal(t, Ack, codec.Head.CMD)
 		assert.Equal(t, id, codec.Head.ID)
 		assert.Equal(t, uint16(3), codec.Head.BodyLen)
 		assert.Equal(t, uint8(HEAD), codec.Head.Magic)
@@ -57,7 +57,7 @@ func TestNewAckCodec(t *testing.T) {
 	t.Run("simple ack tst when data is codectype", func(t *testing.T) {
 		data := []byte{byte(Register)}
 		codec := NewAckCodec(id, data)
-		assert.Equal(t, Ack, codec.Head.CodecType)
+		assert.Equal(t, Ack, codec.Head.CMD)
 		assert.Equal(t, id, codec.Head.ID)
 		assert.Equal(t, uint16(1), codec.Head.BodyLen)
 		assert.Equal(t, uint8(HEAD), codec.Head.Magic)
@@ -68,7 +68,7 @@ func TestNewAckCodec(t *testing.T) {
 
 func TestNewUnRegisterCodec(t *testing.T) {
 	codec := NewUnRegisterCodec(id)
-	assert.Equal(t, UnRegister, codec.Head.CodecType)
+	assert.Equal(t, UnRegister, codec.Head.CMD)
 	assert.Equal(t, id, codec.Head.ID)
 	assert.Equal(t, uint16(1), codec.Head.BodyLen)
 	assert.Equal(t, uint8(HEAD), codec.Head.Magic)
@@ -78,7 +78,7 @@ func TestNewUnRegisterCodec(t *testing.T) {
 	revCodec := NewEmptyPassThruCodec()
 	data, _ := codec.Encode()
 	revCodec.Decode(data)
-	assert.Equal(t, UnRegister, revCodec.Head.CodecType)
+	assert.Equal(t, UnRegister, revCodec.Head.CMD)
 	assert.Equal(t, id, revCodec.Head.ID)
 	assert.Equal(t, uint16(1), revCodec.Head.BodyLen)
 	assert.Equal(t, uint8(HEAD), revCodec.Head.Magic)
@@ -89,7 +89,7 @@ func TestNewUnRegisterCodec(t *testing.T) {
 
 func TestNewHeartBeatCodec(t *testing.T) {
 	codec := NewHeartBeatCodec(id)
-	assert.Equal(t, HeartBeat, codec.Head.CodecType)
+	assert.Equal(t, HeartBeat, codec.Head.CMD)
 	assert.Equal(t, id, codec.Head.ID)
 	assert.Equal(t, uint16(1), codec.Head.BodyLen)
 	assert.Equal(t, uint8(HEAD), codec.Head.Magic)
@@ -99,7 +99,7 @@ func TestNewHeartBeatCodec(t *testing.T) {
 	revCodec := NewEmptyPassThruCodec()
 	data, _ := codec.Encode()
 	revCodec.Decode(data)
-	assert.Equal(t, HeartBeat, revCodec.Head.CodecType)
+	assert.Equal(t, HeartBeat, revCodec.Head.CMD)
 	assert.Equal(t, id, revCodec.Head.ID)
 	assert.Equal(t, uint16(1), revCodec.Head.BodyLen)
 	assert.Equal(t, uint8(HEAD), revCodec.Head.Magic)
@@ -112,7 +112,7 @@ func TestNewDataCodec(t *testing.T) {
 	body := []byte{0x01, 0x02, 0x03}
 	codec := NewDataCodec(id, body)
 	data, _ := codec.Encode()
-	assert.Equal(t, Data, codec.Head.CodecType)
+	assert.Equal(t, Data, codec.Head.CMD)
 	assert.Equal(t, id, codec.Head.ID)
 	assert.Equal(t, uint16(3), codec.Head.BodyLen)
 	assert.Equal(t, uint8(HEAD), codec.Head.Magic)
@@ -121,7 +121,7 @@ func TestNewDataCodec(t *testing.T) {
 
 	revCodec := NewEmptyPassThruCodec()
 	revCodec.Decode(data)
-	assert.Equal(t, Data, revCodec.Head.CodecType)
+	assert.Equal(t, Data, revCodec.Head.CMD)
 	assert.Equal(t, id, revCodec.Head.ID)
 	assert.Equal(t, uint16(3), revCodec.Head.BodyLen)
 	assert.Equal(t, uint8(HEAD), revCodec.Head.Magic)
@@ -131,7 +131,7 @@ func TestNewDataCodec(t *testing.T) {
 
 func TestNewCloseCodec(t *testing.T) {
 	codec := NewCloseCodec(id)
-	assert.Equal(t, Close, codec.Head.CodecType)
+	assert.Equal(t, Close, codec.Head.CMD)
 	assert.Equal(t, id, codec.Head.ID)
 	assert.Equal(t, uint16(1), codec.Head.BodyLen)
 	assert.Equal(t, uint8(HEAD), codec.Head.Magic)
@@ -141,7 +141,7 @@ func TestNewCloseCodec(t *testing.T) {
 	revCodec := NewEmptyPassThruCodec()
 	data, _ := codec.Encode()
 	revCodec.Decode(data)
-	assert.Equal(t, Close, revCodec.Head.CodecType)
+	assert.Equal(t, Close, revCodec.Head.CMD)
 	assert.Equal(t, id, revCodec.Head.ID)
 	assert.Equal(t, uint16(1), revCodec.Head.BodyLen)
 	assert.Equal(t, uint8(HEAD), revCodec.Head.Magic)
@@ -152,7 +152,7 @@ func TestNewCloseCodec(t *testing.T) {
 
 func TestNewReConnectCodec(t *testing.T) {
 	codec := NewReConnectCodec(id)
-	assert.Equal(t, ReConnect, codec.Head.CodecType)
+	assert.Equal(t, ReConnect, codec.Head.CMD)
 	assert.Equal(t, id, codec.Head.ID)
 	assert.Equal(t, uint16(1), codec.Head.BodyLen)
 	assert.Equal(t, uint8(HEAD), codec.Head.Magic)
@@ -162,7 +162,7 @@ func TestNewReConnectCodec(t *testing.T) {
 	revCodec := NewEmptyPassThruCodec()
 	data, _ := codec.Encode()
 	revCodec.Decode(data)
-	assert.Equal(t, ReConnect, revCodec.Head.CodecType)
+	assert.Equal(t, ReConnect, revCodec.Head.CMD)
 	assert.Equal(t, id, revCodec.Head.ID)
 	assert.Equal(t, uint16(1), revCodec.Head.BodyLen)
 	assert.Equal(t, uint8(HEAD), revCodec.Head.Magic)

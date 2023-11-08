@@ -7,7 +7,7 @@ import (
 	"github.com/qigao/ogrenet/codecs"
 )
 
-func NewPassThruHead(cmd CodecType, id [4]byte, len uint16) *HeadCodec {
+func NewPassThruHead(cmd CmdType, id [4]byte, len uint16) *HeadCodec {
 	cseq := [4]byte{}
 	current := time.Now().Unix()
 	binary.BigEndian.PutUint32(cseq[:], uint32(current))

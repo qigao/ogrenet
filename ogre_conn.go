@@ -70,6 +70,7 @@ func (c *Conn) cutMsgByHeadAndTail() {
 			data := buf.Bytes()
 			log.Debug().Msgf("[CutMsgByHeadAndTail] Conn fd:%d  pos:%d msg:%x", c.fd, readPos, data)
 			c.msgChan <- &MsgConn{c, data}
+			log.Ctx(c.ctx).Debug().Msgf("[CutMsgByHeadAndTail] Conn fd:%d  pos:%d msg:%x", c.fd, readPos, data)
 			readPos = 0
 		}
 	}
@@ -178,4 +179,59 @@ func (c *Conn) RemoteAddr() net.Addr {
 
 func (c *Conn) SetRemoteAddr(addr net.Addr) {
 	c.rAddr = addr
+}
+
+func (c *Conn) SetLocalAddr(addr net.Addr) {
+	c.lAddr = addr
+}
+
+func (c *Conn) PushData(dst int, data []byte) {
+	c.ctx = context.WithValue(c.ctx, PushKey{}, PushData{
+		data: data,
+		fd:   dst,
+	})
+}
+
+func (c *Conn) getPushData() PushData {
+	value := c.ctx.Value(PushKey{})
+	if value == nil {
+		return PushData{}
+	}
+	return value.(PushData)
+}
+
+func (c *Conn) PubData(dest []int, data []byte) {
+	c.ctx = context.WithValue(c.ctx, PubKey{}, PubData{
+		data: data,
+		fd:   dest,
+	})
+}
+
+func (c *Conn) getPubData() PubData {
+	value := c.ctx.Value(PubKey{})
+	if value == nil {
+		return PubData{}
+	}
+	return value.(PubData)
+}
+
+func (c *Conn) SetMode(mode WorkMode) {
+	c.ctx = context.WithValue(c.ctx, ModeKey{}, mode)
+}
+
+func (c *Conn) getMode() WorkMode {
+	cfg := c.ctx.Value(ModeKey{})
+	if cfg == nil {
+		return UnknowMode
+	} else {
+		return cfg.(WorkMode)
+	}
+}
+
+func (c *Conn) ForwardData(data []byte) {
+	c.ctx = context.WithValue(c.ctx, ForwardKey{}, data)
+}
+
+func (c *Conn) getForwardData() []byte {
+	return c.ctx.Value(ForwardKey{}).([]byte)
 }

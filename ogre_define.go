@@ -7,10 +7,7 @@ import (
 
 	"github.com/qigao/ogrenet/shared/hashring"
 
-	"github.com/qigao/ogrenet/codecs/passthru"
 	"github.com/qigao/ogrenet/shared/avl"
-
-	"github.com/qigao/ogrenet/shared/bimap"
 )
 
 type Conn struct {
@@ -30,25 +27,29 @@ type OgreNet struct {
 	timerTree *avl.AVLTree
 	limiter   Limiter
 	handle    EventHandle
+	mode      WorkMode
+	hashRing  *hashring.Consistent
 	msgChan   chan *MsgConn
-}
-
-type Proxy struct {
-	epoll       *OgreEpoll
-	connMap     sync.Map
-	timerTree   *avl.AVLTree
-	limiter     Limiter
-	codecPool   *passthru.CodecPool
-	handle      ProxyEventHandle
-	keepAlive   bool
-	proxyMethod ProxyMode
-	pattern     string
-	hashRing    *hashring.Consistent
-	endpoints   *bimap.BiMap[int, string]
-	msgChan     chan *MsgConn
 }
 
 type MsgConn struct {
 	Conn *Conn
 	Msg  []byte
+}
+
+type (
+	PushKey    struct{}
+	PubKey     struct{}
+	ForwardKey struct{}
+	ModeKey    struct{}
+)
+
+type PushData struct {
+	fd   int
+	data []byte
+}
+
+type PubData struct {
+	data []byte
+	fd   []int
 }

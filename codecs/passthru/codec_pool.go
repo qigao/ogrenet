@@ -49,7 +49,7 @@ func (c *CodecPool) NewRegisterCodec(id [4]byte, cseq [4]byte) CodecPassThru {
 
 	h.Magic = codecs.DefaultMagicHead
 	h.Version = 0
-	h.CodecType = Register
+	h.CMD = Register
 	h.ID = id
 	h.BodyLen = 1
 	h.Cseq = cseq
@@ -68,7 +68,7 @@ func (c *CodecPool) NewUnRegisterCodec(id [4]byte, cseq [4]byte) CodecPassThru {
 
 	h.Magic = codecs.DefaultMagicHead
 	h.Version = 0
-	h.CodecType = UnRegister
+	h.CMD = UnRegister
 	h.ID = id
 	h.BodyLen = 1
 	h.Cseq = cseq
@@ -89,7 +89,7 @@ func (c *CodecPool) NewAckCodec(id [4]byte, cseq [4]byte, data []byte) CodecPass
 
 	h.Magic = codecs.DefaultMagicHead
 	h.Version = 0
-	h.CodecType = Ack
+	h.CMD = Ack
 	h.ID = id
 	h.BodyLen = uint16(len(data))
 	h.Cseq = cseq
@@ -110,7 +110,7 @@ func (c *CodecPool) NewHeartBeatCodec(id [4]byte, cseq [4]byte) CodecPassThru {
 
 	h.Magic = codecs.DefaultMagicHead
 	h.Version = 0
-	h.CodecType = HeartBeat
+	h.CMD = HeartBeat
 	h.ID = id
 	h.BodyLen = 1
 	h.Cseq = cseq
@@ -131,7 +131,7 @@ func (c *CodecPool) NewDataCodec(id [4]byte, cseq [4]byte, data []byte) CodecPas
 
 	h.Magic = codecs.DefaultMagicHead
 	h.Version = 0
-	h.CodecType = Data
+	h.CMD = Data
 	h.ID = id
 	h.BodyLen = uint16(len(data))
 	h.Cseq = cseq
@@ -151,7 +151,7 @@ func (c *CodecPool) NewCloseCodec(id [4]byte, cseq [4]byte) CodecPassThru {
 
 	h.Magic = codecs.DefaultMagicHead
 	h.Version = 0
-	h.CodecType = Close
+	h.CMD = Close
 	h.ID = id
 	h.BodyLen = 1
 	h.Cseq = cseq
@@ -172,7 +172,7 @@ func (c *CodecPool) NewReConnectCodec(id [4]byte) CodecPassThru {
 
 	h.Magic = codecs.DefaultMagicHead
 	h.Version = 0
-	h.CodecType = ReConnect
+	h.CMD = ReConnect
 	h.ID = id
 	h.BodyLen = 1
 	h.Cseq = codecs.Empty

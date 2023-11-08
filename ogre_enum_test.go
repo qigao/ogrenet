@@ -7,27 +7,27 @@ import (
 func TestIsProxyModeValid(t *testing.T) {
 	testCases := []struct {
 		name  string
-		value ProxyMode
+		value WorkMode
 		want  bool
 	}{
 		{
 			name:  "valid Push",
-			value: Push,
+			value: PushMode,
 			want:  true,
 		},
 		{
 			name:  "valid Publish",
-			value: Publish,
+			value: PubMode,
 			want:  true,
 		},
 		{
 			name:  "valid Rotate",
-			value: Rotate,
+			value: RotateMode,
 			want:  true,
 		},
 		{
 			name:  "invalid value",
-			value: ProxyMode(99),
+			value: WorkMode(99),
 			want:  false,
 		},
 	}

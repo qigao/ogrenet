@@ -16,15 +16,16 @@ const (
 	CutByTail                          // 尾分隔
 )
 
-type ProxyMode int
+type WorkMode int
 
 const (
-	ProxyNone ProxyMode = iota
-	Push                // 一对一
-	Publish             // 一对多
-	Rotate              // 轮询
+	UnknowMode WorkMode = iota
+	ServerMode
+	PushMode   // 一对一
+	PubMode    // 一对多
+	RotateMode // 轮询
 )
 
-func IsProxyModeValid(value ProxyMode) bool {
-	return value >= Push && value <= Rotate
+func IsProxyModeValid(value WorkMode) bool {
+	return value >= PushMode && value <= RotateMode
 }
