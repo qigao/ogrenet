@@ -193,10 +193,14 @@ func (c *Conn) PushData(dst int, data []byte) {
 }
 
 func (c *Conn) getPushData() PushData {
-	return c.ctx.Value(PushKey{}).(PushData)
+	value := c.ctx.Value(PushKey{})
+	if value == nil {
+		return PushData{}
+	}
+	return value.(PushData)
 }
 
-func (c *Conn) PublishData(dest []int, data []byte) {
+func (c *Conn) PubData(dest []int, data []byte) {
 	c.ctx = context.WithValue(c.ctx, PubKey{}, PubData{
 		data: data,
 		fd:   dest,
@@ -204,19 +208,23 @@ func (c *Conn) PublishData(dest []int, data []byte) {
 }
 
 func (c *Conn) getPubData() PubData {
-	return c.ctx.Value(PubKey{}).(PubData)
+	value := c.ctx.Value(PubKey{})
+	if value == nil {
+		return PubData{}
+	}
+	return value.(PubData)
 }
 
-func (c *Conn) SetMode(mode ProxyMode) {
-	c.ctx = context.WithValue(c.ctx, WorkMode{}, mode)
+func (c *Conn) SetMode(mode WorkMode) {
+	c.ctx = context.WithValue(c.ctx, ModeKey{}, mode)
 }
 
-func (c *Conn) getMode() ProxyMode {
-	cfg := c.ctx.Value(WorkMode{})
+func (c *Conn) getMode() WorkMode {
+	cfg := c.ctx.Value(ModeKey{})
 	if cfg == nil {
-		return ProxyNone
+		return UnknowMode
 	} else {
-		return cfg.(ProxyMode)
+		return cfg.(WorkMode)
 	}
 }
 

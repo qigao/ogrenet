@@ -19,6 +19,7 @@ func NewProxyHandler(pool *codec.CodecPool) *Handler {
 
 func (h *Handler) OnConnect(c *ogrenet.Conn) {
 	log.Info().Msgf("[Handler] remote %v connected", c.RemoteAddr())
+	c.SetMode(ogrenet.PushMode)
 }
 
 func (h *Handler) OnData(c *ogrenet.Conn, bytes []byte) {
@@ -26,7 +27,8 @@ func (h *Handler) OnData(c *ogrenet.Conn, bytes []byte) {
 	codecP := h.codecPool.NewEmptyPassThruCodecFromPool()
 	codecP.Decode(bytes)
 	id := codecP.Head.ID
-	switch codecP.Head.CodecType {
+	codecType := codecP.Head.CMD
+	switch codecType {
 	case codec.Register:
 		ack := codec.NewAckCodec(id, codec.RegisterCMD)
 		ackBytes, _ := ack.Encode()
@@ -50,7 +52,7 @@ func (h *Handler) OnData(c *ogrenet.Conn, bytes []byte) {
 		c.Write(ackBytes)
 		h.OnClose(c)
 	default:
-		log.Fatal().Msgf("Invalid CodecType: %v", codecP.Head.CodecType)
+		log.Debug().Msgf("Invalid CodecType: %v", codecType)
 	}
 }
 

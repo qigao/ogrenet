@@ -18,6 +18,7 @@ func (h *Handler) OnData(c *ogre.Conn, bytes []byte) {
 		log.Error().Err(err).Msgf("write back error: %d, %v", n, err)
 		return
 	}
+	log.Info().Msgf("[Handler] write back %d bytes", n)
 }
 
 func (h *Handler) OnClose(c *ogre.Conn) {

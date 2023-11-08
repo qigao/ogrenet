@@ -9,7 +9,7 @@ type Options struct {
 	Packet        Packet
 	BufSize       BufSize
 	KeepAlive     bool
-	proxyMode     ProxyMode
+	proxyMode     WorkMode
 	rotateCfg     RotateOptions
 	CompressLevel int
 	numPoller     int

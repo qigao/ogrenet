@@ -27,7 +27,7 @@ type OgreNet struct {
 	timerTree *avl.AVLTree
 	limiter   Limiter
 	handle    EventHandle
-	mode      ProxyMode
+	mode      WorkMode
 	hashRing  *hashring.Consistent
 	msgChan   chan *MsgConn
 }
@@ -37,13 +37,11 @@ type MsgConn struct {
 	Msg  []byte
 }
 
-type PushKey struct{}
-
-type PubKey struct{}
-
 type (
+	PushKey    struct{}
+	PubKey     struct{}
 	ForwardKey struct{}
-	WorkMode   struct{}
+	ModeKey    struct{}
 )
 
 type PushData struct {

@@ -1,4 +1,4 @@
-package passthru
+package bufPool
 
 import (
 	"sync"

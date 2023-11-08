@@ -11,12 +11,12 @@ type CodecPassThru struct {
 }
 
 type HeadCodec struct {
-	Magic     uint8
-	Version   uint8
-	Cseq      codecs.CSEQ
-	CodecType CodecType
-	ID        codecs.ID
-	BodyLen   uint16
+	Magic   uint8
+	Version uint8
+	Cseq    codecs.CSEQ
+	CMD     CmdType
+	ID      codecs.ID
+	BodyLen uint16
 }
 
 type TailCodec struct {
@@ -24,10 +24,10 @@ type TailCodec struct {
 	Magic uint8
 }
 
-type CodecType uint8
+type CmdType uint8
 
 const (
-	CodecUnknown CodecType = iota
+	CodecUnknown CmdType = iota
 	Register
 	UnRegister
 	HeartBeat

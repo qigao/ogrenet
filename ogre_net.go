@@ -30,7 +30,8 @@ func NewOgreNet(ip string, port int, handle EventHandle, opts *Options) *OgreNet
 	}
 	limiter := SetupLimiterOptions(opts)
 	ogre.limiter = limiter
-
+	ogre.mode = ServerMode
+	ogre.msgChan = make(chan *MsgConn, MaxPacketSize*MaxPacketSize*2)
 	if opts.rotateCfg.Load != 0 {
 		cfg := hashring.Config{
 			PartitionCount:    opts.rotateCfg.PartitionCount,
@@ -54,7 +55,7 @@ func (n *OgreNet) wait() {
 		for {
 			err := n.epoll.Wait(n.handler)
 			if err != nil {
-				log.Error().Msgf("epoll wait error: %handle", err)
+				log.Error().Msgf("epoll wait error: %v handle", err)
 				continue
 			}
 		}
@@ -69,37 +70,29 @@ func (n *OgreNet) handler(fd int, connType ConnStatus) {
 			log.Error().Msgf("Accept error,fd:%d", fd)
 			return
 		}
-		gopool.Go(func() {
-			n.onConnected(nfd)
-		})
+		n.onConnected(nfd)
 	case ConnMessage:
 		c, ok := n.connMap.Load(fd)
 		if !ok {
 			log.Info().Msgf("Conn fd:%d is not exists", fd)
-			n.close(c.(*Conn))
 			return
 		}
 		n.timerTree.Add(c.(*Conn).updated, fd)
-		gopool.Go(func() {
-			c.(*Conn).ReadAll()
-		})
+		c.(*Conn).ReadAll()
 	default:
-		log.Fatal().Msgf("Invalid ConnType: %v", connType)
+		log.Debug().Msgf("Invalid ConnType: %v", connType)
 	}
 }
 
 func (n *OgreNet) onConnected(nfd int) {
 	msgPool := NewMessagePool()
-	proxyChan := make(chan *MsgConn, 1024)
-	n.msgChan = proxyChan
-	conn := NewNetConn(nfd, msgPool, proxyChan)
+	conn := NewNetConn(nfd, msgPool, n.msgChan)
 	conn.SetRemoteAddr(n.epoll.remoteAddr)
 	n.connMap.Store(nfd, conn)
 	n.timerTree.Add(conn.updated, nfd)
-
 	n.handle.OnConnect(conn)
 	n.mode = conn.getMode()
-	if n.mode == Rotate {
+	if n.mode == RotateMode {
 		myConn := ConnMember{
 			conn: conn,
 		}
@@ -113,17 +106,19 @@ func (n *OgreNet) onData() {
 			log.Info().Msgf("pool rvd:%d,%x", dc.Conn.fd, dc.Msg)
 			n.handle.OnData(dc.Conn, dc.Msg)
 			switch n.mode {
-			case Push:
+			case PushMode:
 				data := dc.Conn.getPushData()
 				n.push(data.fd, data.data)
-			case Publish:
+			case PubMode:
 				data := dc.Conn.getPubData()
 				n.publish(data.fd, data.data)
-			case Rotate:
+			case RotateMode:
 				data := dc.Conn.getForwardData()
 				n.forwardData(data)
+			case ServerMode:
+				log.Debug().Msgf("Server Mode")
 			default:
-				log.Fatal().Msgf("Invalid ProxyMode: %v", n.mode)
+				log.Debug().Msgf("Invalid ProxyMode: %v", n.mode)
 			}
 		}
 	})
@@ -167,7 +162,7 @@ func (n *OgreNet) close(c *Conn) {
 	log.Debug().Msgf("Removing fd: %d and Conn", c.fd)
 	n.timerTree.Remove(c.updated)
 	n.connMap.Delete(c.fd)
-	if n.mode == Rotate {
+	if n.mode == RotateMode {
 		myConnName := strconv.Itoa(c.fd)
 		n.hashRing.Remove(myConnName)
 	}
@@ -178,10 +173,8 @@ func (n *OgreNet) close(c *Conn) {
 func (n *OgreNet) push(nfd int, data []byte) {
 	conn, found := n.connMap.Load(nfd)
 	if found {
-		gopool.Go(func() {
-			n, err := conn.(*Conn).Write(data)
-			log.Debug().Msgf("SendMsgByID fd:%d, len:%d, err:%v", conn.(*Conn).fd, n, err)
-		})
+		n, err := conn.(*Conn).Write(data)
+		log.Debug().Msgf("SendMsgByID fd:%d, len:%d, err:%v", conn.(*Conn).fd, n, err)
 	}
 }
 
@@ -191,19 +184,15 @@ func (n *OgreNet) publish(nfd []int, data []byte) {
 	for _, fd := range nfd {
 		conn, found := n.connMap.Load(fd)
 		if found {
-			gopool.Go(func() {
-				n, err := conn.(*Conn).Write(data)
-				log.Debug().Msgf("SendMsgByPattern fd:%d, len:%d, err:%v", conn.(*Conn).fd, n, err)
-			})
+			n, err := conn.(*Conn).Write(data)
+			log.Debug().Msgf("SendMsgByPattern fd:%d, len:%d, err:%v", conn.(*Conn).fd, n, err)
 		}
 	}
 }
 
 func (n *OgreNet) forwardData(data []byte) {
-	gopool.Go(func() {
-		member := n.hashRing.LocateKey(data)
-		if member != nil {
-			member.(*ConnMember).conn.Write(data)
-		}
-	})
+	member := n.hashRing.LocateKey(data)
+	if member != nil {
+		member.(*ConnMember).conn.Write(data)
+	}
 }
