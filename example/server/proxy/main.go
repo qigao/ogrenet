@@ -3,10 +3,10 @@ package main
 import (
 	"os"
 	"os/signal"
-	"syscall"
 
 	"github.com/qigao/ogrenet"
 	codec "github.com/qigao/ogrenet/codecs/passthru"
+	"golang.org/x/sys/unix"
 )
 
 func main() {
@@ -18,6 +18,6 @@ func main() {
 	defer proxyNet.Close()
 
 	c := make(chan os.Signal, 1)
-	signal.Notify(c, syscall.SIGTERM, syscall.SIGQUIT, syscall.SIGINT)
+	signal.Notify(c, unix.SIGTERM, unix.SIGQUIT, unix.SIGINT)
 	<-c
 }

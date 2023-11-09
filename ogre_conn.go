@@ -4,10 +4,10 @@ import (
 	"bytes"
 	"context"
 	"net"
-	"syscall"
 	"time"
 
 	"github.com/qigao/ogrenet/codecs"
+	"golang.org/x/sys/unix"
 
 	"github.com/rs/zerolog/log"
 )
@@ -139,13 +139,13 @@ func (c *Conn) shouldCutByHeadAndTail() bool {
 }
 
 func (c *Conn) Read(b []byte) (n int, err error) {
-	n, err = syscall.Read(c.fd, b)
+	n, err = unix.Read(c.fd, b)
 	return
 }
 
 // Write writes a message to the connection.
 func (c *Conn) Write(message []byte) (int, error) {
-	n, err := syscall.Write(c.fd, message)
+	n, err := unix.Write(c.fd, message)
 	if err != nil {
 		log.Error().Msgf("Conn fd:%d Write error:%+v", c.fd, err)
 	}
@@ -154,7 +154,7 @@ func (c *Conn) Write(message []byte) (int, error) {
 }
 
 func (c *Conn) Close() error {
-	return syscall.Close(c.fd)
+	return unix.Close(c.fd)
 }
 
 func (c *Conn) SetDeadline(t time.Time) error {

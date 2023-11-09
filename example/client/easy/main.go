@@ -5,10 +5,10 @@ import (
 	"net"
 	"os"
 	"os/signal"
-	"syscall"
 	"time"
 
 	"github.com/rs/zerolog/log"
+	"golang.org/x/sys/unix"
 )
 
 var (
@@ -58,16 +58,16 @@ func main() {
 	}()
 
 	c := make(chan os.Signal, 1)
-	signal.Notify(c, syscall.SIGHUP, syscall.SIGQUIT, syscall.SIGTERM, syscall.SIGINT)
+	signal.Notify(c, unix.SIGHUP, unix.SIGQUIT, unix.SIGTERM, unix.SIGINT)
 	for {
 		s := <-c
 		switch s {
-		case syscall.SIGQUIT, syscall.SIGTERM, syscall.SIGINT:
+		case unix.SIGQUIT, unix.SIGTERM, unix.SIGINT:
 			for conn := range conns {
 				conns[conn].Close()
 			}
 			return
-		case syscall.SIGHUP:
+		case unix.SIGHUP:
 		default:
 			return
 		}
@@ -93,12 +93,12 @@ func rvd(conn net.Conn) {
 }
 
 func setLimit() {
-	var rLimit syscall.Rlimit
-	if err := syscall.Getrlimit(syscall.RLIMIT_NOFILE, &rLimit); err != nil {
+	var rLimit unix.Rlimit
+	if err := unix.Getrlimit(unix.RLIMIT_NOFILE, &rLimit); err != nil {
 		log.Fatal().Err(err)
 	}
 	rLimit.Cur = rLimit.Max
-	if err := syscall.Setrlimit(syscall.RLIMIT_NOFILE, &rLimit); err != nil {
+	if err := unix.Setrlimit(unix.RLIMIT_NOFILE, &rLimit); err != nil {
 		log.Fatal().Err(err)
 	}
 }
