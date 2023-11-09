@@ -1,7 +1,6 @@
 package ogrenet
 
 import (
-	"syscall"
 	"time"
 
 	"golang.org/x/sys/unix"
@@ -15,5 +14,5 @@ const (
 	MaxWriteBufSize  = 256
 	MaxChanSize      = MaxPacketSize * MaxPacketSize * 2
 
-	EpollListener = syscall.EPOLLIN | syscall.EPOLLPRI | syscall.EPOLLERR | syscall.EPOLLHUP | unix.EPOLLET
+	EpollListener = unix.EPOLLIN | unix.EPOLLPRI | unix.EPOLLERR | unix.EPOLLHUP | unix.EPOLLET
 )

@@ -3,9 +3,9 @@ package main
 import (
 	"os"
 	"os/signal"
-	"syscall"
 
 	ogre "github.com/qigao/ogrenet"
+	"golang.org/x/sys/unix"
 )
 
 func main() {
@@ -15,6 +15,6 @@ func main() {
 	defer net.Close()
 
 	c := make(chan os.Signal, 1)
-	signal.Notify(c, syscall.SIGTERM, syscall.SIGQUIT, syscall.SIGINT)
+	signal.Notify(c, unix.SIGTERM, unix.SIGQUIT, unix.SIGINT)
 	<-c
 }
