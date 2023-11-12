@@ -49,6 +49,16 @@ func BenchmarkRegisterCodecPool(b *testing.B) {
 	}
 }
 
+func BenchmarkRegisterCodecWithBodyPool(b *testing.B) {
+	pool := NewCodecPool()
+	data := []byte{0x01, 0x02, 0x03}
+	for i := 0; i < b.N; i++ {
+		c := pool.NewRegisterWithBody(id, data)
+		pool.PutCodec(&c)
+
+	}
+}
+
 func BenchmarkDataCodec(b *testing.B) {
 	data := []byte{0x01, 0x02, 0x03}
 	for i := 0; i < b.N; i++ {
