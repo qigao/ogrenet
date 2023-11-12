@@ -22,7 +22,7 @@ func TestIsProxyModeValid(t *testing.T) {
 		},
 		{
 			name:  "valid Rotate",
-			value: RotateMode,
+			value: LoadBalance,
 			want:  true,
 		},
 		{
@@ -34,7 +34,7 @@ func TestIsProxyModeValid(t *testing.T) {
 
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
-			got := IsProxyModeValid(tc.value)
+			got := IsValidWorkMode(tc.value)
 			if got != tc.want {
 				t.Errorf("IsProxyModeValid(%v) = %v, want %v", tc.value, got, tc.want)
 			}

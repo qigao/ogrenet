@@ -6,7 +6,6 @@ import (
 	"net"
 	"time"
 
-	"github.com/qigao/ogrenet/codecs"
 	"golang.org/x/sys/unix"
 
 	"github.com/rs/zerolog/log"
@@ -20,17 +19,16 @@ func NewNetConn(fd int, msgPool *MessagePool, msgChan chan *MsgConn) *Conn {
 		ctx:     context.Background(),
 	}
 	conn.msgChan = msgChan
-	conn.limiter.Packet.CutType = CutByHeadAndTail
-	conn.limiter.Packet.Head = codecs.DefaultMagicHead
-	conn.limiter.Packet.Tail = codecs.DefaultMagicTail
+	conn.limiter = DefaultLimiter()
 	return conn
 }
 
 func NewNetConnWithTerm(fd int, msgPool *MessagePool, msgChan chan *MsgConn, limiter *Limiter) *Conn {
-	if limiter == nil {
-		return NewNetConn(fd, msgPool, msgChan)
-	}
 	conn := NewNetConn(fd, msgPool, msgChan)
+	emptyLimiter := Limiter{}
+	if emptyLimiter == *limiter {
+		return conn
+	}
 	conn.limiter = *limiter
 	return conn
 }
@@ -97,7 +95,7 @@ func (c *Conn) cutMsgByTail() {
 }
 
 func (c *Conn) ReadAll() {
-	buf := make([]byte, MaxReadBufSize)
+	buf := make([]byte, c.limiter.BufSize.ReadBufSize)
 	defer func() {
 		buf = nil
 	}()
@@ -183,55 +181,4 @@ func (c *Conn) SetRemoteAddr(addr net.Addr) {
 
 func (c *Conn) SetLocalAddr(addr net.Addr) {
 	c.lAddr = addr
-}
-
-func (c *Conn) PushData(dst int, data []byte) {
-	c.ctx = context.WithValue(c.ctx, PushKey{}, PushData{
-		data: data,
-		fd:   dst,
-	})
-}
-
-func (c *Conn) getPushData() PushData {
-	value := c.ctx.Value(PushKey{})
-	if value == nil {
-		return PushData{}
-	}
-	return value.(PushData)
-}
-
-func (c *Conn) PubData(dest []int, data []byte) {
-	c.ctx = context.WithValue(c.ctx, PubKey{}, PubData{
-		data: data,
-		fd:   dest,
-	})
-}
-
-func (c *Conn) getPubData() PubData {
-	value := c.ctx.Value(PubKey{})
-	if value == nil {
-		return PubData{}
-	}
-	return value.(PubData)
-}
-
-func (c *Conn) SetMode(mode WorkMode) {
-	c.ctx = context.WithValue(c.ctx, ModeKey{}, mode)
-}
-
-func (c *Conn) getMode() WorkMode {
-	cfg := c.ctx.Value(ModeKey{})
-	if cfg == nil {
-		return UnknowMode
-	} else {
-		return cfg.(WorkMode)
-	}
-}
-
-func (c *Conn) ForwardData(data []byte) {
-	c.ctx = context.WithValue(c.ctx, ForwardKey{}, data)
-}
-
-func (c *Conn) getForwardData() []byte {
-	return c.ctx.Value(ForwardKey{}).([]byte)
 }

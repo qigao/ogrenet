@@ -1,7 +1,7 @@
 package passthru
 
 import (
-	"github.com/qigao/ogrenet/codecs"
+	. "github.com/qigao/ogrenet/codecs"
 )
 
 type CodecPassThru struct {
@@ -13,9 +13,9 @@ type CodecPassThru struct {
 type HeadCodec struct {
 	Magic   uint8
 	Version uint8
-	Cseq    codecs.CSEQ
+	Cseq    CSEQ
 	CMD     CmdType
-	ID      codecs.ID
+	ID      ID
 	BodyLen uint16
 }
 
@@ -27,7 +27,7 @@ type TailCodec struct {
 type CmdType uint8
 
 const (
-	CodecUnknown CmdType = iota
+	UnknownType CmdType = iota
 	Register
 	UnRegister
 	HeartBeat
@@ -44,6 +44,7 @@ var (
 	UnregisterCMD = []byte{byte(UnRegister)}
 	CloseCMD      = []byte{byte(Close)}
 	DataCMD       = []byte{byte(Data)}
+	UnknownCMD    = []byte{byte(UnknownType)}
 )
 
 const (
