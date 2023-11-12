@@ -119,31 +119,31 @@ func TestWithRotateOptions(t *testing.T) {
 	opt := &Option{}
 
 	// Call the WithRotateOptions function with some values
-	WithRotateOptions(2, 3, 0.8)(opt)
+	WithLoadBalanceOptions(2, 3, 0.8)(opt)
 
 	// Check that the values were set correctly
-	if opt.RotateCfg.PartitionCount != 2 {
-		t.Errorf("Expected PartitionCount to be %v, but got %v", 2, opt.RotateCfg.PartitionCount)
+	if opt.LBOption.PartitionCount != 2 {
+		t.Errorf("Expected PartitionCount to be %v, but got %v", 2, opt.LBOption.PartitionCount)
 	}
-	if opt.RotateCfg.ReplicationFactor != 3 {
-		t.Errorf("Expected ReplicationFactor to be %v, but got %v", 3, opt.RotateCfg.ReplicationFactor)
+	if opt.LBOption.ReplicationFactor != 3 {
+		t.Errorf("Expected ReplicationFactor to be %v, but got %v", 3, opt.LBOption.ReplicationFactor)
 	}
-	if opt.RotateCfg.Load != 0.8 {
-		t.Errorf("Expected Load to be %v, but got %v", 0.8, opt.RotateCfg.Load)
+	if opt.LBOption.Load != 0.8 {
+		t.Errorf("Expected Load to be %v, but got %v", 0.8, opt.LBOption.Load)
 	}
 
 	// Call the WithRotateOptions function with some invalid values
-	WithRotateOptions(0, -1, -0.5)(opt)
+	WithLoadBalanceOptions(0, -1, -0.5)(opt)
 
 	// Check that the values were not set
-	if opt.RotateCfg.PartitionCount != 2 {
-		t.Errorf("Expected PartitionCount to be %v, but got %v", 2, opt.RotateCfg.PartitionCount)
+	if opt.LBOption.PartitionCount != 2 {
+		t.Errorf("Expected PartitionCount to be %v, but got %v", 2, opt.LBOption.PartitionCount)
 	}
-	if opt.RotateCfg.ReplicationFactor != 3 {
-		t.Errorf("Expected ReplicationFactor to be %v, but got %v", 3, opt.RotateCfg.ReplicationFactor)
+	if opt.LBOption.ReplicationFactor != 3 {
+		t.Errorf("Expected ReplicationFactor to be %v, but got %v", 3, opt.LBOption.ReplicationFactor)
 	}
-	if opt.RotateCfg.Load != 0.8 {
-		t.Errorf("Expected Load to be %v, but got %v", 0.8, opt.RotateCfg.Load)
+	if opt.LBOption.Load != 0.8 {
+		t.Errorf("Expected Load to be %v, but got %v", 0.8, opt.LBOption.Load)
 	}
 }
 

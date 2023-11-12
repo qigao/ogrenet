@@ -35,11 +35,11 @@ func NewOgreNet(ip string, port int, handle EventHandle, options ...OptionFunc) 
 		ofunc(opts)
 	}
 
-	if opts.RotateCfg.Load != 0 {
+	if opts.LBOption.Load != 0 {
 		cfg := hashring.Config{
-			PartitionCount:    opts.RotateCfg.PartitionCount,
-			ReplicationFactor: opts.RotateCfg.ReplicationFactor,
-			Load:              opts.RotateCfg.Load,
+			PartitionCount:    opts.LBOption.PartitionCount,
+			ReplicationFactor: opts.LBOption.ReplicationFactor,
+			Load:              opts.LBOption.Load,
 			Hasher:            hasher{},
 		}
 		ogre.hashRing = hashring.New(nil, cfg)
@@ -171,14 +171,7 @@ func (n *OgreNet) close(c *Conn) {
 	}
 }
 
-// push sends the given data to the endpoint with the specified ID.
-// If the endpoint is not found, the data is not sent.
-func (n *OgreNet) Push(conn *Conn, data []byte) {
-	num, err := conn.Write(data)
-	log.Debug().Msgf("SendMsgByID fd:%d, len:%d, err:%v", conn.Fd(), num, err)
-}
-
-// publish sends the given data to all connected endpoints whose forwarding
+// Publish sends the given data to all connected endpoints whose forwarding
 // rules match the given pattern. The pattern is compared by simple string
 func (n *OgreNet) Publish(data []byte) {
 	n.connMap.Range(func(k, v interface{}) bool {
@@ -191,6 +184,7 @@ func (n *OgreNet) Publish(data []byte) {
 	})
 }
 
+// LoadBalance sends the given data to the appropriate connection member based on the hash ring.
 func (n *OgreNet) LoadBalance(data []byte) {
 	member := n.hashRing.LocateKey(data)
 	if member != nil {

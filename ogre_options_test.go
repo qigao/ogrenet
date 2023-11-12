@@ -15,8 +15,8 @@ func TestOptions(t *testing.T) {
 		assert.False(t, o.KeepAlive)
 		assert.Equal(t, 0, o.CompressLevel)
 		assert.Equal(t, 0, o.numPoller)
-		assert.Equal(t, RotateOptions{}, o.RotateCfg)
-		assert.Equal(t, 0, o.RotateCfg.PartitionCount)
+		assert.Equal(t, LoadBalanceOption{}, o.LBOption)
+		assert.Equal(t, 0, o.LBOption.PartitionCount)
 	})
 }
 

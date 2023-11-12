@@ -31,12 +31,12 @@ func WithBufSize(packetSize int, readBufSize int, writeBufSize int) OptionFunc {
 	}
 }
 
-func WithRotateOptions(partitionCount int, replicationFactor int, load float64) OptionFunc {
+func WithLoadBalanceOptions(partitionCount int, replicationFactor int, load float64) OptionFunc {
 	return func(o *Option) {
 		if partitionCount > 1 && replicationFactor > 0 && load > 0 {
-			o.RotateCfg.PartitionCount = partitionCount
-			o.RotateCfg.ReplicationFactor = replicationFactor
-			o.RotateCfg.Load = load
+			o.LBOption.PartitionCount = partitionCount
+			o.LBOption.ReplicationFactor = replicationFactor
+			o.LBOption.Load = load
 		}
 	}
 }

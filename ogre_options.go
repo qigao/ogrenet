@@ -12,7 +12,7 @@ type Option struct {
 	BufSize       BufSize
 	KeepAlive     bool
 	Mode          WorkMode
-	RotateCfg     RotateOptions
+	LBOption      LoadBalanceOption
 	CompressLevel int
 	numPoller     int
 }
@@ -40,7 +40,7 @@ type BufSize struct {
 	WriteBufSize int
 }
 
-type RotateOptions struct {
+type LoadBalanceOption struct {
 	// Keys are distributed among partitions. Prime numbers are good to
 	// distribute keys uniformly. Select a big PartitionCount if you have
 	// too many keys.

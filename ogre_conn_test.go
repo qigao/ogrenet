@@ -49,6 +49,7 @@ func TestNewNetConnWithTerm(t *testing.T) {
 		}
 	})
 }
+
 func TestShouldCutByTail(t *testing.T) {
 	conn := &Conn{
 		limiter: Limiter{
@@ -63,6 +64,7 @@ func TestShouldCutByTail(t *testing.T) {
 		t.Errorf("ShouldCutByTail returned false, expected true")
 	}
 }
+
 func TestShouldCutByHeadAndTail(t *testing.T) {
 	conn := &Conn{
 		limiter: Limiter{

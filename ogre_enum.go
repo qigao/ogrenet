@@ -21,7 +21,6 @@ type WorkMode int
 const (
 	UnknowMode  WorkMode = iota
 	ServerMode           // 多对一
-	PushMode             // 一对一
 	PubMode              // 一对多
 	LoadBalance          // 轮询
 )

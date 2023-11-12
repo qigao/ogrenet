@@ -11,11 +11,6 @@ func TestIsProxyModeValid(t *testing.T) {
 		want  bool
 	}{
 		{
-			name:  "valid Push",
-			value: PushMode,
-			want:  true,
-		},
-		{
 			name:  "valid Publish",
 			value: PubMode,
 			want:  true,
