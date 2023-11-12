@@ -43,16 +43,15 @@ func (c *CodecPool) NewEmptyPassThruCodecFromPool() CodecPassThru {
 	return p
 }
 
-func (c *CodecPool) NewRegisterCodec(id [4]byte, cseq [4]byte) CodecPassThru {
+func (c *CodecPool) NewRegisterCodec(id [4]byte) CodecPassThru {
 	h := c.HeadPool.Get().(*HeadCodec)
 	t := c.TailPool.Get().(*TailCodec)
-
 	h.Magic = codecs.DefaultMagicHead
 	h.Version = 0
 	h.CMD = Register
 	h.ID = id
 	h.BodyLen = 1
-	h.Cseq = cseq
+	h.Cseq = codecs.TimeBasedCseq()
 	t.Magic = codecs.DefaultMagicTail
 	t.CRC = codecs.ZeroCRC16
 	return CodecPassThru{
@@ -62,7 +61,7 @@ func (c *CodecPool) NewRegisterCodec(id [4]byte, cseq [4]byte) CodecPassThru {
 	}
 }
 
-func (c *CodecPool) NewRegisterWithBody(id [4]byte, cseq [4]byte, data []byte) CodecPassThru {
+func (c *CodecPool) NewRegisterWithBody(id [4]byte, data []byte) CodecPassThru {
 	h := c.HeadPool.Get().(*HeadCodec)
 	t := c.TailPool.Get().(*TailCodec)
 
@@ -71,7 +70,7 @@ func (c *CodecPool) NewRegisterWithBody(id [4]byte, cseq [4]byte, data []byte) C
 	h.CMD = Register
 	h.ID = id
 	h.BodyLen = uint16(len(data))
-	h.Cseq = cseq
+	h.Cseq = codecs.TimeBasedCseq()
 	t.Magic = codecs.DefaultMagicTail
 	t.CRC = codecs.ZeroCRC16
 	return CodecPassThru{
@@ -81,7 +80,7 @@ func (c *CodecPool) NewRegisterWithBody(id [4]byte, cseq [4]byte, data []byte) C
 	}
 }
 
-func (c *CodecPool) NewUnRegisterCodec(id [4]byte, cseq [4]byte) CodecPassThru {
+func (c *CodecPool) NewUnRegisterCodec(id [4]byte) CodecPassThru {
 	h := c.HeadPool.Get().(*HeadCodec)
 	t := c.TailPool.Get().(*TailCodec)
 
@@ -90,7 +89,7 @@ func (c *CodecPool) NewUnRegisterCodec(id [4]byte, cseq [4]byte) CodecPassThru {
 	h.CMD = UnRegister
 	h.ID = id
 	h.BodyLen = 1
-	h.Cseq = cseq
+	h.Cseq = codecs.TimeBasedCseq()
 
 	t.Magic = codecs.DefaultMagicTail
 	t.CRC = codecs.ZeroCRC16
@@ -102,7 +101,7 @@ func (c *CodecPool) NewUnRegisterCodec(id [4]byte, cseq [4]byte) CodecPassThru {
 	}
 }
 
-func (c *CodecPool) NewAckCodec(id [4]byte, cseq [4]byte, data []byte) CodecPassThru {
+func (c *CodecPool) NewAckCodec(id [4]byte, data []byte) CodecPassThru {
 	h := c.HeadPool.Get().(*HeadCodec)
 	t := c.TailPool.Get().(*TailCodec)
 
@@ -111,7 +110,7 @@ func (c *CodecPool) NewAckCodec(id [4]byte, cseq [4]byte, data []byte) CodecPass
 	h.CMD = Ack
 	h.ID = id
 	h.BodyLen = uint16(len(data))
-	h.Cseq = cseq
+	h.Cseq = codecs.TimeBasedCseq()
 
 	t.Magic = codecs.DefaultMagicTail
 	t.CRC = codecs.ZeroCRC16
@@ -123,7 +122,7 @@ func (c *CodecPool) NewAckCodec(id [4]byte, cseq [4]byte, data []byte) CodecPass
 	}
 }
 
-func (c *CodecPool) NewHeartBeatCodec(id [4]byte, cseq [4]byte) CodecPassThru {
+func (c *CodecPool) NewHeartBeatCodec(id [4]byte) CodecPassThru {
 	h := c.HeadPool.Get().(*HeadCodec)
 	t := c.TailPool.Get().(*TailCodec)
 
@@ -132,7 +131,7 @@ func (c *CodecPool) NewHeartBeatCodec(id [4]byte, cseq [4]byte) CodecPassThru {
 	h.CMD = HeartBeat
 	h.ID = id
 	h.BodyLen = 1
-	h.Cseq = cseq
+	h.Cseq = codecs.TimeBasedCseq()
 
 	t.Magic = codecs.DefaultMagicTail
 	t.CRC = codecs.ZeroCRC16
@@ -144,7 +143,7 @@ func (c *CodecPool) NewHeartBeatCodec(id [4]byte, cseq [4]byte) CodecPassThru {
 	}
 }
 
-func (c *CodecPool) NewDataCodec(id [4]byte, cseq [4]byte, data []byte) CodecPassThru {
+func (c *CodecPool) NewDataCodec(id [4]byte, data []byte) CodecPassThru {
 	h := c.HeadPool.Get().(*HeadCodec)
 	t := c.TailPool.Get().(*TailCodec)
 
@@ -153,7 +152,7 @@ func (c *CodecPool) NewDataCodec(id [4]byte, cseq [4]byte, data []byte) CodecPas
 	h.CMD = Data
 	h.ID = id
 	h.BodyLen = uint16(len(data))
-	h.Cseq = cseq
+	h.Cseq = codecs.TimeBasedCseq()
 
 	t.Magic = codecs.DefaultMagicTail
 	t.CRC = crc16.CheckSum(data)
@@ -164,7 +163,7 @@ func (c *CodecPool) NewDataCodec(id [4]byte, cseq [4]byte, data []byte) CodecPas
 	}
 }
 
-func (c *CodecPool) NewCloseCodec(id [4]byte, cseq [4]byte) CodecPassThru {
+func (c *CodecPool) NewCloseCodec(id [4]byte) CodecPassThru {
 	h := c.HeadPool.Get().(*HeadCodec)
 	t := c.TailPool.Get().(*TailCodec)
 
@@ -173,7 +172,7 @@ func (c *CodecPool) NewCloseCodec(id [4]byte, cseq [4]byte) CodecPassThru {
 	h.CMD = Close
 	h.ID = id
 	h.BodyLen = 1
-	h.Cseq = cseq
+	h.Cseq = codecs.TimeBasedCseq()
 
 	t.Magic = codecs.DefaultMagicTail
 	t.CRC = codecs.ZeroCRC16
@@ -194,7 +193,7 @@ func (c *CodecPool) NewReConnectCodec(id [4]byte) CodecPassThru {
 	h.CMD = ReConnect
 	h.ID = id
 	h.BodyLen = 1
-	h.Cseq = codecs.Empty
+	h.Cseq = codecs.TimeBasedCseq()
 
 	t.Magic = codecs.DefaultMagicTail
 	t.CRC = codecs.ZeroCRC16
