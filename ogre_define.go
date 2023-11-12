@@ -11,8 +11,8 @@ import (
 )
 
 type Conn struct {
-	fd      int   // 当前连接的文件描述符 Fd
-	updated int64 // 最新的更新时间，判断超时用
+	fd      int
+	updated int64
 	ctx     context.Context
 	rAddr   net.Addr
 	lAddr   net.Addr
@@ -25,9 +25,8 @@ type OgreNet struct {
 	epoll     *OgreEpoll
 	connMap   sync.Map
 	timerTree *avl.AVLTree
-	limiter   Limiter
 	handle    EventHandle
-	mode      WorkMode
+	opts      *Option
 	hashRing  *hashring.Consistent
 	msgChan   chan *MsgConn
 }
@@ -35,21 +34,4 @@ type OgreNet struct {
 type MsgConn struct {
 	Conn *Conn
 	Msg  []byte
-}
-
-type (
-	PushKey    struct{}
-	PubKey     struct{}
-	ForwardKey struct{}
-	ModeKey    struct{}
-)
-
-type PushData struct {
-	fd   int
-	data []byte
-}
-
-type PubData struct {
-	data []byte
-	fd   []int
 }

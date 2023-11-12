@@ -15,8 +15,8 @@ var (
 )
 
 func TestNewPassThruCodec(t *testing.T) {
-	codec := NewPassThruHead(CodecUnknown, id, 0)
-	assert.Equal(t, codec.CMD, CodecUnknown)
+	codec := NewPassThruHead(UnknownType, id, 0)
+	assert.Equal(t, codec.CMD, UnknownType)
 	assert.Equal(t, codec.ID, id)
 	assert.Equal(t, codec.BodyLen, uint16(0))
 	assert.Equal(t, codec.Magic, uint8(HEAD))

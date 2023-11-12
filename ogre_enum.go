@@ -19,13 +19,13 @@ const (
 type WorkMode int
 
 const (
-	UnknowMode WorkMode = iota
-	ServerMode
-	PushMode   // 一对一
-	PubMode    // 一对多
-	RotateMode // 轮询
+	UnknowMode  WorkMode = iota
+	ServerMode           // 多对一
+	PushMode             // 一对一
+	PubMode              // 一对多
+	LoadBalance          // 轮询
 )
 
-func IsProxyModeValid(value WorkMode) bool {
-	return value >= PushMode && value <= RotateMode
+func IsValidWorkMode(value WorkMode) bool {
+	return value >= UnknowMode && value <= LoadBalance
 }

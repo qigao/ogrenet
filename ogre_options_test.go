@@ -8,29 +8,29 @@ import (
 
 func TestOptions(t *testing.T) {
 	t.Run("test default values", func(t *testing.T) {
-		o := Options{}
+		o := Option{}
 		assert.Equal(t, TimeOut{}, o.TimeOut)
 		assert.Equal(t, Packet{}, o.Packet)
 		assert.Equal(t, BufSize{}, o.BufSize)
 		assert.False(t, o.KeepAlive)
 		assert.Equal(t, 0, o.CompressLevel)
 		assert.Equal(t, 0, o.numPoller)
-		assert.Equal(t, RotateOptions{}, o.rotateCfg)
-		assert.Equal(t, 0, o.rotateCfg.PartitionCount)
+		assert.Equal(t, RotateOptions{}, o.RotateCfg)
+		assert.Equal(t, 0, o.RotateCfg.PartitionCount)
 	})
 }
 
 func TestSetupLimiterOptions(t *testing.T) {
 	t.Run("test nil options", func(t *testing.T) {
 		limiter := SetupLimiterOptions(nil)
-		assert.Equal(t, Limiter{}, limiter)
+		assert.Equal(t, DefaultLimiter(), limiter)
 	})
 	t.Run("test empty options", func(t *testing.T) {
-		limiter := SetupLimiterOptions(&Options{})
+		limiter := SetupLimiterOptions(&Option{})
 		assert.Equal(t, Limiter{}, limiter)
 	})
 	t.Run("test setting values", func(t *testing.T) {
-		limiter := SetupLimiterOptions(&Options{
+		limiter := SetupLimiterOptions(&Option{
 			TimeOut: TimeOut{
 				Conn:   1,
 				Handle: 2,

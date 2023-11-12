@@ -5,42 +5,60 @@ import (
 	"sync"
 	"time"
 
-	"github.com/qigao/ogrenet/shared/hashring"
-
 	"github.com/qigao/ogrenet/shared/gopool"
+	"github.com/qigao/ogrenet/shared/hashring"
 
 	"github.com/qigao/ogrenet/shared/avl"
 
 	"github.com/rs/zerolog/log"
 )
 
-func NewOgreNet(ip string, port int, handle EventHandle, opts *Options) *OgreNet {
+func NewOgreNet(ip string, port int, handle EventHandle, options ...OptionFunc) *OgreNet {
 	ep := NewOgreEpoll(ip, port)
-	defaultLimiter := DefaultLimiter()
 	ogre := &OgreNet{
 		epoll:     ep,
 		connMap:   sync.Map{},
 		timerTree: avl.NewAvlTree(),
-		limiter:   defaultLimiter,
 	}
 	if handle != nil {
 		ogre.handle = handle
 	} else {
 		log.Fatal().Msgf("EventHandle is nil")
 	}
-	limiter := SetupLimiterOptions(opts)
-	ogre.limiter = limiter
-	ogre.msgChan = make(chan *MsgConn, MaxChanSize)
-	if opts.rotateCfg.Load != 0 {
+	opts := &Option{}
+	limiter := DefaultLimiter()
+	opts.Packet = limiter.Packet
+	opts.BufSize = limiter.BufSize
+	opts.TimeOut = limiter.Timeout
+	ogre.msgChan = make(chan *MsgConn, DefaultChanSize)
+	for _, ofunc := range options {
+		ofunc(opts)
+	}
+
+	if opts.RotateCfg.Load != 0 {
 		cfg := hashring.Config{
-			PartitionCount:    opts.rotateCfg.PartitionCount,
-			ReplicationFactor: opts.rotateCfg.ReplicationFactor,
-			Load:              opts.rotateCfg.Load,
+			PartitionCount:    opts.RotateCfg.PartitionCount,
+			ReplicationFactor: opts.RotateCfg.ReplicationFactor,
+			Load:              opts.RotateCfg.Load,
 			Hasher:            hasher{},
 		}
 		ogre.hashRing = hashring.New(nil, cfg)
 	}
+	ogre.opts = opts
+	ogre.checkDefaultBufSize()
 	return ogre
+}
+
+func (n *OgreNet) checkDefaultBufSize() {
+	if n.opts.BufSize.PacketSize == 0 {
+		n.opts.BufSize.PacketSize = DefaultPacketSize
+	}
+	if n.opts.BufSize.ReadBufSize == 0 {
+		n.opts.BufSize.ReadBufSize = DefaultReadBufSize
+	}
+	if n.opts.BufSize.WriteBufSize == 0 {
+		n.opts.BufSize.WriteBufSize = DefaultWriteBufSize
+	}
 }
 
 func (n *OgreNet) Run() {
@@ -85,13 +103,13 @@ func (n *OgreNet) handler(fd int, connType ConnStatus) {
 
 func (n *OgreNet) onConnected(nfd int) {
 	msgPool := NewMessagePool()
-	conn := NewNetConn(nfd, msgPool, n.msgChan)
+	limiter := SetupLimiterOptions(n.opts)
+	conn := NewNetConnWithTerm(nfd, msgPool, n.msgChan, &limiter)
 	conn.SetRemoteAddr(n.epoll.remoteAddr)
 	n.connMap.Store(nfd, conn)
 	n.timerTree.Add(conn.updated, nfd)
 	n.handle.OnConnect(conn)
-	n.mode = conn.getMode()
-	if n.mode == RotateMode {
+	if n.opts.Mode == LoadBalance {
 		myConn := ConnMember{
 			conn: conn,
 		}
@@ -102,23 +120,9 @@ func (n *OgreNet) onConnected(nfd int) {
 func (n *OgreNet) onData() {
 	gopool.Go(func() {
 		for dc := range n.msgChan {
-			log.Info().Msgf("pool rvd:%d,%x", dc.Conn.fd, dc.Msg)
-			n.handle.OnData(dc.Conn, dc.Msg)
-			switch n.mode {
-			case PushMode:
-				data := dc.Conn.getPushData()
-				n.push(data.fd, data.data)
-			case PubMode:
-				data := dc.Conn.getPubData()
-				n.publish(data.fd, data.data)
-			case RotateMode:
-				data := dc.Conn.getForwardData()
-				n.forwardData(data)
-			case ServerMode:
-				log.Debug().Msgf("Server Mode")
-			default:
-				log.Debug().Msgf("Invalid ProxyMode: %v", n.mode)
-			}
+			conn := dc.Conn
+			log.Info().Msgf("pool rvd:%d,%x", conn.fd, dc.Msg)
+			n.handle.OnData(conn, dc.Msg)
 		}
 	})
 }
@@ -126,7 +130,7 @@ func (n *OgreNet) onData() {
 func (n *OgreNet) onTimeOut() {
 	gopool.Go(func() {
 		for {
-			timeCriteria := time.Now().Add(-MaxConnTimeout).Unix()
+			timeCriteria := time.Now().Add(-n.opts.TimeOut.Handle).Unix()
 			expiredKeys := n.timerTree.GetLessThanKey(timeCriteria)
 			for _, key := range expiredKeys {
 				fd := n.timerTree.Get(key)
@@ -161,7 +165,7 @@ func (n *OgreNet) close(c *Conn) {
 	log.Debug().Msgf("Removing fd: %d and Conn", c.fd)
 	n.timerTree.Remove(c.updated)
 	n.connMap.Delete(c.fd)
-	if n.mode == RotateMode {
+	if n.opts.Mode == LoadBalance {
 		myConnName := strconv.Itoa(c.fd)
 		n.hashRing.Remove(myConnName)
 	}
@@ -169,29 +173,44 @@ func (n *OgreNet) close(c *Conn) {
 
 // push sends the given data to the endpoint with the specified ID.
 // If the endpoint is not found, the data is not sent.
-func (n *OgreNet) push(nfd int, data []byte) {
-	conn, found := n.connMap.Load(nfd)
-	if found {
-		n, err := conn.(*Conn).Write(data)
-		log.Debug().Msgf("SendMsgByID fd:%d, len:%d, err:%v", conn.(*Conn).fd, n, err)
-	}
+func (n *OgreNet) Push(conn *Conn, data []byte) {
+	num, err := conn.Write(data)
+	log.Debug().Msgf("SendMsgByID fd:%d, len:%d, err:%v", conn.Fd(), num, err)
 }
 
 // publish sends the given data to all connected endpoints whose forwarding
 // rules match the given pattern. The pattern is compared by simple string
-func (n *OgreNet) publish(nfd []int, data []byte) {
-	for _, fd := range nfd {
-		conn, found := n.connMap.Load(fd)
-		if found {
-			n, err := conn.(*Conn).Write(data)
-			log.Debug().Msgf("SendMsgByPattern fd:%d, len:%d, err:%v", conn.(*Conn).fd, n, err)
-		}
-	}
+func (n *OgreNet) Publish(data []byte) {
+	n.connMap.Range(func(k, v interface{}) bool {
+		gopool.Go(func() {
+			conn := v.(*Conn)
+			conn.Write(data)
+			log.Info().Msgf("SendMsgByID fd:%d, len:%d", conn.Fd(), len(data))
+		})
+		return true
+	})
 }
 
-func (n *OgreNet) forwardData(data []byte) {
+func (n *OgreNet) LoadBalance(data []byte) {
 	member := n.hashRing.LocateKey(data)
 	if member != nil {
 		member.(*ConnMember).conn.Write(data)
 	}
+}
+
+func (n *OgreNet) GetConnByFD(fd int) *Conn {
+	c, ok := n.connMap.Load(fd)
+	if ok {
+		return c.(*Conn)
+	}
+	return nil
+}
+
+func (n *OgreNet) GetAllConns() []*Conn {
+	var cons []*Conn
+	n.connMap.Range(func(k, v interface{}) bool {
+		cons = append(cons, v.(*Conn))
+		return true
+	})
+	return cons
 }
