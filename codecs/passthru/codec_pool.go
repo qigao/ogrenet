@@ -153,7 +153,6 @@ func (c *CodecPool) NewDataCodec(id [4]byte, data []byte) CodecPassThru {
 	h.ID = id
 	h.BodyLen = uint16(len(data))
 	h.Cseq = codecs.TimeBasedCseq()
-
 	t.Magic = codecs.DefaultMagicTail
 	t.CRC = crc16.CheckSum(data)
 	return CodecPassThru{
