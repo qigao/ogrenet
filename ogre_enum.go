@@ -26,5 +26,5 @@ const (
 )
 
 func IsValidWorkMode(value WorkMode) bool {
-	return value >= UnknowMode && value <= LoadBalance
+	return value >= ServerMode && value <= LoadBalance
 }

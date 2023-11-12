@@ -62,6 +62,25 @@ func (c *CodecPool) NewRegisterCodec(id [4]byte, cseq [4]byte) CodecPassThru {
 	}
 }
 
+func (c *CodecPool) NewRegisterWithBody(id [4]byte, cseq [4]byte, data []byte) CodecPassThru {
+	h := c.HeadPool.Get().(*HeadCodec)
+	t := c.TailPool.Get().(*TailCodec)
+
+	h.Magic = codecs.DefaultMagicHead
+	h.Version = 0
+	h.CMD = Register
+	h.ID = id
+	h.BodyLen = uint16(len(data))
+	h.Cseq = cseq
+	t.Magic = codecs.DefaultMagicTail
+	t.CRC = codecs.ZeroCRC16
+	return CodecPassThru{
+		Head: h,
+		Body: data,
+		Tail: t,
+	}
+}
+
 func (c *CodecPool) NewUnRegisterCodec(id [4]byte, cseq [4]byte) CodecPassThru {
 	h := c.HeadPool.Get().(*HeadCodec)
 	t := c.TailPool.Get().(*TailCodec)
