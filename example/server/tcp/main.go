@@ -9,7 +9,7 @@ import (
 )
 
 func main() {
-	net := ogre.NewOgreNet("0.0.0.0", 8090, &Handler{}, ogre.WithNumPoller(2))
+	net := ogre.NewOgreNet("tcp", "0.0.0.0", 8090, &Handler{}, ogre.WithNumPoller(2))
 	net.Run()
 	defer net.Close()
 

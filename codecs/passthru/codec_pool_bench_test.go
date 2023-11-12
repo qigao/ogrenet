@@ -1,7 +1,6 @@
 package passthru
 
 import (
-	"encoding/binary"
 	"testing"
 
 	"github.com/qigao/ogrenet/codecs"
@@ -43,10 +42,8 @@ func BenchmarkRegisterCodec(b *testing.B) {
 
 func BenchmarkRegisterCodecPool(b *testing.B) {
 	pool := NewCodecPool()
-	binary.LittleEndian.PutUint32(cseq[:], uint32(current))
-	cseqArr := [4]byte(cseq)
 	for i := 0; i < b.N; i++ {
-		c := pool.NewRegisterCodec(id, cseqArr)
+		c := pool.NewRegisterCodec(id)
 		pool.PutCodec(&c)
 
 	}
@@ -62,9 +59,8 @@ func BenchmarkDataCodec(b *testing.B) {
 func BenchmarkDataCodecFromPool(b *testing.B) {
 	data := []byte{0x01, 0x02, 0x03}
 	pool := NewCodecPool()
-	binary.LittleEndian.PutUint32(cseq[:], uint32(current))
 	for i := 0; i < b.N; i++ {
-		c := pool.NewDataCodec(id, cseq, data)
+		c := pool.NewDataCodec(id, data)
 		pool.PutCodec(&c)
 	}
 }

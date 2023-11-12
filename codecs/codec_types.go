@@ -1,5 +1,10 @@
 package codecs
 
+import (
+	"encoding/binary"
+	"time"
+)
+
 type (
 	CSEQ = [4]byte
 	ID   = [4]byte
@@ -15,3 +20,10 @@ const (
 	DefaultMagicHead = 0xAA
 	DefaultMagicTail = 0x55
 )
+
+func TimeBasedCseq() [4]byte {
+	cseq := make([]byte, 4)
+	current := time.Now().Unix()
+	binary.BigEndian.PutUint32(cseq, uint32(current))
+	return [4]byte{cseq[0], cseq[1], cseq[2], cseq[3]}
+}
