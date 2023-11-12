@@ -1,0 +1,26 @@
+version: 3
+env:
+  CGO_ENABLED: 0
+  GOOS: "linux"
+  GOARCH: "amd64"
+  GOPROXY: https://proxy.golang.org,direct
+
+vars:
+  LD_FLAGS: "-s -w"
+
+includes:
+  golang: tasks/golang.yml
+  client: example/client/tasks.yml
+  server: example/server/tasks.yml
+  tls-cert: shared/tls-cert/tasks.yml
+
+tasks:
+  format:
+    desc: format code
+    cmds:
+      - gofumpt -l -w ./
+
+  default:
+    cmds:
+      - task -l
+    silent: true

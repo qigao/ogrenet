@@ -1,0 +1,11 @@
+version: 3
+tasks:
+  build:
+    desc: build tls-cert
+    cmds:
+      - go build -ldflags "${LD_FLAGS}" -o bin/tls-cert  shared/tls-cert/generate.go
+  run:
+    desc: run tls-cert
+    dir: bin/
+    cmds:
+      -  ./tls-cert  -host localhost
