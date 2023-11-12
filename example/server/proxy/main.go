@@ -10,10 +10,9 @@ import (
 )
 
 func main() {
-	opts := &ogrenet.Options{}
 	codecPool := codec.NewCodecPool()
 	handle := NewProxyHandler(codecPool)
-	proxyNet := ogrenet.NewOgreNet("0.0.0.0", 8090, handle, opts)
+	proxyNet := ogrenet.NewOgreNet("0.0.0.0", 8090, handle, ogrenet.WithBufSize(1024, 1024, 1024))
 	proxyNet.Run()
 	defer proxyNet.Close()
 

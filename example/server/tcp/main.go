@@ -9,8 +9,7 @@ import (
 )
 
 func main() {
-	opts := &ogre.Options{}
-	net := ogre.NewOgreNet("0.0.0.0", 8090, &Handler{}, opts)
+	net := ogre.NewOgreNet("0.0.0.0", 8090, &Handler{}, ogre.WithNumPoller(2))
 	net.Run()
 	defer net.Close()
 

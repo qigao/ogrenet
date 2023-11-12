@@ -17,6 +17,6 @@ func NewMessagePool() *MessagePool {
 	pool.BytePool = &sync.Pool{New: func() interface{} {
 		return &bytes.Buffer{}
 	}}
-	pool.RBuf = ringbuffer.New(MaxPacketSize)
+	pool.RBuf = ringbuffer.New(DefaultPacketSize)
 	return pool
 }

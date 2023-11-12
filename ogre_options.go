@@ -2,15 +2,17 @@ package ogrenet
 
 import (
 	"time"
+
+	"github.com/qigao/ogrenet/codecs"
 )
 
-type Options struct {
+type Option struct {
 	TimeOut       TimeOut
 	Packet        Packet
 	BufSize       BufSize
 	KeepAlive     bool
-	proxyMode     WorkMode
-	rotateCfg     RotateOptions
+	Mode          WorkMode
+	RotateCfg     RotateOptions
 	CompressLevel int
 	numPoller     int
 }
@@ -55,22 +57,27 @@ type RotateOptions struct {
 func DefaultLimiter() Limiter {
 	defaultLimiter := Limiter{
 		Timeout: TimeOut{
-			Conn:   MaxConnTimeout,
-			Handle: MaxHandleTimeout,
+			Conn:   DefaultConnTimeout,
+			Handle: DefaultHandleTimeout,
 		},
 		BufSize: BufSize{
-			PacketSize:   MaxPacketSize,
-			ReadBufSize:  MaxReadBufSize,
-			WriteBufSize: MaxWriteBufSize,
+			PacketSize:   DefaultPacketSize,
+			ReadBufSize:  DefaultReadBufSize,
+			WriteBufSize: DefaultWriteBufSize,
+		},
+		Packet: Packet{
+			CutType: CutByHeadAndTail,
+			Head:    codecs.DefaultMagicHead,
+			Tail:    codecs.DefaultMagicTail,
 		},
 	}
 	return defaultLimiter
 }
 
-func SetupLimiterOptions(opts *Options) Limiter {
+func SetupLimiterOptions(opts *Option) Limiter {
 	limiter := Limiter{}
 	if opts == nil {
-		return limiter
+		return DefaultLimiter()
 	}
 	if opts.TimeOut != (TimeOut{}) {
 		limiter.Timeout = opts.TimeOut

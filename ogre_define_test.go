@@ -14,7 +14,6 @@ func TestProxy(t *testing.T) {
 		epoll:     &OgreEpoll{},
 		connMap:   sync.Map{},
 		timerTree: &avl.AVLTree{},
-		limiter:   Limiter{},
 		msgChan:   make(chan *MsgConn),
 	}
 
@@ -22,7 +21,6 @@ func TestProxy(t *testing.T) {
 	assert.NotNil(t, p.epoll)
 	assert.NotNil(t, p.connMap)
 	assert.NotNil(t, p.timerTree)
-	assert.NotNil(t, p.limiter)
 	assert.Nil(t, p.handle)
 	assert.NotNil(t, p.msgChan)
 }

@@ -3,15 +3,15 @@ package main
 import (
 	"github.com/qigao/ogrenet"
 
-	codec "github.com/qigao/ogrenet/codecs/passthru"
+	. "github.com/qigao/ogrenet/codecs/passthru"
 	"github.com/rs/zerolog/log"
 )
 
 type Handler struct {
-	codecPool *codec.CodecPool
+	codecPool *CodecPool
 }
 
-func NewProxyHandler(pool *codec.CodecPool) *Handler {
+func NewProxyHandler(pool *CodecPool) *Handler {
 	return &Handler{
 		codecPool: pool,
 	}
@@ -19,7 +19,6 @@ func NewProxyHandler(pool *codec.CodecPool) *Handler {
 
 func (h *Handler) OnConnect(c *ogrenet.Conn) {
 	log.Info().Msgf("[Handler] remote %v connected", c.RemoteAddr())
-	c.SetMode(ogrenet.PushMode)
 }
 
 func (h *Handler) OnData(c *ogrenet.Conn, bytes []byte) {
@@ -29,28 +28,26 @@ func (h *Handler) OnData(c *ogrenet.Conn, bytes []byte) {
 	id := codecP.Head.ID
 	codecType := codecP.Head.CMD
 	switch codecType {
-	case codec.Register:
-		ack := codec.NewAckCodec(id, codec.RegisterCMD)
-		ackBytes, _ := ack.Encode()
-		c.PushData(c.Fd(), ackBytes)
-	case codec.UnRegister:
-		ack := codec.NewAckCodec(id, codec.UnregisterCMD)
+	case Register:
+		ack := NewAckCodec(id, RegisterCMD)
 		ackBytes, _ := ack.Encode()
 		c.Write(ackBytes)
-	case codec.HeartBeat:
-		ack := codec.NewAckCodec(id, codec.HeartbeatCMD)
+	case UnRegister:
+		ack := NewAckCodec(id, UnregisterCMD)
 		ackBytes, _ := ack.Encode()
 		c.Write(ackBytes)
-	case codec.Data:
-		ack := codec.NewAckCodec(id, codec.DataCMD)
+	case HeartBeat:
+		ack := NewAckCodec(id, HeartbeatCMD)
 		ackBytes, _ := ack.Encode()
 		c.Write(ackBytes)
-		h.OnData(c, codecP.GetBody())
-	case codec.Close:
-		ack := codec.NewAckCodec(id, codec.CloseCMD)
+	case Data:
+		ack := NewAckCodec(id, DataCMD)
 		ackBytes, _ := ack.Encode()
 		c.Write(ackBytes)
-		h.OnClose(c)
+	case Close:
+		ack := NewAckCodec(id, CloseCMD)
+		ackBytes, _ := ack.Encode()
+		c.Write(ackBytes)
 	default:
 		log.Debug().Msgf("Invalid CodecType: %v", codecType)
 	}

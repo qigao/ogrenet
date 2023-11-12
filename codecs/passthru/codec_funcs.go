@@ -16,7 +16,7 @@ func NewPassThruHead(cmd CmdType, id [4]byte, len uint16) *HeadCodec {
 
 func NewEmptyPassThruCodec() *CodecPassThru {
 	tail := NewTailCodec(codecs.ZeroBytes)
-	head := NewHeadCodec(0, CodecUnknown, codecs.Empty, 1, codecs.Empty)
+	head := NewHeadCodec(0, UnknownType, codecs.Empty, 1, codecs.Empty)
 
 	return &CodecPassThru{
 		Head: head,
