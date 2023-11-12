@@ -2,9 +2,9 @@ package sockaddr
 
 import (
 	"net"
-	"syscall"
 
 	"github.com/qigao/ogrenet/shared/sockaddr/netaddr"
+	"golang.org/x/sys/unix"
 )
 
 // Socklen is a type for the length of a sockaddr.
@@ -23,15 +23,15 @@ func AnyToSockaddr(rsa *netaddr.RawSockaddrAny) (netaddr.Sockaddr, error) {
 }
 
 // SockaddrToAddr returns a go/netaddr friendly address
-func SockaddrToAddr(sa syscall.Sockaddr) net.Addr {
+func SockaddrToAddr(sa unix.Sockaddr) net.Addr {
 	var addr net.Addr
 	switch sa := sa.(type) {
-	case *syscall.SockaddrInet4:
+	case *unix.SockaddrInet4:
 		addr = &net.TCPAddr{
 			IP:   append([]byte{}, sa.Addr[:]...),
 			Port: sa.Port,
 		}
-	case *syscall.SockaddrInet6:
+	case *unix.SockaddrInet6:
 		var zone string
 		if sa.ZoneId != 0 {
 			if ifi, err := net.InterfaceByIndex(int(sa.ZoneId)); err == nil {
@@ -46,7 +46,7 @@ func SockaddrToAddr(sa syscall.Sockaddr) net.Addr {
 			Port: sa.Port,
 			Zone: zone,
 		}
-	case *syscall.SockaddrUnix:
+	case *unix.SockaddrUnix:
 		addr = &net.UnixAddr{Net: "unix", Name: sa.Name}
 	}
 	return addr
