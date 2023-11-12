@@ -13,8 +13,12 @@ import (
 	"github.com/rs/zerolog/log"
 )
 
-func NewOgreNet(ip string, port int, handle EventHandle, options ...OptionFunc) *OgreNet {
-	ep := NewOgreEpoll(ip, port)
+func NewOgreNet(network string, ip string, port int, handle EventHandle, options ...OptionFunc) *OgreNet {
+	ep := NewOgreEpoll(network, ip, port)
+	err := ep.Listen()
+	if err != nil {
+		log.Fatal().Msgf("epoll listen error: %v", err)
+	}
 	ogre := &OgreNet{
 		epoll:     ep,
 		connMap:   sync.Map{},

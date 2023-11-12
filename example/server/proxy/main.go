@@ -12,7 +12,7 @@ import (
 func main() {
 	codecPool := codec.NewCodecPool()
 	handle := NewProxyHandler(codecPool)
-	proxyNet := ogrenet.NewOgreNet("0.0.0.0", 8090, handle, ogrenet.WithBufSize(1024, 1024, 1024))
+	proxyNet := ogrenet.NewOgreNet("tcp4", "0.0.0.0", 8090, handle)
 	proxyNet.Run()
 	defer proxyNet.Close()
 
