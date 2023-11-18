@@ -5,11 +5,9 @@ import (
 	"sync"
 	"time"
 
+	"github.com/qigao/ogrenet/shared/avl"
 	"github.com/qigao/ogrenet/shared/gopool"
 	"github.com/qigao/ogrenet/shared/hashring"
-
-	"github.com/qigao/ogrenet/shared/avl"
-
 	"github.com/rs/zerolog/log"
 )
 

@@ -6,9 +6,8 @@ import (
 	"net"
 	"time"
 
-	"golang.org/x/sys/unix"
-
 	"github.com/rs/zerolog/log"
+	"golang.org/x/sys/unix"
 )
 
 func NewNetConn(fd int, msgPool *MessagePool, msgChan chan *MsgConn) *Conn {

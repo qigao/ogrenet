@@ -19,6 +19,10 @@ tasks:
     desc: format code
     cmds:
       - gofumpt -l -w ./
+  lint:
+      desc: golangcli lint
+      cmds:
+        - golangci-lint run .
 
   default:
     cmds:

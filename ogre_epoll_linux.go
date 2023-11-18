@@ -5,12 +5,10 @@ import (
 	"net"
 	"sync"
 
-	"golang.org/x/sys/unix"
-
 	"github.com/qigao/ogrenet/shared/sockaddr"
 	"github.com/qigao/ogrenet/shared/sockaddr/netaddr"
-
 	"github.com/rs/zerolog/log"
+	"golang.org/x/sys/unix"
 )
 
 type OgreEpoll struct {

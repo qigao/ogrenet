@@ -5,9 +5,8 @@ import (
 	"reflect"
 	"testing"
 
-	"github.com/qigao/ogrenet/shared/errors"
-
 	"github.com/google/go-cmp/cmp"
+	"github.com/qigao/ogrenet/shared/errors"
 	"github.com/stretchr/testify/assert"
 )
 

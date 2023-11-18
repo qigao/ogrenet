@@ -113,7 +113,7 @@ func (c *CodecPool) NewAckCodec(id [4]byte, data []byte) CodecPassThru {
 	h.Cseq = codecs.TimeBasedCseq()
 
 	t.Magic = codecs.DefaultMagicTail
-	t.CRC = codecs.ZeroCRC16
+	t.CRC = crc16.CheckSum(data)
 
 	return CodecPassThru{
 		Head: h,

@@ -4,9 +4,8 @@ import (
 	"encoding/binary"
 	"time"
 
-	"github.com/qigao/ogrenet/shared/crc16"
-
 	"github.com/qigao/ogrenet/codecs/modbus"
+	"github.com/qigao/ogrenet/shared/crc16"
 	"github.com/rs/zerolog/log"
 )
 
