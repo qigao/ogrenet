@@ -28,6 +28,7 @@ type CmdType uint8
 
 const (
 	UnknownType CmdType = iota
+	Available
 	Register
 	UnRegister
 	HeartBeat
@@ -39,11 +40,14 @@ const (
 )
 
 var (
+	AvailableCMD  = []byte{byte(Available)}
 	HeartbeatCMD  = []byte{byte(HeartBeat)}
 	RegisterCMD   = []byte{byte(Register)}
 	UnregisterCMD = []byte{byte(UnRegister)}
 	CloseCMD      = []byte{byte(Close)}
 	DataCMD       = []byte{byte(Data)}
+	ErrorCMD      = []byte{byte(Error)}
+	AckCMD        = []byte{byte(Ack)}
 	UnknownCMD    = []byte{byte(UnknownType)}
 )
 
