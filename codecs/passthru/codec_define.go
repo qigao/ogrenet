@@ -24,6 +24,11 @@ type TailCodec struct {
 	Magic uint8
 }
 
+type AckCommandBody struct {
+	CMD  uint8
+	Data map[int]interface{}
+}
+
 type CmdType uint8
 
 const (
@@ -37,18 +42,6 @@ const (
 	Close
 	Error
 	ReConnect
-)
-
-var (
-	AvailableCMD  = []byte{byte(Available)}
-	HeartbeatCMD  = []byte{byte(HeartBeat)}
-	RegisterCMD   = []byte{byte(Register)}
-	UnregisterCMD = []byte{byte(UnRegister)}
-	CloseCMD      = []byte{byte(Close)}
-	DataCMD       = []byte{byte(Data)}
-	ErrorCMD      = []byte{byte(Error)}
-	AckCMD        = []byte{byte(Ack)}
-	UnknownCMD    = []byte{byte(UnknownType)}
 )
 
 const (
