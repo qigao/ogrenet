@@ -2,7 +2,6 @@ package main
 
 import (
 	"github.com/qigao/ogrenet"
-
 	. "github.com/qigao/ogrenet/codecs/passthru"
 	"github.com/rs/zerolog/log"
 )

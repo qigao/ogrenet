@@ -3,9 +3,8 @@ package ogrenet
 import (
 	"time"
 
-	"github.com/rs/zerolog/log"
-
 	"github.com/qigao/ogrenet/tls"
+	"github.com/rs/zerolog/log"
 )
 
 // CipherOption   Server初始化参数

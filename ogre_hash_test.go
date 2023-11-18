@@ -4,7 +4,6 @@ import (
 	"testing"
 
 	"github.com/qigao/ogrenet/shared/hashring"
-
 	"github.com/stretchr/testify/assert"
 )
 

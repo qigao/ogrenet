@@ -4,10 +4,8 @@ import (
 	"bytes"
 	"testing"
 
-	"github.com/qigao/ogrenet/shared/errors"
-
 	"github.com/qigao/ogrenet/shared/crc16"
-
+	"github.com/qigao/ogrenet/shared/errors"
 	"github.com/stretchr/testify/assert"
 )
 

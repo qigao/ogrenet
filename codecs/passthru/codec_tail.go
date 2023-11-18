@@ -4,11 +4,9 @@ import (
 	"bytes"
 	"encoding/binary"
 
-	"github.com/qigao/ogrenet/shared/errors"
-
 	"github.com/qigao/ogrenet/codecs"
-
 	"github.com/qigao/ogrenet/shared/crc16"
+	"github.com/qigao/ogrenet/shared/errors"
 )
 
 func NewTailCodec(data []byte) *TailCodec {

@@ -3,10 +3,9 @@ package passthru
 import (
 	"encoding/binary"
 
-	"github.com/qigao/ogrenet/shared/errors"
-
 	"github.com/dsnet/try"
 	"github.com/qigao/ogrenet/shared/crc16"
+	"github.com/qigao/ogrenet/shared/errors"
 	"github.com/rs/zerolog/log"
 )
 

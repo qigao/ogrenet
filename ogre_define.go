@@ -5,9 +5,8 @@ import (
 	"net"
 	"sync"
 
-	"github.com/qigao/ogrenet/shared/hashring"
-
 	"github.com/qigao/ogrenet/shared/avl"
+	"github.com/qigao/ogrenet/shared/hashring"
 )
 
 type Conn struct {
