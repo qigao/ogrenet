@@ -29,7 +29,7 @@ type TimeOut struct {
 }
 
 type Packet struct {
-	CutType PacketType
+	SepType PacketType
 	Head    byte
 	Tail    byte
 }
@@ -66,9 +66,9 @@ func DefaultLimiter() Limiter {
 			WriteBufSize: DefaultWriteBufSize,
 		},
 		Packet: Packet{
-			CutType: CutByHeadAndTail,
-			Head:    codecs.DefaultMagicHead,
-			Tail:    codecs.DefaultMagicTail,
+			SepType: SepByHeadAndTail,
+			Head:    codecs.MagicHead,
+			Tail:    codecs.MagicTail,
 		},
 	}
 	return defaultLimiter

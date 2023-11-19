@@ -6,7 +6,7 @@ type OptionFunc func(*Option)
 
 func WithPacket(p PacketType, h byte, t byte) OptionFunc {
 	return func(o *Option) {
-		o.Packet.CutType = p
+		o.Packet.SepType = p
 		o.Packet.Head = h
 		o.Packet.Tail = t
 	}

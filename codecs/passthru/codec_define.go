@@ -26,14 +26,14 @@ type TailCodec struct {
 
 type AckCommandBody struct {
 	CMD  CmdType
-	Data map[CmdType]interface{}
+	Data interface{}
 }
 
 type CmdType uint8
 
 const (
 	UnknownType CmdType = iota
-	Available
+	Connect
 	Register
 	UnRegister
 	HeartBeat

@@ -17,8 +17,13 @@ var (
 
 const ZeroCRC16 = 0x40bf
 const (
-	DefaultMagicHead = 0xAA
-	DefaultMagicTail = 0x55
+	MagicHead = 0xAA
+	MagicTail = 0x55
+)
+
+var (
+	Ping = []byte{0x10, 0x10, 0x10, 0x10}
+	Pong = []byte{0x01, 0x01, 0x01, 0x01}
 )
 
 func TimeBasedCseq() [4]byte {

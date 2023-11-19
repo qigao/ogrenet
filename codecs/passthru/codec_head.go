@@ -11,13 +11,13 @@ import (
 
 func NewEmptyHeadCodec() *HeadCodec {
 	return &HeadCodec{
-		Magic: codecs.DefaultMagicHead,
+		Magic: codecs.MagicHead,
 	}
 }
 
 func NewHeadCodec(ver uint8, cmd CmdType, id [4]byte, len uint16, cseq [4]byte) *HeadCodec {
 	return &HeadCodec{
-		Magic:   codecs.DefaultMagicHead,
+		Magic:   codecs.MagicHead,
 		Version: ver,
 		CMD:     cmd,
 		ID:      id,
@@ -37,7 +37,7 @@ func (h *HeadCodec) Decode(buf []byte) error {
 		log.Error().Msgf("invalid head length %d", len(buf))
 		return errors.ErrIncompletePacket
 	}
-	if buf[0] != codecs.DefaultMagicHead {
+	if buf[0] != codecs.MagicHead {
 		log.Error().Msgf("invalid head magic number %v", buf[0])
 		return errors.ErrInvalidMagicNumber
 	}

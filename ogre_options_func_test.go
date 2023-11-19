@@ -155,8 +155,8 @@ func TestWithPacket(t *testing.T) {
 	WithPacket(PacketType(1), 2, 3)(opt)
 
 	// Check that the values were set correctly
-	if opt.Packet.CutType != PacketType(1) {
-		t.Errorf("Expected CutType to be %v, but got %v", PacketType(1), opt.Packet.CutType)
+	if opt.Packet.SepType != PacketType(1) {
+		t.Errorf("Expected CutType to be %v, but got %v", PacketType(1), opt.Packet.SepType)
 	}
 	if opt.Packet.Head != 2 {
 		t.Errorf("Expected Head to be %v, but got %v", 2, opt.Packet.Head)

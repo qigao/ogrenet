@@ -11,13 +11,13 @@ import (
 func NewTailCodec(crc uint16) *TailCodec {
 	return &TailCodec{
 		CRC:   crc,
-		Magic: codecs.DefaultMagicTail,
+		Magic: codecs.MagicTail,
 	}
 }
 
 func NewEmptyTailCodec() *TailCodec {
 	return &TailCodec{
-		Magic: codecs.DefaultMagicTail,
+		Magic: codecs.MagicTail,
 	}
 }
 

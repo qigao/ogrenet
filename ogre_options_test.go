@@ -36,7 +36,7 @@ func TestSetupLimiterOptions(t *testing.T) {
 				Handle: 2,
 			},
 			Packet: Packet{
-				CutType: PacketType(3),
+				SepType: PacketType(3),
 				Head:    4,
 				Tail:    5,
 			},
@@ -51,7 +51,7 @@ func TestSetupLimiterOptions(t *testing.T) {
 			Handle: 2,
 		}, limiter.Timeout)
 		assert.Equal(t, Packet{
-			CutType: PacketType(3),
+			SepType: PacketType(3),
 			Head:    4,
 			Tail:    5,
 		}, limiter.Packet)

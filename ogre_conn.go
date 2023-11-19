@@ -45,7 +45,7 @@ func (c *Conn) SetContext(ctx context.Context) {
 	c.ctx = ctx
 }
 
-func (c *Conn) cutMsgByHeadAndTail() {
+func (c *Conn) sepMsgByHeadAndTail() {
 	readPos := 0
 	buf := c.pool.BytePool.Get().(*bytes.Buffer)
 	defer func() {
@@ -73,7 +73,7 @@ func (c *Conn) cutMsgByHeadAndTail() {
 	}
 }
 
-func (c *Conn) cutMsgByTail() {
+func (c *Conn) sepMsgByTail() {
 	readPos := 0
 	buf := c.pool.BytePool.Get().(*bytes.Buffer)
 	defer func() {
@@ -112,26 +112,26 @@ func (c *Conn) ReadAll() {
 		}
 		c.updated = time.Now().Unix()
 		log.Debug().Msgf("[ReadAll] Conn fd: %d shared:%x, store len:%d,", c.fd, buf[:n], wn)
-		if c.shouldCutByHeadAndTail() {
-			c.cutMsgByHeadAndTail()
+		if c.shouldSepByHeadAndTail() {
+			c.sepMsgByHeadAndTail()
 		}
-		if c.shouldCutByTail() {
-			c.cutMsgByTail()
+		if c.shouldSepByTail() {
+			c.sepMsgByTail()
 		}
 	}
 }
 
-func (c *Conn) shouldCutByTail() bool {
+func (c *Conn) shouldSepByTail() bool {
 	headNotAv := c.limiter.Packet.Head == 0
 	tailAv := c.limiter.Packet.Tail != 0
-	cutByTail := c.limiter.Packet.CutType == CutByTail
+	cutByTail := c.limiter.Packet.SepType == SepByTail
 	return headNotAv && tailAv && cutByTail
 }
 
-func (c *Conn) shouldCutByHeadAndTail() bool {
+func (c *Conn) shouldSepByHeadAndTail() bool {
 	headAv := c.limiter.Packet.Head != 0
 	tailAv := c.limiter.Packet.Tail != 0
-	cutByHeadAndTail := c.limiter.Packet.CutType == CutByHeadAndTail
+	cutByHeadAndTail := c.limiter.Packet.SepType == SepByHeadAndTail
 	return headAv && tailAv && cutByHeadAndTail
 }
 
