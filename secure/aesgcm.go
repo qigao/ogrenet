@@ -32,23 +32,33 @@ func NewAESGCM(key []byte) (Cipher, error) {
 func (*aesGCM) Algorithm() Algorithm { return AlgAESGCM }
 
 func (c *aesGCM) Seal(dst, plaintext []byte) ([]byte, error) {
+	return c.SealAAD(dst, plaintext, nil)
+}
+
+func (c *aesGCM) Open(dst, ciphertext []byte) ([]byte, error) {
+	return c.OpenAAD(dst, ciphertext, nil)
+}
+
+func (c *aesGCM) SealAAD(dst, plaintext, aad []byte) ([]byte, error) {
 	start := len(dst)
 	dst = append(dst, make([]byte, c.aead.NonceSize())...)
 	nonce := dst[start:]
 	if _, err := io.ReadFull(rand.Reader, nonce); err != nil {
 		return dst[:start], fmt.Errorf("secure: generate nonce: %w", err)
 	}
-	return c.aead.Seal(dst, nonce, plaintext, nil), nil
+	return c.aead.Seal(dst, nonce, plaintext, aad), nil
 }
 
-func (c *aesGCM) Open(dst, ciphertext []byte) ([]byte, error) {
+func (c *aesGCM) OpenAAD(dst, ciphertext, aad []byte) ([]byte, error) {
 	nonceSize := c.aead.NonceSize()
 	if len(ciphertext) < nonceSize {
 		return nil, ErrCiphertextTooShort
 	}
-	plaintext, err := c.aead.Open(dst, ciphertext[:nonceSize], ciphertext[nonceSize:], nil)
+	plaintext, err := c.aead.Open(dst, ciphertext[:nonceSize], ciphertext[nonceSize:], aad)
 	if err != nil {
 		return nil, fmt.Errorf("secure: authenticate ciphertext: %w", err)
 	}
 	return plaintext, nil
 }
+
+var _ AuthenticatedCipher = (*aesGCM)(nil)
