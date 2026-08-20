@@ -11,29 +11,30 @@ import (
 
 // Limits configures Engine-wide resource bounds. Zero means unlimited.
 type Limits struct {
-	MaxConnections          int
-	MaxConnectionsPerPeer   int
-	MaxConcurrentHandshakes int
-	MaxPendingUpgrades      int
-	MaxQueuedBytesTotal     int64
+	MaxConnections            int
+	MaxConnectionsPerPeer     int
+	MaxConnectionsPerListener int
+	MaxConcurrentHandshakes   int
+	MaxPendingUpgrades        int
+	MaxQueuedBytesTotal       int64
 }
 
 func (l Limits) validate() error {
-	if l.MaxConnections < 0 || l.MaxConnectionsPerPeer < 0 || l.MaxConcurrentHandshakes < 0 || l.MaxPendingUpgrades < 0 || l.MaxQueuedBytesTotal < 0 {
+	if l.MaxConnections < 0 || l.MaxConnectionsPerPeer < 0 || l.MaxConnectionsPerListener < 0 || l.MaxConcurrentHandshakes < 0 || l.MaxPendingUpgrades < 0 || l.MaxQueuedBytesTotal < 0 {
 		return ErrInvalidLimits
 	}
 	return nil
 }
 
-// LimitKind identifies the Engine resource that rejected an operation.
 type LimitKind uint8
 
 const (
-	LimitConnections LimitKind = iota + 1
-	LimitConnectionsPerPeer
-	LimitHandshakes
-	LimitUpgrades
-	LimitQueuedBytes
+	LimitConnections            LimitKind = 0x01
+	LimitConnectionsPerPeer     LimitKind = 0x02
+	LimitConnectionsPerListener LimitKind = 0x03
+	LimitHandshakes             LimitKind = 0x04
+	LimitUpgrades               LimitKind = 0x05
+	LimitQueuedBytes            LimitKind = 0x06
 )
 
 func (k LimitKind) String() string {
@@ -42,6 +43,8 @@ func (k LimitKind) String() string {
 		return "connections"
 	case LimitConnectionsPerPeer:
 		return "connections-per-peer"
+	case LimitConnectionsPerListener:
+		return "connections-per-listener"
 	case LimitHandshakes:
 		return "handshakes"
 	case LimitUpgrades:
@@ -53,8 +56,6 @@ func (k LimitKind) String() string {
 	}
 }
 
-// LimitError reports a concrete resource limit rejection. It unwraps to
-// ErrResourceExhausted so callers can use errors.Is/errors.As.
 type LimitError struct {
 	Kind  LimitKind
 	Limit int64
@@ -66,7 +67,6 @@ func (e *LimitError) Error() string {
 	}
 	return fmt.Sprintf("transport: %s limit exhausted (limit=%d)", e.Kind, e.Limit)
 }
-
 func (e *LimitError) Unwrap() error { return ErrResourceExhausted }
 
 var (
@@ -74,51 +74,102 @@ var (
 	ErrInvalidLimits     = errors.New("transport: resource limits must be non-negative")
 )
 
+type listenerCapacity struct {
+	limit    int64
+	used     atomic.Int64
+	rejected atomic.Uint64
+}
+
+func newListenerCapacity(limit int) *listenerCapacity {
+	if limit <= 0 {
+		return nil
+	}
+	return &listenerCapacity{limit: int64(limit)}
+}
+func (c *listenerCapacity) acquire() bool {
+	if c == nil {
+		return true
+	}
+	for {
+		n := c.used.Load()
+		if n >= c.limit {
+			c.rejected.Add(1)
+			return false
+		}
+		if c.used.CompareAndSwap(n, n+1) {
+			return true
+		}
+	}
+}
+func (c *listenerCapacity) release() {
+	if c == nil {
+		return
+	}
+	for {
+		n := c.used.Load()
+		if n <= 0 {
+			return
+		}
+		if c.used.CompareAndSwap(n, n-1) {
+			return
+		}
+	}
+}
+func (c *listenerCapacity) current() int64 {
+	if c == nil {
+		return 0
+	}
+	return c.used.Load()
+}
+
 type admissionController struct {
-	limits Limits
-
-	mu         sync.Mutex
-	opening    int
-	active     int
-	handshakes int
-	upgrades   int
-	perPeer    map[string]int
-
+	limits              Limits
+	mu                  sync.Mutex
+	opening             int
+	active              int
+	handshakes          int
+	upgrades            int
+	perPeer             map[string]int
 	rejectedConnections atomic.Uint64
 	rejectedPeers       atomic.Uint64
+	rejectedListeners   atomic.Uint64
 	rejectedHandshakes  atomic.Uint64
 	rejectedUpgrades    atomic.Uint64
 	bytes               *globalByteQuota
 }
 
 func newAdmissionController(limits Limits) *admissionController {
-	return &admissionController{
-		limits:  limits,
-		perPeer: make(map[string]int),
-		bytes:   newGlobalByteQuota(limits.MaxQueuedBytesTotal),
-	}
+	return &admissionController{limits: limits, perPeer: make(map[string]int), bytes: newGlobalByteQuota(limits.MaxQueuedBytesTotal)}
 }
 
 func (a *admissionController) acquireOpening(peer string) (*connectionLease, error) {
+	return a.acquireOpeningWithListener(peer, nil)
+}
+func (a *admissionController) acquireOpeningWithListener(peer string, listener *listenerCapacity) (*connectionLease, error) {
+	if listener != nil && !listener.acquire() {
+		a.rejectedListeners.Add(1)
+		return nil, &LimitError{Kind: LimitConnectionsPerListener, Limit: listener.limit}
+	}
 	a.mu.Lock()
-	defer a.mu.Unlock()
-
 	if a.limits.MaxConnections > 0 && a.opening+a.active >= a.limits.MaxConnections {
 		a.rejectedConnections.Add(1)
+		a.mu.Unlock()
+		listener.release()
 		return nil, &LimitError{Kind: LimitConnections, Limit: int64(a.limits.MaxConnections)}
 	}
 	if peer != "" && a.limits.MaxConnectionsPerPeer > 0 && a.perPeer[peer] >= a.limits.MaxConnectionsPerPeer {
 		a.rejectedPeers.Add(1)
+		a.mu.Unlock()
+		listener.release()
 		return nil, &LimitError{Kind: LimitConnectionsPerPeer, Limit: int64(a.limits.MaxConnectionsPerPeer)}
 	}
-
 	a.opening++
 	if peer != "" {
 		a.perPeer[peer]++
 	}
-	return &connectionLease{owner: a, peer: peer, state: connectionOpening}, nil
+	a.mu.Unlock()
+	return &connectionLease{owner: a, peer: peer, listener: listener, state: connectionOpening}, nil
 }
-
 func (a *admissionController) acquireConnection(peer string) (*connectionLease, error) {
 	lease, err := a.acquireOpening(peer)
 	if err != nil {
@@ -137,14 +188,13 @@ const (
 )
 
 type connectionLease struct {
-	owner *admissionController
-	peer  string
-	mu    sync.Mutex
-	state connectionLeaseState
+	owner    *admissionController
+	peer     string
+	listener *listenerCapacity
+	mu       sync.Mutex
+	state    connectionLeaseState
 }
 
-// activate promotes an opening connection into the active set. It is idempotent
-// for an already-active lease and returns false only after the lease was released.
 func (l *connectionLease) activate() bool {
 	if l == nil || l.owner == nil {
 		return false
@@ -166,11 +216,9 @@ func (l *connectionLease) activate() bool {
 		a.mu.Unlock()
 		l.state = connectionActive
 		return true
-	default:
-		return false
 	}
+	return false
 }
-
 func (l *connectionLease) release() {
 	if l == nil || l.owner == nil {
 		return
@@ -183,7 +231,6 @@ func (l *connectionLease) release() {
 	state := l.state
 	l.state = connectionReleased
 	l.mu.Unlock()
-
 	a := l.owner
 	a.mu.Lock()
 	switch state {
@@ -204,6 +251,7 @@ func (l *connectionLease) release() {
 		}
 	}
 	a.mu.Unlock()
+	l.listener.release()
 }
 
 type activityLease struct {
@@ -222,7 +270,6 @@ func (a *admissionController) acquireHandshake() (*activityLease, error) {
 	a.handshakes++
 	return &activityLease{owner: a, kind: LimitHandshakes}, nil
 }
-
 func (a *admissionController) acquireUpgrade() (*activityLease, error) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
@@ -233,7 +280,6 @@ func (a *admissionController) acquireUpgrade() (*activityLease, error) {
 	a.upgrades++
 	return &activityLease{owner: a, kind: LimitUpgrades}, nil
 }
-
 func (l *activityLease) release() bool {
 	if l == nil || l.owner == nil || !l.released.CompareAndSwap(false, true) {
 		return false
@@ -262,6 +308,7 @@ type admissionSnapshot struct {
 	GlobalQueuedBytes   int64
 	RejectedConnections uint64
 	RejectedPeers       uint64
+	RejectedListeners   uint64
 	RejectedHandshakes  uint64
 	RejectedUpgrades    uint64
 	RejectedQueuedBytes uint64
@@ -269,25 +316,10 @@ type admissionSnapshot struct {
 
 func (a *admissionController) snapshot() admissionSnapshot {
 	a.mu.Lock()
-	opening := a.opening
-	active := a.active
-	handshakes := a.handshakes
-	upgrades := a.upgrades
+	opening, active, handshakes, upgrades := a.opening, a.active, a.handshakes, a.upgrades
 	a.mu.Unlock()
-	return admissionSnapshot{
-		OpeningConnections:  opening,
-		ActiveConnections:   active,
-		ActiveHandshakes:    handshakes,
-		PendingUpgrades:     upgrades,
-		GlobalQueuedBytes:   a.bytes.current(),
-		RejectedConnections: a.rejectedConnections.Load(),
-		RejectedPeers:       a.rejectedPeers.Load(),
-		RejectedHandshakes:  a.rejectedHandshakes.Load(),
-		RejectedUpgrades:    a.rejectedUpgrades.Load(),
-		RejectedQueuedBytes: a.bytes.rejected.Load(),
-	}
+	return admissionSnapshot{opening, active, handshakes, upgrades, a.bytes.current(), a.rejectedConnections.Load(), a.rejectedPeers.Load(), a.rejectedListeners.Load(), a.rejectedHandshakes.Load(), a.rejectedUpgrades.Load(), a.bytes.rejected.Load()}
 }
-
 func (a *admissionController) idle() bool {
 	a.mu.Lock()
 	defer a.mu.Unlock()
@@ -320,7 +352,6 @@ func peerKey(addr net.Addr) string {
 	}
 	return canonicalIP(ip)
 }
-
 func canonicalIP(ip net.IP) string {
 	if v4 := ip.To4(); v4 != nil {
 		return v4.String()
@@ -339,7 +370,6 @@ type globalByteQuota struct {
 func newGlobalByteQuota(limit int64) *globalByteQuota {
 	return &globalByteQuota{limit: limit, changed: make(chan struct{})}
 }
-
 func (q *globalByteQuota) acquire(ctx context.Context, closing <-chan struct{}, n int) error {
 	if q == nil || q.limit == 0 || n == 0 {
 		return nil
@@ -358,7 +388,6 @@ func (q *globalByteQuota) acquire(ctx context.Context, closing <-chan struct{}, 
 		}
 		changed := q.changed
 		q.mu.Unlock()
-
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
@@ -368,7 +397,6 @@ func (q *globalByteQuota) acquire(ctx context.Context, closing <-chan struct{}, 
 		}
 	}
 }
-
 func (q *globalByteQuota) tryAcquire(n int) error {
 	if q == nil || q.limit == 0 || n == 0 {
 		return nil
@@ -387,7 +415,6 @@ func (q *globalByteQuota) tryAcquire(n int) error {
 	q.used += want
 	return nil
 }
-
 func (q *globalByteQuota) release(n int) {
 	if q == nil || q.limit == 0 || n <= 0 {
 		return
@@ -401,7 +428,6 @@ func (q *globalByteQuota) release(n int) {
 	q.changed = make(chan struct{})
 	q.mu.Unlock()
 }
-
 func (q *globalByteQuota) current() int64 {
 	if q == nil || q.limit == 0 {
 		return 0
@@ -410,5 +436,4 @@ func (q *globalByteQuota) current() int64 {
 	defer q.mu.Unlock()
 	return q.used
 }
-
 func (e *Engine) admissionSnapshot() admissionSnapshot { return e.admission.snapshot() }

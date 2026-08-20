@@ -20,6 +20,7 @@ type listener struct {
 	prepare  streamPrepare
 	ctx      context.Context
 	cancel   context.CancelFunc
+	capacity *listenerCapacity
 	closing  chan struct{}
 	done     chan struct{}
 
@@ -32,15 +33,8 @@ type listener struct {
 func (l *listener) Endpoint() ogrenet.Endpoint { return l.endpoint }
 func (l *listener) Addr() net.Addr             { return l.ln.Addr() }
 func (l *listener) Done() <-chan struct{}      { return l.done }
-
-func (l *listener) Err() error {
-	l.errMu.RLock()
-	defer l.errMu.RUnlock()
-	return l.err
-}
-
-func (l *listener) Close() error { return l.initiateClose(nil) }
-
+func (l *listener) Err() error                 { l.errMu.RLock(); defer l.errMu.RUnlock(); return l.err }
+func (l *listener) Close() error               { return l.initiateClose(nil) }
 func (l *listener) watchContext() {
 	select {
 	case <-l.ctx.Done():
@@ -48,7 +42,6 @@ func (l *listener) watchContext() {
 	case <-l.done:
 	}
 }
-
 func (l *listener) acceptLoop() {
 	defer l.finalize()
 	var delay time.Duration
@@ -76,7 +69,6 @@ func (l *listener) acceptLoop() {
 			return
 		}
 		delay = 0
-
 		if tcp, ok := raw.(*net.TCPConn); ok {
 			if err := l.engine.configureTCP(tcp); err != nil {
 				_ = raw.Close()
@@ -86,15 +78,13 @@ func (l *listener) acceptLoop() {
 		go l.handleAccepted(raw)
 	}
 }
-
 func (l *listener) handleAccepted(raw net.Conn) {
 	if err := l.engine.beginOp(); err != nil {
 		_ = raw.Close()
 		return
 	}
 	defer l.engine.endOp()
-
-	lease, err := l.engine.acquireOpening(raw.RemoteAddr())
+	lease, err := l.engine.acquireOpeningForListener(raw.RemoteAddr(), l.capacity)
 	if err != nil {
 		_ = raw.Close()
 		return
@@ -105,7 +95,6 @@ func (l *listener) handleAccepted(raw net.Conn) {
 			lease.release()
 		}
 	}()
-
 	if l.prepare != nil {
 		prepared, err := l.prepare(l.ctx, raw)
 		if err != nil {
@@ -114,7 +103,6 @@ func (l *listener) handleAccepted(raw net.Conn) {
 		}
 		raw = prepared
 	}
-
 	if _, err := l.engine.adoptStreamWithLease(raw, l.endpoint, l.handler, lease); err != nil {
 		_ = raw.Close()
 		if !errors.Is(err, ErrClosed) && !errors.Is(err, ErrResourceExhausted) {
@@ -124,7 +112,6 @@ func (l *listener) handleAccepted(raw net.Conn) {
 	}
 	transferred = true
 }
-
 func waitOrClosed(delay time.Duration, closing <-chan struct{}) bool {
 	timer := time.NewTimer(delay)
 	defer timer.Stop()
@@ -135,7 +122,6 @@ func waitOrClosed(delay time.Duration, closing <-chan struct{}) bool {
 		return false
 	}
 }
-
 func (l *listener) initiateClose(cause error) error {
 	var closeErr error
 	l.closeOnce.Do(func() {
@@ -157,15 +143,9 @@ func (l *listener) initiateClose(cause error) error {
 	})
 	return closeErr
 }
-
 func (l *listener) finalize() {
-	l.finalOnce.Do(func() {
-		_ = l.initiateClose(nil)
-		close(l.done)
-		l.engine.removeStreamListener(l)
-	})
+	l.finalOnce.Do(func() { _ = l.initiateClose(nil); close(l.done); l.engine.removeStreamListener(l) })
 }
-
 func (l *listener) isClosing() bool {
 	select {
 	case <-l.closing:
@@ -174,7 +154,6 @@ func (l *listener) isClosing() bool {
 		return false
 	}
 }
-
 func normalizeListenerError(err error) error {
 	if err == nil || errors.Is(err, net.ErrClosed) {
 		return nil
