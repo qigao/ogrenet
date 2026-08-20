@@ -1,88 +1,108 @@
 # ogrenet
 
-`ogrenet` is being rebuilt as a thin, production-oriented Go wrapper around native OS event mechanisms.
+`ogrenet` v2 is a small Go library for native OS network-event mechanisms. It deliberately does **not** provide the old connection-manager API: codecs, encryption, load balancing, protocol framing, timers, and application callback orchestration belong above this layer.
 
-The v2 design does **not** preserve the old connection-manager API. Protocol codecs, encryption, load balancing, timers, and application callback orchestration do not belong in the low-level polling layer and are being removed from the core design.
+## Packages
 
-## Design rules
+| Package | Platform | Kernel model | Core API |
+| --- | --- | --- | --- |
+| `epoll` | Linux | readiness | `Open`, `Add`, `Mod`, `Del`, `Wait`, `Wake`, `Close` |
+| `iocp` | Windows | completion | `Open`, `Associate`, `Post`, `Get`, `Close` |
+| `kqueue` | macOS, 64-bit FreeBSD | readiness/filter | `Open`, `Apply`, `Del`, `Wait`, `Wake`, `Close` |
 
-- Preserve the native kernel model instead of forcing unlike mechanisms behind a misleading abstraction.
-- Keep descriptor/handle ownership explicit: wrappers never close user-owned sockets or files.
-- Make shutdown, wakeup, timeout, and error semantics deterministic.
-- Avoid hidden goroutine pools and application-level scheduling.
-- Keep hot-path allocation under caller control where practical.
-- Validate each backend on its native operating system in CI.
+There is intentionally no root-level networking framework. Applications compose these low-level packages with their own connection lifecycle, buffers, protocols, and scheduling policy.
 
-## Linux: epoll
+## Design guarantees
+
+- Native semantics are preserved instead of forcing epoll, kqueue, and IOCP behind a misleading common interface.
+- User sockets/files remain caller-owned. Closing a poller never closes registered or associated application handles.
+- `Close` is idempotent and wakes blocked waits.
+- Native descriptor/handle lifetime is synchronized against concurrent control and wait operations, preventing close/reuse races inside the wrapper.
+- Internal wake notifications are consumed by the wrapper and never exposed as application events.
+- Hot-path wait buffers are reused by the poller after their first required allocation.
+- No hidden goroutine pool, logger, codec, encryption stack, or load-balancing policy is installed.
+
+## Requirements
+
+The module targets Go 1.25 or newer and currently depends only on `golang.org/x/sys`.
+
+## Linux / epoll
 
 ```go
-package main
+p, err := epoll.Open()
+if err != nil {
+    return err
+}
+defer p.Close()
 
-import (
-    "time"
+if err := p.Add(fd, epoll.Readable|epoll.PeerClosed|epoll.EdgeTriggered, 1); err != nil {
+    return err
+}
 
-    "github.com/qigao/ogrenet/epoll"
-)
-
-func run(fd int) error {
-    p, err := epoll.Open()
+events := make([]epoll.Event, 256)
+for {
+    n, err := p.Wait(events, -1)
     if err != nil {
         return err
     }
-    defer p.Close()
-
-    // The opaque data field should normally contain an application-owned
-    // registration/generation identifier rather than the fd itself.
-    if err := p.Add(fd, epoll.Readable|epoll.PeerClosed|epoll.EdgeTriggered, 1); err != nil {
-        return err
-    }
-
-    events := make([]epoll.Event, 256)
-    for {
-        n, err := p.Wait(events, -1*time.Nanosecond)
-        if err != nil {
-            return err
-        }
-        for _, event := range events[:n] {
-            _ = event // drain the non-blocking fd until EAGAIN
-        }
+    for _, event := range events[:n] {
+        _ = event // drain non-blocking I/O to EAGAIN when using edge triggering
     }
 }
 ```
 
-The epoll wrapper exposes the native 64-bit user-data field, supports `Add`, `Mod`, `Del`, `Wait`, `Wake`, and idempotent `Close`, and uses an internal `eventfd` for wakeups. Only one `Wait` call may be active per poller; control operations may run concurrently with it.
+The `Data` field is an opaque 64-bit registration value. `math.MaxUint64` is reserved for the internal eventfd wake event.
 
-A negative timeout means wait indefinitely, zero means non-blocking poll, and positive durations are rounded up to epoll's millisecond precision.
-
-## Windows: IOCP
+## Windows / IOCP
 
 ```go
-package main
-
-import (
-    "time"
-
-    "github.com/qigao/ogrenet/iocp"
-)
-
-func worker() error {
-    port, err := iocp.Open(0)
-    if err != nil {
-        return err
-    }
-    defer port.Close()
-
-    completion, err := port.Get(30 * time.Second)
-    if err != nil {
-        return err
-    }
-    _ = completion
-    return nil
+port, err := iocp.Open(0)
+if err != nil {
+    return err
 }
+defer port.Close()
+
+if err := port.Associate(handle, 42); err != nil {
+    return err
+}
+
+completion, err := port.Get(30 * time.Second)
+if err != nil {
+    return err
+}
+_ = completion
 ```
 
-IOCP is exposed as a completion API, not as an epoll-style readiness API. `Associate` binds Windows handles to the completion port, `Post` queues application-defined packets, and `Get` returns completion packets including failed overlapped operations together with their error.
+IOCP remains a completion API. `Get` may be called by multiple worker goroutines concurrently. A failed overlapped operation can return both a populated `Completion` and a non-nil error.
 
-## Repository status
+## macOS / FreeBSD / kqueue
 
-The `refactor/netpoll-v2` branch currently contains the new low-level backends while the legacy implementation still exists in the repository. The next refactor stage is to remove the old connection-manager surface, trim dependencies, and add additional native backends such as kqueue.
+```go
+p, err := kqueue.Open()
+if err != nil {
+    return err
+}
+defer p.Close()
+
+err = p.Apply(kqueue.Change{
+    Ident:  uint64(fd),
+    Filter: kqueue.Read,
+    Flags:  kqueue.Add | kqueue.Clear,
+})
+if err != nil {
+    return err
+}
+
+events := make([]kqueue.Event, 256)
+n, err := p.Wait(events, -1)
+if err != nil {
+    return err
+}
+_ = events[:n]
+```
+
+kqueue uses `(Ident, Filter)` as the native event identity. The wrapper does not turn `udata` into an arbitrary Go pointer/token because that would introduce unsafe GC and lifetime semantics into the public API.
+
+## Validation
+
+GitHub Actions runs formatting, module-hygiene checks, `go vet`, Linux race tests, native Windows tests, native macOS tests, and a FreeBSD kqueue cross-compile. Linux is tested on both Go 1.25 and the current Go 1.26 release line.

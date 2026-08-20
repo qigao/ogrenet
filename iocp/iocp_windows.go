@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"sync"
 	"sync/atomic"
 	"syscall"
 	"time"
@@ -15,24 +16,27 @@ import (
 
 var reservedKey = ^uintptr(0)
 
-// Completion is one packet dequeued from the completion port.
-// If an overlapped I/O operation completed with an error, Get returns both the
-// populated Completion and a non-nil error.
+// Completion is one packet dequeued from the completion port. If an overlapped
+// operation failed, Get returns both the populated Completion and a non-nil error.
 type Completion struct {
 	Bytes      uint32
 	Key        uintptr
 	Overlapped *windows.Overlapped
 }
 
-// Port owns a Windows I/O completion port.
+// Port owns a Windows I/O completion port. Multiple Get calls may block
+// concurrently. Close coordinates with all native-handle operations before the
+// port handle is released.
 type Port struct {
-	handle  windows.Handle
-	closed  atomic.Bool
+	mu sync.RWMutex
+
+	handle windows.Handle
+	closed atomic.Bool
 	waiters atomic.Int32
 }
 
-// Open creates a new completion port. concurrency is passed directly to
-// CreateIoCompletionPort; zero asks Windows to use the processor count.
+// Open creates a completion port. A concurrency value of zero lets Windows use
+// the processor count.
 func Open(concurrency uint32) (*Port, error) {
 	h, err := windows.CreateIoCompletionPort(windows.InvalidHandle, 0, 0, concurrency)
 	if err != nil {
@@ -41,25 +45,19 @@ func Open(concurrency uint32) (*Port, error) {
 	return &Port{handle: h}, nil
 }
 
-// Handle returns the native completion-port handle. The caller must not close it.
-func (p *Port) Handle() windows.Handle {
-	return p.handle
-}
-
 // Associate binds a file or socket handle to the port with an opaque completion key.
 func (p *Port) Associate(handle windows.Handle, key uintptr) error {
 	if key == reservedKey {
 		return ErrReservedKey
 	}
+	p.mu.RLock()
+	defer p.mu.RUnlock()
 	if p.closed.Load() {
 		return ErrClosed
 	}
 
 	h, err := windows.CreateIoCompletionPort(handle, p.handle, key, 0)
 	if err != nil {
-		if p.closed.Load() {
-			return ErrClosed
-		}
 		return fmt.Errorf("iocp: associate handle: %w", err)
 	}
 	if h != p.handle {
@@ -73,28 +71,29 @@ func (p *Port) Post(c Completion) error {
 	if c.Key == reservedKey {
 		return ErrReservedKey
 	}
+	p.mu.RLock()
+	defer p.mu.RUnlock()
 	if p.closed.Load() {
 		return ErrClosed
 	}
 	if err := windows.PostQueuedCompletionStatus(p.handle, c.Bytes, c.Key, c.Overlapped); err != nil {
-		if p.closed.Load() {
-			return ErrClosed
-		}
 		return fmt.Errorf("iocp: post completion: %w", err)
 	}
 	return nil
 }
 
-// Get waits for one completion packet.
-//
-// A negative timeout waits indefinitely, zero polls without blocking, and a
-// positive timeout is rounded up to the next millisecond.
+// Get waits for one completion packet. A negative timeout waits indefinitely,
+// zero polls, and a positive timeout is rounded up to milliseconds.
 func (p *Port) Get(timeout time.Duration) (Completion, error) {
 	if p.closed.Load() {
 		return Completion{}, ErrClosed
 	}
+
 	p.waiters.Add(1)
 	defer p.waiters.Add(-1)
+
+	p.mu.RLock()
+	defer p.mu.RUnlock()
 	if p.closed.Load() {
 		return Completion{}, ErrClosed
 	}
@@ -107,7 +106,6 @@ func (p *Port) Get(timeout time.Duration) (Completion, error) {
 		&c.Overlapped,
 		timeoutMillis(timeout),
 	)
-
 	if c.Key == reservedKey && c.Overlapped == nil {
 		return Completion{}, ErrClosed
 	}
@@ -123,20 +121,25 @@ func (p *Port) Get(timeout time.Duration) (Completion, error) {
 	return c, fmt.Errorf("iocp: get completion: %w", err)
 }
 
-// Close marks the port closed, wakes currently blocked Get calls, and releases
-// the native handle. It is idempotent. Associated file/socket handles remain
-// owned by their callers.
+// Close wakes blocked Get calls, releases the completion-port handle, and is
+// idempotent. Associated file and socket handles remain caller-owned.
 func (p *Port) Close() error {
 	if !p.closed.CompareAndSwap(false, true) {
 		return nil
 	}
 
+	// Wake every Get that had entered the method before closed was published.
+	// The handle remains open until all readers leave mu.
 	for i := int32(0); i < p.waiters.Load(); i++ {
 		_ = windows.PostQueuedCompletionStatus(p.handle, 0, reservedKey, nil)
 	}
+
+	p.mu.Lock()
+	defer p.mu.Unlock()
 	if err := windows.CloseHandle(p.handle); err != nil {
 		return fmt.Errorf("iocp: close: %w", err)
 	}
+	p.handle = 0
 	return nil
 }
 

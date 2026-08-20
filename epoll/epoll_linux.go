@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -39,18 +40,21 @@ type Event struct {
 
 // Poller owns an epoll instance and an eventfd used to interrupt Wait.
 //
-// Add, Mod, Del and Wake may be called concurrently with Wait. A Poller permits
-// one Wait call at a time; concurrent Wait calls return ErrConcurrentWait.
+// Add, Mod, Del and Wake may run concurrently with Wait. Exactly one Wait may
+// be active at a time. Close safely coordinates with all operations so native
+// descriptors cannot be reused while a method is still issuing a syscall.
 type Poller struct {
+	mu sync.RWMutex
+
 	fd     int
 	wakeFD int
 
-	closed atomic.Bool
+	closed  atomic.Bool
 	waiting atomic.Bool
 	waitBuf []unix.EpollEvent
 }
 
-// Open creates an epoll instance with close-on-exec enabled.
+// Open creates an epoll instance and its internal wake eventfd with close-on-exec enabled.
 func Open() (*Poller, error) {
 	fd, err := unix.EpollCreate1(unix.EPOLL_CLOEXEC)
 	if err != nil {
@@ -74,7 +78,7 @@ func Open() (*Poller, error) {
 	return p, nil
 }
 
-// Add registers fd with the supplied epoll event mask and opaque data value.
+// Add registers fd with an event mask and opaque data value.
 func (p *Poller) Add(fd int, events Events, data uint64) error {
 	return p.ctl(unix.EPOLL_CTL_ADD, fd, events, data)
 }
@@ -84,15 +88,14 @@ func (p *Poller) Mod(fd int, events Events, data uint64) error {
 	return p.ctl(unix.EPOLL_CTL_MOD, fd, events, data)
 }
 
-// Del removes fd from the epoll set. The caller still owns fd.
+// Del removes fd from the epoll set. The caller retains ownership of fd.
 func (p *Poller) Del(fd int) error {
+	p.mu.RLock()
+	defer p.mu.RUnlock()
 	if p.closed.Load() {
 		return ErrClosed
 	}
 	if err := unix.EpollCtl(p.fd, unix.EPOLL_CTL_DEL, fd, nil); err != nil {
-		if p.closed.Load() && errors.Is(err, unix.EBADF) {
-			return ErrClosed
-		}
 		return fmt.Errorf("epoll: delete fd %d: %w", fd, err)
 	}
 	return nil
@@ -102,6 +105,8 @@ func (p *Poller) ctl(op, fd int, events Events, data uint64) error {
 	if data == wakeData {
 		return ErrReservedData
 	}
+	p.mu.RLock()
+	defer p.mu.RUnlock()
 	if p.closed.Load() {
 		return ErrClosed
 	}
@@ -109,19 +114,14 @@ func (p *Poller) ctl(op, fd int, events Events, data uint64) error {
 	ev := unix.EpollEvent{Events: uint32(events)}
 	putData(&ev, data)
 	if err := unix.EpollCtl(p.fd, op, fd, &ev); err != nil {
-		if p.closed.Load() && errors.Is(err, unix.EBADF) {
-			return ErrClosed
-		}
 		return fmt.Errorf("epoll: control fd %d: %w", fd, err)
 	}
 	return nil
 }
 
 // Wait fills dst with ready events and returns the number of entries written.
-//
-// A negative timeout waits indefinitely, zero polls without blocking, and a
-// positive timeout is rounded up to the next millisecond because epoll_wait
-// accepts millisecond precision.
+// A negative timeout waits indefinitely, zero polls, and positive durations are
+// rounded up to epoll_wait's millisecond precision.
 func (p *Poller) Wait(dst []Event, timeout time.Duration) (int, error) {
 	if len(dst) == 0 {
 		return 0, ErrNoEvents
@@ -142,8 +142,32 @@ func (p *Poller) Wait(dst []Event, timeout time.Duration) (int, error) {
 
 	started := time.Now()
 	for {
+		p.mu.RLock()
+		if p.closed.Load() {
+			p.mu.RUnlock()
+			return 0, ErrClosed
+		}
+
 		ms := timeoutMillis(timeout, time.Since(started))
 		n, err := unix.EpollWait(p.fd, p.waitBuf, ms)
+		out := 0
+		if err == nil {
+			for i := 0; i < n; i++ {
+				ev := p.waitBuf[i]
+				data := eventData(ev)
+				if data == wakeData {
+					p.drainWake()
+					continue
+				}
+				dst[out] = Event{Events: Events(ev.Events), Data: data}
+				out++
+			}
+		}
+		p.mu.RUnlock()
+
+		if p.closed.Load() {
+			return 0, ErrClosed
+		}
 		if err != nil {
 			if errors.Is(err, unix.EINTR) {
 				if timeout >= 0 && time.Since(started) >= timeout {
@@ -151,41 +175,20 @@ func (p *Poller) Wait(dst []Event, timeout time.Duration) (int, error) {
 				}
 				continue
 			}
-			if p.closed.Load() && errors.Is(err, unix.EBADF) {
-				return 0, ErrClosed
-			}
 			return 0, fmt.Errorf("epoll: wait: %w", err)
-		}
-
-		out := 0
-		for i := 0; i < n; i++ {
-			ev := p.waitBuf[i]
-			data := eventData(ev)
-			if data == wakeData {
-				p.drainWake()
-				continue
-			}
-			dst[out] = Event{Events: Events(ev.Events), Data: data}
-			out++
-		}
-
-		if p.closed.Load() {
-			return 0, ErrClosed
 		}
 		return out, nil
 	}
 }
 
-// Wake interrupts a blocked Wait. Wake notifications are consumed internally
-// and are not returned as user events.
+// Wake interrupts a blocked Wait. Internal wake notifications are not returned in dst.
 func (p *Poller) Wake() error {
+	p.mu.RLock()
+	defer p.mu.RUnlock()
 	if p.closed.Load() {
 		return ErrClosed
 	}
 	if err := p.signalWake(); err != nil {
-		if p.closed.Load() && (errors.Is(err, unix.EBADF) || errors.Is(err, unix.EINVAL)) {
-			return ErrClosed
-		}
 		return fmt.Errorf("epoll: wake: %w", err)
 	}
 	return nil
@@ -210,26 +213,35 @@ func (p *Poller) drainWake() {
 	var b [8]byte
 	for {
 		_, err := unix.Read(p.wakeFD, b[:])
-		if err == nil || errors.Is(err, unix.EINTR) {
-			if err == nil {
-				return
-			}
+		if err == nil {
+			return
+		}
+		if errors.Is(err, unix.EINTR) {
 			continue
 		}
 		return
 	}
 }
 
-// Close releases the epoll instance and its internal wake descriptor. It is
-// idempotent. File descriptors registered by the caller are never closed.
+// Close wakes Wait, releases internal descriptors, and is idempotent. Registered
+// descriptors remain owned by the caller.
 func (p *Poller) Close() error {
 	if !p.closed.CompareAndSwap(false, true) {
 		return nil
 	}
 
+	// The closing goroutine is the only goroutine that can transition closed to
+	// true, so internal descriptors are guaranteed to remain open until it takes
+	// mu for the actual close. Signaling first prevents a blocked Wait from
+	// holding the read side of mu forever.
 	_ = p.signalWake()
+
+	p.mu.Lock()
+	defer p.mu.Unlock()
 	epollErr := unix.Close(p.fd)
 	wakeErr := unix.Close(p.wakeFD)
+	p.fd = -1
+	p.wakeFD = -1
 	if errors.Is(epollErr, unix.EBADF) {
 		epollErr = nil
 	}
