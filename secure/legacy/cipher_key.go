@@ -9,12 +9,15 @@ import (
 	"errors"
 	"fmt"
 	"io"
+
+	"github.com/qigao/ogrenet/secure"
 )
 
 var ErrLegacyCiphertextTooShort = errors.New("secure/legacy: ciphertext is shorter than GCM nonce")
 
-// CipherKey preserves the pre-v2 ogrenet AES-GCM key API. New code should use
-// secure.NewAESGCM with an independently generated key instead.
+// CipherKey preserves the pre-v2 ogrenet AES-GCM key API while also satisfying
+// secure.Cipher so it can be used by the unified wire/transport stack. New code
+// should use secure.NewAESGCM with an independently generated key instead.
 type CipherKey []byte
 
 // CryptCipherKey is the legacy name for an asymmetrically wrapped CipherKey.
@@ -33,6 +36,26 @@ func NewCipherKey() (CipherKey, error) {
 	key := make(CipherKey, len(md5Sum))
 	copy(key, md5Sum[:])
 	return key, nil
+}
+
+func (CipherKey) Algorithm() secure.Algorithm { return secure.AlgLegacyCipherKeyAESGCM }
+
+// Seal adapts the legacy nonce-prefixed AES-GCM transform to secure.Cipher.
+func (key CipherKey) Seal(dst, plaintext []byte) ([]byte, error) {
+	encoded, err := key.Encode(plaintext)
+	if err != nil {
+		return nil, err
+	}
+	return append(dst, encoded...), nil
+}
+
+// Open adapts the legacy nonce-prefixed AES-GCM transform to secure.Cipher.
+func (key CipherKey) Open(dst, ciphertext []byte) ([]byte, error) {
+	decoded, err := key.Decode(ciphertext)
+	if err != nil {
+		return nil, err
+	}
+	return append(dst, decoded...), nil
 }
 
 // Encode preserves the old AES-GCM wire layout: nonce || ciphertext || tag.
@@ -76,3 +99,5 @@ func legacyGCM(key []byte) (cipher.AEAD, error) {
 	}
 	return aead, nil
 }
+
+var _ secure.Cipher = CipherKey(nil)
