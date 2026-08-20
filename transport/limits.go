@@ -9,14 +9,34 @@ import (
 	"sync/atomic"
 )
 
-// Limits configures Engine-wide resource bounds. Zero means unlimited.
+// Limits configures Engine-wide resource bounds. Every zero value means
+// unlimited; negative values are rejected by WithLimits.
+//
+// Inbound connection overload is rejected promptly rather than queued without
+// bound. Outbound operations return a typed LimitError that unwraps to
+// ErrResourceExhausted.
 type Limits struct {
-	MaxConnections            int
-	MaxConnectionsPerPeer     int
+	// MaxConnections bounds opening plus active Sessions and PacketConns owned
+	// by the Engine.
+	MaxConnections int
+
+	// MaxConnectionsPerPeer bounds opening plus active connections for one
+	// canonical remote IP when a peer address is available.
+	MaxConnectionsPerPeer int
+
+	// MaxConnectionsPerListener bounds opening plus active inbound Sessions for
+	// each TCP/TLS/WS/WSS Listener independently.
 	MaxConnectionsPerListener int
-	MaxConcurrentHandshakes   int
-	MaxPendingUpgrades        int
-	MaxQueuedBytesTotal       int64
+
+	// MaxConcurrentHandshakes bounds TLS and WSS handshakes across the Engine.
+	MaxConcurrentHandshakes int
+
+	// MaxPendingUpgrades bounds WS/WSS HTTP upgrades across clients and servers.
+	MaxPendingUpgrades int
+
+	// MaxQueuedBytesTotal bounds encoded queued plus in-flight application data
+	// across all Sessions and PacketConns in the Engine.
+	MaxQueuedBytesTotal int64
 }
 
 func (l Limits) validate() error {
@@ -368,7 +388,7 @@ type globalByteQuota struct {
 }
 
 func newGlobalByteQuota(limit int64) *globalByteQuota {
-	return &globalByteQuota{limit: limit, changed: make(chan struct{})}
+	return &globalByteQuota{limit: limit}
 }
 func (q *globalByteQuota) acquire(ctx context.Context, closing <-chan struct{}, n int) error {
 	if q == nil || q.limit == 0 || n == 0 {
@@ -385,6 +405,9 @@ func (q *globalByteQuota) acquire(ctx context.Context, closing <-chan struct{}, 
 			q.used += want
 			q.mu.Unlock()
 			return nil
+		}
+		if q.changed == nil {
+			q.changed = make(chan struct{})
 		}
 		changed := q.changed
 		q.mu.Unlock()
@@ -424,8 +447,10 @@ func (q *globalByteQuota) release(n int) {
 	if q.used < 0 {
 		q.used = 0
 	}
-	close(q.changed)
-	q.changed = make(chan struct{})
+	if q.changed != nil {
+		close(q.changed)
+		q.changed = nil
+	}
 	q.mu.Unlock()
 }
 func (q *globalByteQuota) current() int64 {

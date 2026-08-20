@@ -14,7 +14,7 @@ type byteQuota struct {
 }
 
 func newByteQuota(limit int) *byteQuota {
-	return &byteQuota{limit: limit, changed: make(chan struct{})}
+	return &byteQuota{limit: limit}
 }
 
 func (q *byteQuota) setParent(parent *globalByteQuota) {
@@ -42,6 +42,9 @@ func (q *byteQuota) acquireLocal(ctx context.Context, closing <-chan struct{}, n
 			q.used += n
 			q.mu.Unlock()
 			return nil
+		}
+		if q.changed == nil {
+			q.changed = make(chan struct{})
 		}
 		changed := q.changed
 		q.mu.Unlock()
@@ -94,8 +97,10 @@ func (q *byteQuota) releaseLocal(n int) {
 	if q.used < 0 {
 		q.used = 0
 	}
-	close(q.changed)
-	q.changed = make(chan struct{})
+	if q.changed != nil {
+		close(q.changed)
+		q.changed = nil
+	}
 	q.mu.Unlock()
 }
 
