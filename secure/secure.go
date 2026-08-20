@@ -51,10 +51,3 @@ type KeyWrapper interface {
 	Wrap(key []byte) ([]byte, error)
 	Unwrap(wrapped []byte) ([]byte, error)
 }
-
-// Profile collects optional message-security primitives used by higher layers.
-type Profile struct {
-	Cipher     Cipher
-	Digest     Digest
-	KeyWrapper KeyWrapper
-}
