@@ -24,18 +24,9 @@ const (
 	defaultWSPongTimeout       = 10 * time.Second
 )
 
-// FramerFactory creates per-session framing state for TCP and TLS. A new
-// framer is created for every accepted or dialed stream session. WS/WSS use
-// native WebSocket message boundaries and never invoke this factory.
 type FramerFactory func() wire.Framer
-
-// CipherFactory creates one message cipher instance per session. Use it for
-// ciphers with mutable per-session state. The factory may be called
-// concurrently.
 type CipherFactory func() (secure.Cipher, error)
 
-// TCPConfig configures portable TCP sockets before they enter TCP/TLS/WS/WSS
-// protocol handling.
 type TCPConfig struct {
 	NoDelay          bool
 	KeepAlive        bool
@@ -44,9 +35,6 @@ type TCPConfig struct {
 	WriteBufferBytes int
 }
 
-// WebSocketConfig controls WS/WSS handshake and liveness behavior. Compression
-// is intentionally disabled by the transport; enablement can be added later as
-// an explicit protocol decision rather than an implicit negotiation fallback.
 type WebSocketConfig struct {
 	OriginPatterns   []string
 	Subprotocols     []string
@@ -87,35 +75,35 @@ func defaultConfig() config {
 			PingInterval:     defaultWSPingInterval,
 			PongTimeout:      defaultWSPongTimeout,
 		},
-		writeQueue:      defaultWriteQueue,
-		maxQueuedBytes:  defaultMaxQueuedBytes,
-		readBuffer:      defaultReadBuffer,
-		maxBufferedRead: defaultMaxBufferedRead,
-		maxMessageBytes: defaultMaxMessageBytes,
+		writeQueue:       defaultWriteQueue,
+		maxQueuedBytes:   defaultMaxQueuedBytes,
+		readBuffer:       defaultReadBuffer,
+		maxBufferedRead:  defaultMaxBufferedRead,
+		maxMessageBytes:  defaultMaxMessageBytes,
 		maxDatagramBytes: defaultMaxDatagramBytes,
 	}
 }
 
-// Option configures Engine.
 type Option func(*config) error
 
-// WithCipher configures one message cipher shared by all sessions. The cipher
-// must be safe for concurrent use. Use WithCipherFactory for mutable session
-// state. This is application/message encryption and is independent of TLS.
 func WithCipher(cipher secure.Cipher) Option {
 	return func(c *config) error {
+		if c.framerFactory != nil {
+			return ErrConflictingCodecOptions
+		}
 		c.cipher = cipher
 		c.cipherFactory = nil
 		return nil
 	}
 }
 
-// WithCipherFactory creates one message cipher per session. The last
-// WithCipher or WithCipherFactory option wins.
 func WithCipherFactory(factory CipherFactory) Option {
 	return func(c *config) error {
 		if factory == nil {
 			return ErrNilCipherFactory
+		}
+		if c.framerFactory != nil {
+			return ErrConflictingCodecOptions
 		}
 		c.cipher = nil
 		c.cipherFactory = factory
@@ -124,18 +112,21 @@ func WithCipherFactory(factory CipherFactory) Option {
 }
 
 // WithFramerFactory replaces the default wire.Codec for TCP and TLS only.
+// Message ciphers are composed by the default codec, so custom framers and
+// WithCipher/WithCipherFactory are intentionally mutually exclusive.
 func WithFramerFactory(factory FramerFactory) Option {
 	return func(c *config) error {
 		if factory == nil {
 			return ErrNilFramer
+		}
+		if c.cipher != nil || c.cipherFactory != nil {
+			return ErrConflictingCodecOptions
 		}
 		c.framerFactory = factory
 		return nil
 	}
 }
 
-// WithTLSClientConfig configures TLS/WSS clients. The value is cloned and the
-// transport enforces TLS 1.3 as the minimum version.
 func WithTLSClientConfig(cfg *tls.Config) Option {
 	return func(c *config) error {
 		if cfg == nil {
@@ -146,8 +137,6 @@ func WithTLSClientConfig(cfg *tls.Config) Option {
 	}
 }
 
-// WithTLSServerConfig configures TLS/WSS listeners. A certificate or
-// GetCertificate callback is required and TLS 1.3 is the minimum version.
 func WithTLSServerConfig(cfg *tls.Config) Option {
 	return func(c *config) error {
 		if cfg == nil {
@@ -193,8 +182,6 @@ func WithWebSocketConfig(cfg WebSocketConfig) Option {
 	}
 }
 
-// WithWriteQueue sets the maximum number of accepted sends waiting behind the
-// in-flight write. One additional internal slot covers the in-flight write.
 func WithWriteQueue(size int) Option {
 	return func(c *config) error {
 		maxInt := int(^uint(0) >> 1)
@@ -206,8 +193,6 @@ func WithWriteQueue(size int) Option {
 	}
 }
 
-// WithMaxQueuedBytes bounds encoded bytes retained by one session or packet
-// socket, including its in-flight write.
 func WithMaxQueuedBytes(size int) Option {
 	return func(c *config) error {
 		if size <= 0 {
@@ -238,9 +223,6 @@ func WithMaxBufferedRead(size int) Option {
 	}
 }
 
-// WithMaxMessageBytes bounds plaintext application messages and stream wire
-// payloads. WebSocket wire messages are allowed a small encryption/base64
-// overhead but decrypted plaintext is always checked against this limit.
 func WithMaxMessageBytes(size int) Option {
 	return func(c *config) error {
 		if size <= 0 || uint64(size) > math.MaxUint32 {
