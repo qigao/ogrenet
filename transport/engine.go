@@ -2,6 +2,7 @@ package transport
 
 import (
 	"context"
+	"crypto/tls"
 	"errors"
 	"net"
 	"sync"
@@ -10,23 +11,24 @@ import (
 	"github.com/qigao/ogrenet"
 )
 
-// Engine is the portable stream implementation of ogrenet.Engine. It uses Go's
-// net package for socket I/O while preserving ogrenet's message, framing,
-// security, backpressure, and lifecycle contracts.
+// Engine is the portable production implementation of ogrenet.Engine. Native
+// poller packages remain independently available below this layer.
 type Engine struct {
 	cfg config
 
-	mu        sync.Mutex
-	closed    bool
-	activeOps int
-	listeners map[*listener]struct{}
-	conns     map[*conn]struct{}
-	done      chan struct{}
-	doneOnce  sync.Once
-	nextID    atomic.Uint64
+	mu              sync.Mutex
+	closed          bool
+	activeOps       int
+	streamListeners map[*listener]struct{}
+	wsListeners     map[*wsListener]struct{}
+	streams         map[*conn]struct{}
+	websockets      map[*wsSession]struct{}
+	packets         map[*packetConn]struct{}
+	done            chan struct{}
+	doneOnce        sync.Once
+	nextID          atomic.Uint64
 }
 
-// New creates a portable stream Engine.
 func New(opts ...Option) (*Engine, error) {
 	cfg := defaultConfig()
 	for _, opt := range opts {
@@ -38,92 +40,102 @@ func New(opts ...Option) (*Engine, error) {
 		}
 	}
 	return &Engine{
-		cfg:       cfg,
-		listeners: make(map[*listener]struct{}),
-		conns:     make(map[*conn]struct{}),
-		done:      make(chan struct{}),
+		cfg:             cfg,
+		streamListeners: make(map[*listener]struct{}),
+		wsListeners:     make(map[*wsListener]struct{}),
+		streams:         make(map[*conn]struct{}),
+		websockets:      make(map[*wsSession]struct{}),
+		packets:         make(map[*packetConn]struct{}),
+		done:            make(chan struct{}),
 	}, nil
 }
 
-// Listen starts accepting stream connections in the background. A Listen that
-// began before Close is included in the Engine shutdown barrier even if it later
-// loses the race with Close and returns ErrClosed.
-func (e *Engine) Listen(ctx context.Context, network, address string, h ogrenet.Handler) (ogrenet.Listener, error) {
+func (e *Engine) Listen(ctx context.Context, endpoint ogrenet.Endpoint, h ogrenet.Handler) (ogrenet.Listener, error) {
 	if ctx == nil {
 		return nil, ErrNilContext
 	}
-	if !isStreamNetwork(network) {
-		return nil, ErrUnsupportedNet
+	if err := endpoint.Validate(); err != nil {
+		return nil, err
+	}
+	if !endpoint.Scheme.IsSession() {
+		return nil, ErrProtocolMismatch
 	}
 	if err := e.beginOp(); err != nil {
 		return nil, err
 	}
 	defer e.endOp()
 
-	lc := net.ListenConfig{}
-	ln, err := lc.Listen(ctx, network, address)
-	if err != nil {
-		return nil, err
+	switch endpoint.Scheme {
+	case ogrenet.SchemeTCP, ogrenet.SchemeTLS:
+		return e.listenStream(ctx, endpoint, normalizeHandler(h))
+	case ogrenet.SchemeWS, ogrenet.SchemeWSS:
+		return e.listenWebSocket(ctx, endpoint, normalizeHandler(h))
+	default:
+		return nil, ErrProtocolMismatch
 	}
-
-	lctx, cancel := context.WithCancel(ctx)
-	l := &listener{
-		engine:  e,
-		ln:      ln,
-		handler: normalizeHandler(h),
-		ctx:     lctx,
-		cancel:  cancel,
-		closing: make(chan struct{}),
-		done:    make(chan struct{}),
-	}
-	if err := e.addListener(l); err != nil {
-		cancel()
-		_ = ln.Close()
-		return nil, err
-	}
-
-	go l.watchContext()
-	go l.acceptLoop()
-	return l, nil
 }
 
-// Dial establishes one outbound stream connection and starts its read/write
-// loops. The handler receives OnOpen/OnMessage/OnClose for the new connection.
-// A Dial that began before Close remains part of the Engine shutdown barrier
-// until its socket and per-connection setup have completed or been cleaned up.
-func (e *Engine) Dial(ctx context.Context, network, address string, h ogrenet.Handler) (ogrenet.Conn, error) {
+func (e *Engine) Dial(ctx context.Context, endpoint ogrenet.Endpoint, h ogrenet.Handler) (ogrenet.Session, error) {
 	if ctx == nil {
 		return nil, ErrNilContext
 	}
-	if !isStreamNetwork(network) {
-		return nil, ErrUnsupportedNet
+	if err := endpoint.ValidateDial(); err != nil {
+		return nil, err
+	}
+	if !endpoint.Scheme.IsSession() {
+		return nil, ErrProtocolMismatch
 	}
 	if err := e.beginOp(); err != nil {
 		return nil, err
 	}
 	defer e.endOp()
 
-	var d net.Dialer
-	raw, err := d.DialContext(ctx, network, address)
-	if err != nil {
-		return nil, err
+	switch endpoint.Scheme {
+	case ogrenet.SchemeTCP, ogrenet.SchemeTLS:
+		return e.dialStream(ctx, endpoint, normalizeHandler(h))
+	case ogrenet.SchemeWS, ogrenet.SchemeWSS:
+		return e.dialWebSocket(ctx, endpoint, normalizeHandler(h))
+	default:
+		return nil, ErrProtocolMismatch
 	}
-	c, err := e.adopt(raw, normalizeHandler(h))
-	if err != nil {
-		_ = raw.Close()
-		return nil, err
-	}
-	return c, nil
 }
 
-// Done closes after Close has been initiated, all in-flight Listen/Dial calls
-// have completed, and every tracked listener and connection has reached its own
-// Done barrier.
+func (e *Engine) ListenPacket(ctx context.Context, endpoint ogrenet.Endpoint, h ogrenet.PacketHandler) (ogrenet.PacketConn, error) {
+	if ctx == nil {
+		return nil, ErrNilContext
+	}
+	if err := endpoint.Validate(); err != nil {
+		return nil, err
+	}
+	if endpoint.Scheme != ogrenet.SchemeUDP {
+		return nil, ErrProtocolMismatch
+	}
+	if err := e.beginOp(); err != nil {
+		return nil, err
+	}
+	defer e.endOp()
+	return e.listenPacket(ctx, endpoint, normalizePacketHandler(h))
+}
+
+func (e *Engine) DialPacket(ctx context.Context, endpoint ogrenet.Endpoint, h ogrenet.PacketHandler) (ogrenet.PacketConn, error) {
+	if ctx == nil {
+		return nil, ErrNilContext
+	}
+	if err := endpoint.ValidateDial(); err != nil {
+		return nil, err
+	}
+	if endpoint.Scheme != ogrenet.SchemeUDP {
+		return nil, ErrProtocolMismatch
+	}
+	if err := e.beginOp(); err != nil {
+		return nil, err
+	}
+	defer e.endOp()
+	return e.dialPacket(ctx, endpoint, normalizePacketHandler(h))
+}
+
 func (e *Engine) Done() <-chan struct{} { return e.done }
 
-// Shutdown initiates shutdown and waits for the Engine Done barrier or ctx.
-// Do not call Shutdown synchronously from a Handler callback on the same Engine:
-// that callback is part of the barrier being awaited.
 func (e *Engine) Shutdown(ctx context.Context) error {
 	if ctx == nil {
 		return ErrNilContext
@@ -137,9 +149,6 @@ func (e *Engine) Shutdown(ctx context.Context) error {
 	}
 }
 
-// Close initiates shutdown of all listeners and connections and is idempotent.
-// It does not wait for in-flight operations or user callbacks to return. Use
-// Shutdown or wait on Done when a global shutdown barrier is required.
 func (e *Engine) Close() error {
 	e.mu.Lock()
 	if e.closed {
@@ -147,32 +156,122 @@ func (e *Engine) Close() error {
 		return nil
 	}
 	e.closed = true
-	listeners := make([]*listener, 0, len(e.listeners))
-	for l := range e.listeners {
-		listeners = append(listeners, l)
-	}
-	conns := make([]*conn, 0, len(e.conns))
-	for c := range e.conns {
-		conns = append(conns, c)
-	}
+
+	streamListeners := keys(e.streamListeners)
+	wsListeners := keys(e.wsListeners)
+	streams := keys(e.streams)
+	websockets := keys(e.websockets)
+	packets := keys(e.packets)
 	e.maybeDoneLocked()
 	e.mu.Unlock()
 
 	var errs []error
-	for _, l := range listeners {
-		if err := l.Close(); err != nil {
-			errs = append(errs, err)
-		}
+	for _, l := range streamListeners {
+		errs = appendCloseErr(errs, l.Close())
 	}
-	for _, c := range conns {
-		if err := c.Close(); err != nil {
-			errs = append(errs, err)
-		}
+	for _, l := range wsListeners {
+		errs = appendCloseErr(errs, l.Close())
+	}
+	for _, s := range streams {
+		errs = appendCloseErr(errs, s.Close())
+	}
+	for _, s := range websockets {
+		errs = appendCloseErr(errs, s.Close())
+	}
+	for _, p := range packets {
+		errs = appendCloseErr(errs, p.Close())
 	}
 	return errors.Join(errs...)
 }
 
-func (e *Engine) adopt(raw net.Conn, h ogrenet.Handler) (*conn, error) {
+func appendCloseErr(dst []error, err error) []error {
+	if err != nil {
+		return append(dst, err)
+	}
+	return dst
+}
+
+func keys[T comparable](m map[T]struct{}) []T {
+	out := make([]T, 0, len(m))
+	for v := range m {
+		out = append(out, v)
+	}
+	return out
+}
+
+func (e *Engine) listenStream(ctx context.Context, endpoint ogrenet.Endpoint, h ogrenet.Handler) (ogrenet.Listener, error) {
+	ln, err := e.listenTCP(ctx, endpoint)
+	if err != nil {
+		return nil, err
+	}
+	bound := boundEndpoint(endpoint, ln.Addr())
+
+	var prepare streamPrepare
+	if endpoint.Scheme == ogrenet.SchemeTLS {
+		cfg, err := e.cfg.serverTLSConfig()
+		if err != nil {
+			_ = ln.Close()
+			return nil, err
+		}
+		prepare = func(ctx context.Context, raw net.Conn) (net.Conn, error) {
+			tlsConn := tls.Server(raw, cfg.Clone())
+			if err := e.cfg.handshakeServer(ctx, tlsConn); err != nil {
+				return nil, err
+			}
+			return tlsConn, nil
+		}
+	}
+
+	lctx, cancel := context.WithCancel(ctx)
+	l := &listener{
+		engine:   e,
+		endpoint: bound,
+		ln:       ln,
+		handler:  h,
+		prepare:  prepare,
+		ctx:      lctx,
+		cancel:   cancel,
+		closing:  make(chan struct{}),
+		done:     make(chan struct{}),
+	}
+	if err := e.addStreamListener(l); err != nil {
+		cancel()
+		_ = ln.Close()
+		return nil, err
+	}
+	go l.watchContext()
+	go l.acceptLoop()
+	return l, nil
+}
+
+func (e *Engine) dialStream(ctx context.Context, endpoint ogrenet.Endpoint, h ogrenet.Handler) (ogrenet.Session, error) {
+	raw, err := e.dialTCP(ctx, endpoint)
+	if err != nil {
+		return nil, err
+	}
+	var stream net.Conn = raw
+	if endpoint.Scheme == ogrenet.SchemeTLS {
+		cfg, err := e.cfg.clientTLSConfig(endpoint)
+		if err != nil {
+			_ = raw.Close()
+			return nil, err
+		}
+		tlsConn := tls.Client(raw, cfg)
+		if err := e.cfg.handshakeClient(ctx, tlsConn); err != nil {
+			_ = tlsConn.Close()
+			return nil, err
+		}
+		stream = tlsConn
+	}
+	c, err := e.adoptStream(stream, endpoint, h)
+	if err != nil {
+		_ = stream.Close()
+		return nil, err
+	}
+	return c, nil
+}
+
+func (e *Engine) adoptStream(raw net.Conn, endpoint ogrenet.Endpoint, h ogrenet.Handler) (*conn, error) {
 	framer, err := e.cfg.newFramer()
 	if err != nil {
 		return nil, err
@@ -180,6 +279,8 @@ func (e *Engine) adopt(raw net.Conn, h ogrenet.Handler) (*conn, error) {
 	c := &conn{
 		engine:     e,
 		id:         e.nextID.Add(1),
+		protocol:   endpoint.Scheme,
+		endpoint:   endpoint,
 		raw:        raw,
 		framer:     framer,
 		handler:    h,
@@ -193,7 +294,7 @@ func (e *Engine) adopt(raw net.Conn, h ogrenet.Handler) (*conn, error) {
 		readSize:   e.cfg.readBuffer,
 		maxRead:    e.cfg.maxBufferedRead,
 	}
-	if err := e.addConn(c); err != nil {
+	if err := e.addStream(c); err != nil {
 		return nil, err
 	}
 	c.start()
@@ -220,42 +321,37 @@ func (e *Engine) endOp() {
 	e.mu.Unlock()
 }
 
-func (e *Engine) addListener(l *listener) error {
+func (e *Engine) addStreamListener(v *listener) error { return e.addTracked(e.streamListeners, v) }
+func (e *Engine) addWSListener(v *wsListener) error   { return e.addTracked(e.wsListeners, v) }
+func (e *Engine) addStream(v *conn) error             { return e.addTracked(e.streams, v) }
+func (e *Engine) addWebSocket(v *wsSession) error     { return e.addTracked(e.websockets, v) }
+func (e *Engine) addPacket(v *packetConn) error       { return e.addTracked(e.packets, v) }
+
+func (e *Engine) addTracked[T comparable](m map[T]struct{}, v T) error {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	if e.closed {
 		return ErrClosed
 	}
-	e.listeners[l] = struct{}{}
+	m[v] = struct{}{}
 	return nil
 }
 
-func (e *Engine) removeListener(l *listener) {
-	e.mu.Lock()
-	delete(e.listeners, l)
-	e.maybeDoneLocked()
-	e.mu.Unlock()
-}
+func (e *Engine) removeStreamListener(v *listener) { e.removeTracked(e.streamListeners, v) }
+func (e *Engine) removeWSListener(v *wsListener)   { e.removeTracked(e.wsListeners, v) }
+func (e *Engine) removeStream(v *conn)             { e.removeTracked(e.streams, v) }
+func (e *Engine) removeWebSocket(v *wsSession)     { e.removeTracked(e.websockets, v) }
+func (e *Engine) removePacket(v *packetConn)       { e.removeTracked(e.packets, v) }
 
-func (e *Engine) addConn(c *conn) error {
+func (e *Engine) removeTracked[T comparable](m map[T]struct{}, v T) {
 	e.mu.Lock()
-	defer e.mu.Unlock()
-	if e.closed {
-		return ErrClosed
-	}
-	e.conns[c] = struct{}{}
-	return nil
-}
-
-func (e *Engine) removeConn(c *conn) {
-	e.mu.Lock()
-	delete(e.conns, c)
+	delete(m, v)
 	e.maybeDoneLocked()
 	e.mu.Unlock()
 }
 
 func (e *Engine) maybeDoneLocked() {
-	if e.closed && e.activeOps == 0 && len(e.listeners) == 0 && len(e.conns) == 0 {
+	if e.closed && e.activeOps == 0 && len(e.streamListeners) == 0 && len(e.wsListeners) == 0 && len(e.streams) == 0 && len(e.websockets) == 0 && len(e.packets) == 0 {
 		e.doneOnce.Do(func() { close(e.done) })
 	}
 }
@@ -267,13 +363,11 @@ func normalizeHandler(h ogrenet.Handler) ogrenet.Handler {
 	return h
 }
 
-func isStreamNetwork(network string) bool {
-	switch network {
-	case "tcp", "tcp4", "tcp6", "unix":
-		return true
-	default:
-		return false
+func normalizePacketHandler(h ogrenet.PacketHandler) ogrenet.PacketHandler {
+	if h == nil {
+		return ogrenet.PacketHandlerFuncs{}
 	}
+	return h
 }
 
 var _ ogrenet.Engine = (*Engine)(nil)
