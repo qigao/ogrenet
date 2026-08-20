@@ -137,6 +137,14 @@ func classifyError(err error) ErrorKind {
 	// Classify QUIC-native errors before generic net.Error / net.ErrClosed
 	// checks. Some protocol errors intentionally satisfy generic network error
 	// contracts, but callers still need the more precise QUIC classification.
+	var idleTimeout *quicgo.IdleTimeoutError
+	if errors.As(err, &idleTimeout) {
+		return ErrorTimeout
+	}
+	var handshakeTimeout *quicgo.HandshakeTimeoutError
+	if errors.As(err, &handshakeTimeout) {
+		return ErrorTimeout
+	}
 	var datagramTooLarge *quicgo.DatagramTooLargeError
 	if errors.As(err, &datagramTooLarge) {
 		return ErrorMessageTooLarge
@@ -166,12 +174,12 @@ func classifyError(err error) ErrorKind {
 		return ErrorClosed
 	}
 
-	if errors.Is(err, net.ErrClosed) {
-		return ErrorClosed
-	}
 	var netErr net.Error
 	if errors.As(err, &netErr) && netErr.Timeout() {
 		return ErrorTimeout
+	}
+	if errors.Is(err, net.ErrClosed) {
+		return ErrorClosed
 	}
 	return ErrorUnknown
 }

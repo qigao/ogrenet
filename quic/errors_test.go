@@ -17,6 +17,8 @@ func TestErrorClassification(t *testing.T) {
 	}{
 		{"canceled", context.Canceled, ErrorCanceled, ErrCanceled},
 		{"deadline", context.DeadlineExceeded, ErrorTimeout, ErrTimeout},
+		{"idle timeout", &quicgo.IdleTimeoutError{}, ErrorTimeout, ErrTimeout},
+		{"handshake timeout", &quicgo.HandshakeTimeoutError{}, ErrorTimeout, ErrTimeout},
 		{"datagram", &quicgo.DatagramTooLargeError{}, ErrorMessageTooLarge, ErrMessageTooLarge},
 		{"stream limit", quicgo.StreamLimitReachedError{}, ErrorResourceExhausted, ErrResourceExhausted},
 		{"transport", &quicgo.TransportError{}, ErrorProtocol, ErrProtocol},
