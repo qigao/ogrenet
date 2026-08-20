@@ -1,16 +1,19 @@
 package secure
 
-// Algorithm is a stable wire identifier for a security primitive.
+// Algorithm is a stable wire identifier for a security primitive. Values are
+// assigned explicitly because changing an existing numeric ID is a wire-format
+// compatibility break.
 type Algorithm uint16
 
 const (
-	AlgNone Algorithm = iota
-	AlgAESGCM
-	AlgSM4GCM
-	AlgSM3Digest
-	AlgRSAOAEP
-	AlgSM2
+	AlgNone      Algorithm = 0x0000
+	AlgAESGCM    Algorithm = 0x0001
+	AlgSM4GCM    Algorithm = 0x0002
+	AlgSM3Digest Algorithm = 0x0003
+	AlgRSAOAEP   Algorithm = 0x0004
+	AlgSM2       Algorithm = 0x0005
 
+	// 0x1000-0x10ff is reserved for pre-v2 non-GM compatibility transforms.
 	AlgLegacyAES128CFB Algorithm = 0x1001
 	AlgLegacyAES192CFB Algorithm = 0x1002
 	AlgLegacyAES256CFB Algorithm = 0x1003
