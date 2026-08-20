@@ -2,7 +2,7 @@ name: ogrenet
 
 on:
   push:
-    branches: [master]
+    branches: [master, feat/unified-transport-security]
   pull_request:
 
 permissions:
