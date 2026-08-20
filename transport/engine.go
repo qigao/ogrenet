@@ -106,8 +106,10 @@ func (e *Engine) Dial(ctx context.Context, network, address string, h ogrenet.Ha
 	return c, nil
 }
 
-// Close initiates shutdown of all listeners and connections. Connection Done
-// channels close as their reader loops enter finalization.
+// Close initiates shutdown of all listeners and connections and is idempotent.
+// It does not wait for user callbacks to return. Wait on each Listener.Done or
+// Conn.Done when a shutdown barrier is required; Conn.Done closes only after
+// both I/O loops have stopped, queued sends are released, and OnClose returns.
 func (e *Engine) Close() error {
 	e.mu.Lock()
 	if e.closed {
