@@ -123,8 +123,8 @@ func (l *listener) initiateClose(cause error) error {
 func (l *listener) finalize() {
 	l.finalOnce.Do(func() {
 		_ = l.initiateClose(nil)
-		l.engine.removeListener(l)
 		close(l.done)
+		l.engine.removeListener(l)
 	})
 }
 
