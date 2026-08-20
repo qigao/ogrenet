@@ -321,13 +321,13 @@ func (e *Engine) endOp() {
 	e.mu.Unlock()
 }
 
-func (e *Engine) addStreamListener(v *listener) error { return e.addTracked(e.streamListeners, v) }
-func (e *Engine) addWSListener(v *wsListener) error   { return e.addTracked(e.wsListeners, v) }
-func (e *Engine) addStream(v *conn) error             { return e.addTracked(e.streams, v) }
-func (e *Engine) addWebSocket(v *wsSession) error     { return e.addTracked(e.websockets, v) }
-func (e *Engine) addPacket(v *packetConn) error       { return e.addTracked(e.packets, v) }
+func (e *Engine) addStreamListener(v *listener) error { return addTracked(e, e.streamListeners, v) }
+func (e *Engine) addWSListener(v *wsListener) error   { return addTracked(e, e.wsListeners, v) }
+func (e *Engine) addStream(v *conn) error             { return addTracked(e, e.streams, v) }
+func (e *Engine) addWebSocket(v *wsSession) error     { return addTracked(e, e.websockets, v) }
+func (e *Engine) addPacket(v *packetConn) error       { return addTracked(e, e.packets, v) }
 
-func (e *Engine) addTracked[T comparable](m map[T]struct{}, v T) error {
+func addTracked[T comparable](e *Engine, m map[T]struct{}, v T) error {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	if e.closed {
@@ -337,13 +337,13 @@ func (e *Engine) addTracked[T comparable](m map[T]struct{}, v T) error {
 	return nil
 }
 
-func (e *Engine) removeStreamListener(v *listener) { e.removeTracked(e.streamListeners, v) }
-func (e *Engine) removeWSListener(v *wsListener)   { e.removeTracked(e.wsListeners, v) }
-func (e *Engine) removeStream(v *conn)             { e.removeTracked(e.streams, v) }
-func (e *Engine) removeWebSocket(v *wsSession)     { e.removeTracked(e.websockets, v) }
-func (e *Engine) removePacket(v *packetConn)       { e.removeTracked(e.packets, v) }
+func (e *Engine) removeStreamListener(v *listener) { removeTracked(e, e.streamListeners, v) }
+func (e *Engine) removeWSListener(v *wsListener)   { removeTracked(e, e.wsListeners, v) }
+func (e *Engine) removeStream(v *conn)             { removeTracked(e, e.streams, v) }
+func (e *Engine) removeWebSocket(v *wsSession)     { removeTracked(e, e.websockets, v) }
+func (e *Engine) removePacket(v *packetConn)       { removeTracked(e, e.packets, v) }
 
-func (e *Engine) removeTracked[T comparable](m map[T]struct{}, v T) {
+func removeTracked[T comparable](e *Engine, m map[T]struct{}, v T) {
 	e.mu.Lock()
 	delete(m, v)
 	e.maybeDoneLocked()
