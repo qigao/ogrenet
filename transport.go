@@ -68,8 +68,14 @@ func (h HandlerFuncs) OnClose(c Conn, err error) {
 // Engine is the common high-level transport contract. Native poller packages
 // remain public and retain their kernel-specific semantics; Engine is the
 // application-facing message/lifecycle boundary above them.
+//
+// Close initiates shutdown and is idempotent. Done closes after all listeners
+// and connections have fully terminated, including connection OnClose callbacks.
+// Shutdown combines Close with a context-bounded wait for that barrier.
 type Engine interface {
 	Listen(ctx context.Context, network, address string, h Handler) (Listener, error)
 	Dial(ctx context.Context, network, address string, h Handler) (Conn, error)
+	Done() <-chan struct{}
+	Shutdown(ctx context.Context) error
 	Close() error
 }
