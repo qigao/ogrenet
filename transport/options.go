@@ -53,6 +53,7 @@ type config struct {
 	tlsHandshakeTimeout time.Duration
 	tcp                 TCPConfig
 	ws                  WebSocketConfig
+	limits              Limits
 	writeQueue          int
 	maxQueuedBytes      int
 	readBuffer          int
@@ -85,6 +86,17 @@ func defaultConfig() config {
 }
 
 type Option func(*config) error
+
+// WithLimits configures Engine-wide resource limits. Zero values are unlimited.
+func WithLimits(limits Limits) Option {
+	return func(c *config) error {
+		if err := limits.validate(); err != nil {
+			return err
+		}
+		c.limits = limits
+		return nil
+	}
+}
 
 func WithCipher(cipher secure.Cipher) Option {
 	return func(c *config) error {
