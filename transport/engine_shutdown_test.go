@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/qigao/ogrenet"
+	"github.com/qigao/ogrenet/secure"
 )
 
 func TestEngineShutdownWaitsForOnClose(t *testing.T) {
@@ -127,6 +128,88 @@ func TestEngineShutdownContextOnlyBoundsWait(t *testing.T) {
 	case <-e.Done():
 	case <-time.After(time.Second):
 		t.Fatal("Engine did not finish after blocked OnClose returned")
+	}
+}
+
+func TestEngineShutdownWaitsForInFlightDialSetup(t *testing.T) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = ln.Close() }()
+
+	accepted := make(chan net.Conn, 1)
+	go func() {
+		conn, acceptErr := ln.Accept()
+		if acceptErr == nil {
+			accepted <- conn
+		}
+	}()
+
+	factoryEntered := make(chan struct{})
+	releaseFactory := make(chan struct{})
+	e, err := New(WithCipherFactory(func() (secure.Cipher, error) {
+		close(factoryEntered)
+		<-releaseFactory
+		return secure.NewAESGCM([]byte("0123456789abcdef0123456789abcdef"))
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	dialResult := make(chan error, 1)
+	go func() {
+		_, dialErr := e.Dial(context.Background(), "tcp", ln.Addr().String(), nil)
+		dialResult <- dialErr
+	}()
+
+	select {
+	case <-factoryEntered:
+	case <-time.After(time.Second):
+		t.Fatal("Dial did not reach cipher factory")
+	}
+
+	var serverConn net.Conn
+	select {
+	case serverConn = <-accepted:
+		defer func() { _ = serverConn.Close() }()
+	case <-time.After(time.Second):
+		t.Fatal("server did not accept Dial connection")
+	}
+
+	shutdownResult := make(chan error, 1)
+	go func() { shutdownResult <- e.Shutdown(context.Background()) }()
+
+	select {
+	case <-e.Done():
+		t.Fatal("Engine.Done closed while Dial setup was still active")
+	case err := <-shutdownResult:
+		t.Fatalf("Shutdown returned while Dial setup was still active: %v", err)
+	case <-time.After(50 * time.Millisecond):
+	}
+
+	close(releaseFactory)
+	select {
+	case err := <-dialResult:
+		if !errors.Is(err, ErrClosed) {
+			t.Fatalf("Dial after concurrent shutdown = %v, want ErrClosed", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("Dial did not finish after cipher factory returned")
+	}
+
+	select {
+	case err := <-shutdownResult:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("Shutdown did not finish after in-flight Dial cleanup")
+	}
+	select {
+	case <-e.Done():
+	default:
+		t.Fatal("Engine.Done not closed after in-flight Dial cleanup")
 	}
 }
 
