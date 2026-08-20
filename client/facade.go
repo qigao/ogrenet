@@ -13,6 +13,7 @@ import (
 var (
 	ErrInvalidHTTPClientConfig   = errors.New("client: invalid HTTP client configuration")
 	ErrHTTPClientTransportClosed = errors.New("client: HTTP client transport is closed")
+	ErrNoApplicableHTTPProtocol  = errors.New("client: no configured HTTP protocol applies to request")
 )
 
 // HTTPFallbackPolicy controls whether the facade may advance to a later
@@ -151,22 +152,10 @@ func buildProtocolTransport(protocol HTTPProtocol, cfg HTTPClientConfig) (http.R
 	}
 }
 
-// RoundTrip currently executes the first configured strict protocol slot. Safe
-// fallback and request replay are layered in by the next implementation stage.
+// RoundTrip executes the explicit protocol order and applies the configured
+// safe-replay fallback policy.
 func (t *HTTPClientTransport) RoundTrip(req *http.Request) (*http.Response, error) {
-	if t == nil || t.closed.Load() {
-		return nil, ErrHTTPClientTransportClosed
-	}
-	if req == nil {
-		return nil, fmt.Errorf("%w: nil request", ErrInvalidHTTPClientConfig)
-	}
-	if len(t.attempts) == 0 {
-		return nil, ErrInvalidHTTPClientConfig
-	}
-
-	attempt := t.attempts[0]
-	attemptReq := req.Clone(withHTTPAttempt(req.Context(), attempt.protocol, 0))
-	return attempt.rt.RoundTrip(attemptReq)
+	return t.roundTrip(req)
 }
 
 // CloseIdleConnections closes idle connections in every owned protocol slot.

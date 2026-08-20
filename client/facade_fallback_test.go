@@ -10,7 +10,6 @@ import (
 	"net/http"
 	"strings"
 	"sync"
-	"syscall"
 	"testing"
 
 	quicgo "github.com/quic-go/quic-go"
@@ -41,7 +40,7 @@ func (s *stubRoundTripper) callCount() int {
 }
 
 func retryableDialError() error {
-	return &net.OpError{Op: "dial", Net: "tcp", Err: syscall.ECONNREFUSED}
+	return &net.OpError{Op: "dial", Net: "tcp", Err: errors.New("connection refused")}
 }
 
 func response(status int) *http.Response {
@@ -221,7 +220,7 @@ func TestFallbackClassifier(t *testing.T) {
 		{"dial", retryableDialError(), fallbackPreRequest},
 		{"dns", &net.DNSError{Name: "example.test", Err: "not found"}, fallbackPreRequest},
 		{"eof", io.EOF, fallbackAmbiguousAfterSend},
-		{"reset", syscall.ECONNRESET, fallbackAmbiguousAfterSend},
+		{"read failure", &net.OpError{Op: "read", Net: "tcp", Err: io.ErrUnexpectedEOF}, fallbackAmbiguousAfterSend},
 		{"quic version", &HTTP3Error{Kind: HTTP3ErrorTransport, Cause: &quicgo.VersionNegotiationError{}}, fallbackPreRequest},
 		{"quic handshake", &HTTP3Error{Kind: HTTP3ErrorTransport, Cause: &quicgo.HandshakeTimeoutError{}}, fallbackPreRequest},
 		{"h3 protocol", &HTTP3Error{Kind: HTTP3ErrorProtocol, Cause: errors.New("protocol")}, fallbackNever},
@@ -239,7 +238,7 @@ func TestFallbackClassifier(t *testing.T) {
 func TestHTTPFallbackErrorPreservesAttemptOrderAndCauses(t *testing.T) {
 	errH3 := retryableDialError()
 	errH2 := io.EOF
-	errH1 := syscall.ECONNRESET
+	errH1 := io.ErrUnexpectedEOF
 	err := newHTTPFallbackError([]HTTPAttemptError{
 		{Protocol: HTTP3, Err: errH3},
 		{Protocol: HTTP2, Err: errH2},
