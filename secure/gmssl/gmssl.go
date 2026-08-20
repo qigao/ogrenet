@@ -5,8 +5,6 @@ package gmssl
 /*
 #cgo LDFLAGS: -lgmssl
 #include <stdint.h>
-#include <stdlib.h>
-#include <string.h>
 #include <gmssl/rand.h>
 #include <gmssl/sm2.h>
 #include <gmssl/sm3.h>
@@ -37,28 +35,6 @@ static int ogre_sm4_gcm_decrypt(const uint8_t key_bytes[16], const uint8_t *iv, 
 	SM4_KEY key;
 	sm4_set_encrypt_key(&key, key_bytes);
 	return sm4_gcm_decrypt(&key, iv, ivlen, NULL, 0, in, inlen, tag, 16, out);
-}
-
-static int ogre_sm4_cbc_encrypt(const uint8_t key[16], const uint8_t iv[16],
-	const uint8_t *in, size_t inlen, uint8_t *out, size_t *outlen) {
-	SM4_CBC_CTX ctx;
-	size_t n1 = 0, n2 = 0;
-	if (sm4_cbc_encrypt_init(&ctx, key, iv) != 1) return -1;
-	if (inlen > 0 && sm4_cbc_encrypt_update(&ctx, in, inlen, out, &n1) != 1) return -1;
-	if (sm4_cbc_encrypt_finish(&ctx, out + n1, &n2) != 1) return -1;
-	*outlen = n1 + n2;
-	return 1;
-}
-
-static int ogre_sm4_cbc_decrypt(const uint8_t key[16], const uint8_t iv[16],
-	const uint8_t *in, size_t inlen, uint8_t *out, size_t *outlen) {
-	SM4_CBC_CTX ctx;
-	size_t n1 = 0, n2 = 0;
-	if (sm4_cbc_decrypt_init(&ctx, key, iv) != 1) return -1;
-	if (inlen > 0 && sm4_cbc_decrypt_update(&ctx, in, inlen, out, &n1) != 1) return -1;
-	if (sm4_cbc_decrypt_finish(&ctx, out + n1, &n2) != 1) return -1;
-	*outlen = n1 + n2;
-	return 1;
 }
 
 static int ogre_sm2_key_from_private(SM2_KEY *key, const uint8_t private_key[32]) {
@@ -94,36 +70,6 @@ static int ogre_sm2_encrypt_der(const SM2_KEY *key, const uint8_t *in, size_t in
 static int ogre_sm2_decrypt_der(const SM2_KEY *key, const uint8_t *in, size_t inlen,
 	uint8_t *out, size_t *outlen) {
 	return sm2_decrypt(key, in, inlen, out, outlen);
-}
-
-static int ogre_sm2_encrypt_c1c2c3(const SM2_KEY *key, const uint8_t *in, size_t inlen,
-	uint8_t *out, size_t *outlen) {
-	SM2_CIPHERTEXT c;
-	if (inlen == 0 || inlen > SM2_MAX_PLAINTEXT_SIZE) return -1;
-	if (sm2_do_encrypt(key, in, inlen, &c) != 1) return -1;
-	out[0] = 0x04;
-	memcpy(out + 1, c.point.x, 32);
-	memcpy(out + 33, c.point.y, 32);
-	memcpy(out + 65, c.ciphertext, c.ciphertext_size);
-	memcpy(out + 65 + c.ciphertext_size, c.hash, 32);
-	*outlen = 97 + c.ciphertext_size;
-	return 1;
-}
-
-static int ogre_sm2_decrypt_c1c2c3(const SM2_KEY *key, const uint8_t *in, size_t inlen,
-	uint8_t *out, size_t *outlen) {
-	SM2_CIPHERTEXT c;
-	size_t clen;
-	if (inlen < 98 || in[0] != 0x04) return -1;
-	clen = inlen - 97;
-	if (clen == 0 || clen > SM2_MAX_PLAINTEXT_SIZE) return -1;
-	memset(&c, 0, sizeof(c));
-	memcpy(c.point.x, in + 1, 32);
-	memcpy(c.point.y, in + 33, 32);
-	c.ciphertext_size = (uint8_t)clen;
-	memcpy(c.ciphertext, in + 65, clen);
-	memcpy(c.hash, in + 65 + clen, 32);
-	return sm2_do_decrypt(key, &c, out, outlen);
 }
 */
 import "C"
@@ -163,12 +109,15 @@ func bytePtr(b []byte) *C.uint8_t {
 type SM3 struct{}
 
 func NewSM3() secure.Digest { return SM3{} }
+
 func (SM3) Algorithm() secure.Algorithm { return secure.AlgSM3Digest }
+
 func (SM3) Sum(dst, data []byte) []byte {
 	var out [32]byte
 	C.ogre_sm3_sum(bytePtr(data), C.size_t(len(data)), (*C.uint8_t)(unsafe.Pointer(&out[0])))
 	return append(dst, out[:]...)
 }
+
 func (SM3) Verify(data, digest []byte) bool {
 	if len(digest) != 32 {
 		return false
@@ -179,7 +128,9 @@ func (SM3) Verify(data, digest []byte) bool {
 
 // SM4GCM is a GmSSL-backed authenticated SM4-GCM cipher. Seal emits
 // nonce || ciphertext || tag.
-type SM4GCM struct{ key [sm4KeySize]byte }
+type SM4GCM struct {
+	key [sm4KeySize]byte
+}
 
 func NewSM4GCM(key []byte) (*SM4GCM, error) {
 	if len(key) != sm4KeySize {
@@ -189,41 +140,63 @@ func NewSM4GCM(key []byte) (*SM4GCM, error) {
 	copy(c.key[:], key)
 	return c, nil
 }
+
 func (*SM4GCM) Algorithm() secure.Algorithm { return secure.AlgSM4GCM }
+
 func (c *SM4GCM) Seal(dst, plaintext []byte) ([]byte, error) {
 	var nonce [sm4NonceSize]byte
 	if C.ogre_rand_bytes((*C.uint8_t)(unsafe.Pointer(&nonce[0])), C.size_t(len(nonce))) != 1 {
 		return nil, ErrGmSSL
 	}
+
 	body := make([]byte, len(plaintext)+sm4TagSize)
-	// GmSSL 3.2.0 requires out != NULL even for a zero-length plaintext.
+	// GmSSL 3.2.0 requires out != NULL even when plaintext is empty.
 	bodyPtr := bytePtr(body)
 	tagPtr := (*C.uint8_t)(unsafe.Pointer(&body[len(plaintext)]))
-	if C.ogre_sm4_gcm_encrypt((*C.uint8_t)(unsafe.Pointer(&c.key[0])), (*C.uint8_t)(unsafe.Pointer(&nonce[0])), C.size_t(len(nonce)),
-		bytePtr(plaintext), C.size_t(len(plaintext)), bodyPtr, tagPtr) != 1 {
+	if C.ogre_sm4_gcm_encrypt(
+		(*C.uint8_t)(unsafe.Pointer(&c.key[0])),
+		(*C.uint8_t)(unsafe.Pointer(&nonce[0])),
+		C.size_t(len(nonce)),
+		bytePtr(plaintext),
+		C.size_t(len(plaintext)),
+		bodyPtr,
+		tagPtr,
+	) != 1 {
 		return nil, ErrGmSSL
 	}
+
 	dst = append(dst, nonce[:]...)
 	return append(dst, body...), nil
 }
+
 func (c *SM4GCM) Open(dst, ciphertext []byte) ([]byte, error) {
 	if len(ciphertext) < sm4NonceSize+sm4TagSize {
 		return nil, ErrCiphertextTooShort
 	}
+
 	nonce := ciphertext[:sm4NonceSize]
 	body := ciphertext[sm4NonceSize : len(ciphertext)-sm4TagSize]
 	tag := ciphertext[len(ciphertext)-sm4TagSize:]
-	// GmSSL 3.2.0 also requires out != NULL for zero-length ciphertext.
+
+	// GmSSL 3.2.0 requires out != NULL even when body is empty.
 	plainBuf := make([]byte, len(body)+1)
 	plain := plainBuf[:len(body)]
-	if C.ogre_sm4_gcm_decrypt((*C.uint8_t)(unsafe.Pointer(&c.key[0])), bytePtr(nonce), C.size_t(len(nonce)),
-		bytePtr(body), C.size_t(len(body)), bytePtr(tag), bytePtr(plainBuf)) != 1 {
+	if C.ogre_sm4_gcm_decrypt(
+		(*C.uint8_t)(unsafe.Pointer(&c.key[0])),
+		bytePtr(nonce),
+		C.size_t(len(nonce)),
+		bytePtr(body),
+		C.size_t(len(body)),
+		bytePtr(tag),
+		bytePtr(plainBuf),
+	) != 1 {
 		return nil, ErrGmSSL
 	}
 	return append(dst, plain...), nil
 }
 
-// SM2KeyWrapper wraps short session keys using GmSSL's DER-encoded SM2 ciphertext.
+// SM2KeyWrapper wraps short session keys using GmSSL's DER-encoded SM2
+// ciphertext. It is intended for session-key exchange, not bulk payloads.
 type SM2KeyWrapper struct {
 	public     C.SM2_KEY
 	private    C.SM2_KEY
@@ -231,8 +204,11 @@ type SM2KeyWrapper struct {
 	hasPrivate bool
 }
 
+// NewSM2KeyWrapper accepts a 64-byte raw public key (X || Y), a 65-byte
+// uncompressed public key (0x04 || X || Y), and/or a 32-byte private scalar.
 func NewSM2KeyWrapper(publicKey, privateKey []byte) (*SM2KeyWrapper, error) {
 	w := &SM2KeyWrapper{}
+
 	if len(privateKey) > 0 {
 		if len(privateKey) != 32 || C.ogre_sm2_key_from_private(&w.private, bytePtr(privateKey)) != 1 {
 			return nil, ErrInvalidSM2Key
@@ -241,18 +217,23 @@ func NewSM2KeyWrapper(publicKey, privateKey []byte) (*SM2KeyWrapper, error) {
 		w.public = w.private
 		w.hasPublic = true
 	}
+
 	if len(publicKey) > 0 {
-		if (len(publicKey) != 64 && len(publicKey) != 65) || C.ogre_sm2_key_from_public(&w.public, bytePtr(publicKey), C.size_t(len(publicKey))) != 1 {
+		if (len(publicKey) != 64 && len(publicKey) != 65) ||
+			C.ogre_sm2_key_from_public(&w.public, bytePtr(publicKey), C.size_t(len(publicKey))) != 1 {
 			return nil, ErrInvalidSM2Key
 		}
 		w.hasPublic = true
 	}
+
 	if !w.hasPublic && !w.hasPrivate {
 		return nil, ErrInvalidSM2Key
 	}
 	return w, nil
 }
 
+// GenerateSM2Key returns a raw 64-byte public key (X || Y) and a 32-byte
+// private scalar.
 func GenerateSM2Key() (publicKey, privateKey []byte, err error) {
 	publicKey = make([]byte, 64)
 	privateKey = make([]byte, 32)
@@ -263,6 +244,7 @@ func GenerateSM2Key() (publicKey, privateKey []byte, err error) {
 }
 
 func (*SM2KeyWrapper) Algorithm() secure.Algorithm { return secure.AlgSM2 }
+
 func (w *SM2KeyWrapper) Wrap(key []byte) ([]byte, error) {
 	if !w.hasPublic {
 		return nil, secure.ErrMissingPublicKey
@@ -270,6 +252,7 @@ func (w *SM2KeyWrapper) Wrap(key []byte) ([]byte, error) {
 	if len(key) == 0 || len(key) > sm2MaxPlain {
 		return nil, ErrMessageTooLarge
 	}
+
 	out := make([]byte, sm2MaxCipher)
 	var outlen C.size_t
 	if C.ogre_sm2_encrypt_der(&w.public, bytePtr(key), C.size_t(len(key)), bytePtr(out), &outlen) != 1 {
@@ -277,136 +260,19 @@ func (w *SM2KeyWrapper) Wrap(key []byte) ([]byte, error) {
 	}
 	return out[:int(outlen)], nil
 }
+
 func (w *SM2KeyWrapper) Unwrap(wrapped []byte) ([]byte, error) {
 	if !w.hasPrivate {
 		return nil, secure.ErrMissingPrivateKey
 	}
+	if len(wrapped) == 0 {
+		return nil, ErrCiphertextTooShort
+	}
+
 	out := make([]byte, sm2MaxPlain)
 	var outlen C.size_t
 	if C.ogre_sm2_decrypt_der(&w.private, bytePtr(wrapped), C.size_t(len(wrapped)), bytePtr(out), &outlen) != 1 {
 		return nil, ErrGmSSL
 	}
 	return out[:int(outlen)], nil
-}
-
-// LegacySM2C1C2C3 preserves the old raw C1||C2||C3 SM2 ciphertext layout.
-type LegacySM2C1C2C3 struct {
-	public     C.SM2_KEY
-	private    C.SM2_KEY
-	hasPublic  bool
-	hasPrivate bool
-}
-
-func NewLegacySM2C1C2C3(privateKey, publicKey []byte) (*LegacySM2C1C2C3, error) {
-	c := &LegacySM2C1C2C3{}
-	if len(privateKey) > 0 {
-		if len(privateKey) != 32 || C.ogre_sm2_key_from_private(&c.private, bytePtr(privateKey)) != 1 {
-			return nil, ErrInvalidSM2Key
-		}
-		c.hasPrivate = true
-		c.public = c.private
-		c.hasPublic = true
-	}
-	if len(publicKey) > 0 {
-		if (len(publicKey) != 64 && len(publicKey) != 65) || C.ogre_sm2_key_from_public(&c.public, bytePtr(publicKey), C.size_t(len(publicKey))) != 1 {
-			return nil, ErrInvalidSM2Key
-		}
-		c.hasPublic = true
-	}
-	if !c.hasPublic && !c.hasPrivate {
-		return nil, ErrInvalidSM2Key
-	}
-	return c, nil
-}
-func (*LegacySM2C1C2C3) Algorithm() secure.Algorithm { return secure.AlgLegacySM2C1C2C3 }
-func (c *LegacySM2C1C2C3) Seal(dst, plaintext []byte) ([]byte, error) {
-	if len(plaintext) == 0 {
-		return dst, nil
-	}
-	if !c.hasPublic {
-		return nil, secure.ErrMissingPublicKey
-	}
-	if len(plaintext) > sm2MaxPlain {
-		return nil, ErrMessageTooLarge
-	}
-	out := make([]byte, 1+64+len(plaintext)+32)
-	var outlen C.size_t
-	if C.ogre_sm2_encrypt_c1c2c3(&c.public, bytePtr(plaintext), C.size_t(len(plaintext)), bytePtr(out), &outlen) != 1 {
-		return nil, ErrGmSSL
-	}
-	return append(dst, out[:int(outlen)]...), nil
-}
-func (c *LegacySM2C1C2C3) Open(dst, ciphertext []byte) ([]byte, error) {
-	if len(ciphertext) == 0 {
-		return dst, nil
-	}
-	if !c.hasPrivate {
-		return nil, secure.ErrMissingPrivateKey
-	}
-	out := make([]byte, sm2MaxPlain)
-	var outlen C.size_t
-	if C.ogre_sm2_decrypt_c1c2c3(&c.private, bytePtr(ciphertext), C.size_t(len(ciphertext)), bytePtr(out), &outlen) != 1 {
-		return nil, ErrGmSSL
-	}
-	return append(dst, out[:int(outlen)]...), nil
-}
-
-// LegacySM4CBC preserves the old key/IV truncation and ASCII-space padding rules.
-type LegacySM4CBC struct {
-	key [16]byte
-	iv  [16]byte
-}
-
-func normalizeLegacy(src []byte, dst []byte) {
-	copy(dst, src)
-	if len(src) < len(dst) {
-		for i := len(src); i < len(dst); i++ {
-			dst[i] = ' '
-		}
-	}
-}
-func NewLegacySM4CBC(key, iv []byte) *LegacySM4CBC {
-	c := &LegacySM4CBC{}
-	normalizeLegacy(key, c.key[:])
-	normalizeLegacy(iv, c.iv[:])
-	return c
-}
-func (*LegacySM4CBC) Algorithm() secure.Algorithm { return secure.AlgLegacySM4CBC }
-func (c *LegacySM4CBC) Seal(dst, plaintext []byte) ([]byte, error) {
-	if len(plaintext) == 0 {
-		return dst, nil
-	}
-	out := make([]byte, len(plaintext)+32)
-	var outlen C.size_t
-	if C.ogre_sm4_cbc_encrypt((*C.uint8_t)(unsafe.Pointer(&c.key[0])), (*C.uint8_t)(unsafe.Pointer(&c.iv[0])),
-		bytePtr(plaintext), C.size_t(len(plaintext)), bytePtr(out), &outlen) != 1 {
-		return nil, ErrGmSSL
-	}
-	return append(dst, out[:int(outlen)]...), nil
-}
-func (c *LegacySM4CBC) Open(dst, ciphertext []byte) ([]byte, error) {
-	if len(ciphertext) == 0 {
-		return dst, nil
-	}
-	out := make([]byte, len(ciphertext)+16)
-	var outlen C.size_t
-	if C.ogre_sm4_cbc_decrypt((*C.uint8_t)(unsafe.Pointer(&c.key[0])), (*C.uint8_t)(unsafe.Pointer(&c.iv[0])),
-		bytePtr(ciphertext), C.size_t(len(ciphertext)), bytePtr(out), &outlen) != 1 {
-		return nil, ErrGmSSL
-	}
-	return append(dst, out[:int(outlen)]...), nil
-}
-
-// LegacySM3Method preserves the old non-reversible behavior: Seal returns
-// SM3(data), Open returns its input unchanged. New code should use NewSM3.
-type LegacySM3Method struct{}
-func (LegacySM3Method) Algorithm() secure.Algorithm { return secure.AlgLegacySM3Method }
-func (LegacySM3Method) Seal(dst, plaintext []byte) ([]byte, error) {
-	if len(plaintext) == 0 {
-		return dst, nil
-	}
-	return SM3{}.Sum(dst, plaintext), nil
-}
-func (LegacySM3Method) Open(dst, ciphertext []byte) ([]byte, error) {
-	return append(dst, ciphertext...), nil
 }
