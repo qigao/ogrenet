@@ -15,8 +15,8 @@ manage readiness/completion details themselves.
 | root `ogrenet` | `Engine`, `Conn`, `Handler`, `Message` contracts |
 | `wire` | default text/binary stream framing |
 | `secure` | security interfaces plus AES-GCM and RSA-OAEP |
-| `secure/legacy` | compatibility transforms such as AES-CFB |
-| `secure/gmssl` | optional GmSSL-backed SM2/SM3/SM4 and legacy GM transforms |
+| `secure/legacy` | non-GM compatibility transforms such as AES-CFB and legacy `CipherKey` AES-GCM |
+| `secure/gmssl` | optional GmSSL-backed SM2/SM3/SM4 using the current security model only |
 
 The high-level API does not replace the native packages. epoll, kqueue, and IOCP
 keep their native semantics; Engine implementations compose them above that
@@ -96,7 +96,7 @@ type KeyWrapper interface {
 }
 ```
 
-SM3 is therefore a digest, not a fake reversible cipher. RSA-OAEP and SM2 are
+SM3 is therefore a digest, not a reversible cipher. RSA-OAEP and SM2 are
 intended to wrap session keys rather than bulk application messages.
 
 ### Standard backend
@@ -108,7 +108,7 @@ cipher, err := secure.NewAESGCM(key)
 codec := wire.New(cipher)
 ```
 
-RSA-OAEP uses SHA-512, preserving the primitive used by the pre-v2 code but
+RSA-OAEP uses SHA-512, preserving the primitive used by the pre-v2 code while
 assigning it the correct key-wrapping role.
 
 ## GmSSL backend
@@ -120,13 +120,13 @@ adapter targets **GmSSL 3.2.0** and is compiled only when both CGO and the
 Build and install GmSSL first, then:
 
 ```bash
-CGO_ENABLED=1 go test -tags gmssl ./secure/gmssl
+CGO_ENABLED=1 go test -tags gmssl ./secure/gmssl ./wire
 ```
 
 If GmSSL is installed outside the compiler's default paths, set `CGO_CFLAGS`
 and `CGO_LDFLAGS` accordingly.
 
-The GmSSL backend provides:
+The GmSSL backend provides only the new security model:
 
 - SM4-GCM authenticated encryption;
 - SM3 digest;
@@ -134,13 +134,17 @@ The GmSSL backend provides:
 - GmSSL cryptographic random generation for SM4-GCM nonces;
 - raw SM2 key generation/import helpers.
 
+Legacy GM wire formats and old GM method semantics are intentionally not
+supported. In particular, there is no legacy SM2 C1C2C3 transform, no SM3
+"encrypt/decrypt" compatibility shim, and no legacy SM4-CBC compatibility mode.
+
 GmSSL is optional: the native poller packages and the standard security/wire
 packages continue to build with `CGO_ENABLED=0`.
 
-## Legacy crypto compatibility
+## Non-GM legacy crypto compatibility
 
-The redesign does not restore the old connection-manager API, but it keeps the
-old cryptographic methods needed for protocol interoperability.
+The redesign does not restore the old connection-manager API, but selected
+non-GM cryptographic methods remain available for protocol interoperability:
 
 | Old method | New location | Notes |
 | --- | --- | --- |
@@ -148,12 +152,10 @@ old cryptographic methods needed for protocol interoperability.
 | AES-128-CFB | `secure/legacy.NewAES128CFB` | preserves old key/IV normalization |
 | AES-192-CFB | `secure/legacy.NewAES192CFB` | preserves old key/IV normalization |
 | AES-256-CFB | `secure/legacy.NewAES256CFB` | preserves old key/IV normalization |
-| SM2 C1C2C3 | `secure/gmssl.NewLegacySM2C1C2C3` | preserves raw C1/C2/C3 wire order |
-| SM3 method | `secure/gmssl.LegacySM3Method` | preserves old hash-on-Seal / identity-on-Open behavior |
-| SM4-CBC | `secure/gmssl.NewLegacySM4CBC` | preserves key/IV truncate-or-space-pad rules |
+| `CipherKey` AES-GCM | `secure/legacy.CipherKey` | preserves legacy key generation and nonce-prefixed AES-GCM wire behavior |
 
-The legacy algorithms are compatibility tools. New encrypted sessions should use
-an authenticated cipher such as AES-GCM or SM4-GCM.
+New encrypted sessions should use an authenticated cipher such as AES-GCM or
+SM4-GCM.
 
 ## Native pollers
 
