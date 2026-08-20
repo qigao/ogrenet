@@ -2,6 +2,7 @@ package client
 
 import (
 	"context"
+	"crypto/tls"
 	"crypto/x509"
 	"errors"
 	"fmt"
@@ -12,6 +13,8 @@ import (
 
 	quicgo "github.com/quic-go/quic-go"
 )
+
+const tlsAlertNoApplicationProtocol tls.AlertError = 120
 
 // HTTPAttemptError records one protocol attempt and its failure.
 type HTTPAttemptError struct {
@@ -190,6 +193,17 @@ func classifyFallback(err error) fallbackClass {
 	var hostname x509.HostnameError
 	var invalid x509.CertificateInvalidError
 	if errors.As(err, &unknownAuthority) || errors.As(err, &hostname) || errors.As(err, &invalid) {
+		return fallbackNever
+	}
+
+	// TLS alert 120 is the RFC 7301 no_application_protocol alert. It proves
+	// that this strict HTTP protocol could not be negotiated before an HTTP
+	// request reached the application. Other TLS alerts remain terminal.
+	var alert tls.AlertError
+	if errors.As(err, &alert) {
+		if alert == tlsAlertNoApplicationProtocol {
+			return fallbackPreRequest
+		}
 		return fallbackNever
 	}
 
