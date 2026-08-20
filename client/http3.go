@@ -169,6 +169,11 @@ func (t *HTTP3Transport) RoundTrip(req *http.Request) (*http.Response, error) {
 	}
 	resp, err := t.raw.RoundTrip(req)
 	if err != nil {
+		if req != nil {
+			if cause := context.Cause(req.Context()); cause != nil {
+				return nil, cause
+			}
+		}
 		return nil, mapHTTP3Error(err)
 	}
 	return resp, nil
