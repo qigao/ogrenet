@@ -12,12 +12,6 @@ const (
 	AlgSM3Digest Algorithm = 0x0003
 	AlgRSAOAEP   Algorithm = 0x0004
 	AlgSM2       Algorithm = 0x0005
-
-	// 0x1000-0x10ff is reserved for pre-v2 non-GM compatibility transforms.
-	AlgLegacyAES128CFB       Algorithm = 0x1001
-	AlgLegacyAES192CFB       Algorithm = 0x1002
-	AlgLegacyAES256CFB       Algorithm = 0x1003
-	AlgLegacyCipherKeyAESGCM Algorithm = 0x1004
 )
 
 // Cipher is a reversible message transform. Seal and Open append their output
@@ -30,7 +24,7 @@ type Cipher interface {
 
 // AuthenticatedCipher is implemented by ciphers that can authenticate
 // associated metadata in addition to the encrypted payload. The default wire
-// codec uses this to authenticate its semantic header fields.
+// codec and WebSocket transport use this to authenticate protocol metadata.
 type AuthenticatedCipher interface {
 	Cipher
 	SealAAD(dst, plaintext, aad []byte) ([]byte, error)
