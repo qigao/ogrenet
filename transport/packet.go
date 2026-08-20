@@ -38,10 +38,10 @@ type packetConn struct {
 	err       error
 }
 
-func (p *packetConn) Protocol() ogrenet.Scheme       { return ogrenet.SchemeUDP }
-func (p *packetConn) Endpoint() ogrenet.Endpoint     { return p.endpoint }
-func (p *packetConn) LocalAddr() net.Addr            { return p.conn.LocalAddr() }
-func (p *packetConn) Done() <-chan struct{}           { return p.done }
+func (p *packetConn) Protocol() ogrenet.Scheme   { return ogrenet.SchemeUDP }
+func (p *packetConn) Endpoint() ogrenet.Endpoint { return p.endpoint }
+func (p *packetConn) LocalAddr() net.Addr        { return p.conn.LocalAddr() }
+func (p *packetConn) Done() <-chan struct{}       { return p.done }
 func (p *packetConn) RemoteAddr() net.Addr {
 	if p.remote == nil {
 		return nil
@@ -283,7 +283,17 @@ func (p *packetConn) failPending(err error) {
 func (p *packetConn) readerLoop() {
 	buf := make([]byte, 65535)
 	for {
-		n, peer, err := p.conn.ReadFromUDP(buf)
+		var (
+			n    int
+			peer *net.UDPAddr
+			err  error
+		)
+		if p.remote == nil {
+			n, peer, err = p.conn.ReadFromUDP(buf)
+		} else {
+			n, err = p.conn.Read(buf)
+			peer = p.remote
+		}
 		if err != nil {
 			p.initiateClose(normalizePacketError(err))
 			return
@@ -363,13 +373,15 @@ func normalizePacketError(err error) error {
 }
 
 func (e *Engine) listenPacket(ctx context.Context, endpoint ogrenet.Endpoint, h ogrenet.PacketHandler) (ogrenet.PacketConn, error) {
-	addr, err := net.ResolveUDPAddr("udp", endpoint.Address())
+	lc := net.ListenConfig{}
+	raw, err := lc.ListenPacket(ctx, "udp", endpoint.Address())
 	if err != nil {
 		return nil, err
 	}
-	conn, err := net.ListenUDP("udp", addr)
-	if err != nil {
-		return nil, err
+	conn, ok := raw.(*net.UDPConn)
+	if !ok {
+		_ = raw.Close()
+		return nil, fmt.Errorf("transport: UDP listen returned %T", raw)
 	}
 	p := e.newPacketConn(conn, boundEndpoint(endpoint, conn.LocalAddr()), nil, h)
 	if err := e.addPacket(p); err != nil {
@@ -388,13 +400,20 @@ func (e *Engine) listenPacket(ctx context.Context, endpoint ogrenet.Endpoint, h 
 }
 
 func (e *Engine) dialPacket(ctx context.Context, endpoint ogrenet.Endpoint, h ogrenet.PacketHandler) (ogrenet.PacketConn, error) {
-	remote, err := net.ResolveUDPAddr("udp", endpoint.Address())
+	dialer := net.Dialer{}
+	raw, err := dialer.DialContext(ctx, "udp", endpoint.Address())
 	if err != nil {
 		return nil, err
 	}
-	conn, err := net.DialUDP("udp", nil, remote)
-	if err != nil {
-		return nil, err
+	conn, ok := raw.(*net.UDPConn)
+	if !ok {
+		_ = raw.Close()
+		return nil, fmt.Errorf("transport: UDP dial returned %T", raw)
+	}
+	remote, ok := conn.RemoteAddr().(*net.UDPAddr)
+	if !ok {
+		_ = conn.Close()
+		return nil, fmt.Errorf("transport: UDP remote returned %T", conn.RemoteAddr())
 	}
 	p := e.newPacketConn(conn, endpoint, remote, h)
 	if err := e.addPacket(p); err != nil {
