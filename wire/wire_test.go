@@ -35,6 +35,8 @@ func TestEncryptedTextAndBinaryRoundTrip(t *testing.T) {
 	tests := []ogrenet.Message{
 		ogrenet.Text("secret text"),
 		ogrenet.Bin([]byte{0, 1, 2, 0xff}),
+		ogrenet.Text(""),
+		ogrenet.Bin(nil),
 	}
 	for _, want := range tests {
 		frame, err := codec.Encode(want)
