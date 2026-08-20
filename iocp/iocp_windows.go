@@ -30,8 +30,8 @@ type Completion struct {
 type Port struct {
 	mu sync.RWMutex
 
-	handle windows.Handle
-	closed atomic.Bool
+	handle  windows.Handle
+	closed  atomic.Bool
 	waiters atomic.Int32
 }
 
@@ -128,9 +128,11 @@ func (p *Port) Close() error {
 		return nil
 	}
 
-	// Wake every Get that had entered the method before closed was published.
-	// The handle remains open until all readers leave mu.
-	for i := int32(0); i < p.waiters.Load(); i++ {
+	// Take one stable snapshot. Woken Get calls decrement waiters as they return;
+	// reevaluating waiters in the loop could otherwise leave a later waiter
+	// blocked forever and deadlock the write lock below.
+	waiters := p.waiters.Load()
+	for i := int32(0); i < waiters; i++ {
 		_ = windows.PostQueuedCompletionStatus(p.handle, 0, reservedKey, nil)
 	}
 
