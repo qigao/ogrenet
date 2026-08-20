@@ -268,7 +268,10 @@ func timeoutMillis(timeout, elapsed time.Duration) int {
 	if remaining <= 0 {
 		return 0
 	}
-	ms := (remaining + time.Millisecond - 1) / time.Millisecond
+	ms := remaining / time.Millisecond
+	if remaining%time.Millisecond != 0 {
+		ms++
+	}
 	if ms > time.Duration(math.MaxInt32) {
 		return math.MaxInt32
 	}

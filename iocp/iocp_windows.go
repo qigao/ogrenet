@@ -152,7 +152,10 @@ func timeoutMillis(timeout time.Duration) uint32 {
 	if timeout == 0 {
 		return 0
 	}
-	ms := (timeout + time.Millisecond - 1) / time.Millisecond
+	ms := timeout / time.Millisecond
+	if timeout%time.Millisecond != 0 {
+		ms++
+	}
 	if ms >= time.Duration(math.MaxUint32) {
 		return math.MaxUint32 - 1
 	}
