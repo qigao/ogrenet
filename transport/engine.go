@@ -150,6 +150,7 @@ func (e *Engine) adopt(raw net.Conn, h ogrenet.Handler) (*conn, error) {
 		framer:   framer,
 		handler:  h,
 		queue:    make(chan outbound, e.cfg.writeQueue),
+		quota:    newByteQuota(e.cfg.maxQueuedBytes),
 		closing:  make(chan struct{}),
 		done:     make(chan struct{}),
 		readSize: e.cfg.readBuffer,
