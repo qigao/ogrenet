@@ -46,21 +46,31 @@ type Handler interface {
 }
 ```
 
-`Conn.Send` waits for queue admission and the socket-write result. `Conn.TrySend`
-never blocks: it returns `transport.ErrWouldBlock` when either the frame-count
-queue or queued-byte budget is full. Once `TrySend` has admitted a frame it
-returns `nil`, even if close races immediately afterward.
+`Conn.Send` waits for frame admission and the socket-write result. `Conn.TrySend`
+does not wait for frame/byte admission or socket I/O and returns
+`transport.ErrWouldBlock` under backpressure; framing and encryption themselves
+still run synchronously once admission is available. Once `TrySend` has admitted
+a frame to the writer queue it returns `nil`, even if close races immediately
+afterward.
 
 Each connection has both a frame-count limit and a byte budget. Defaults are 256
-waiting frames and 64 MiB including the in-flight write; use
-`transport.WithWriteQueue` and `transport.WithMaxQueuedBytes` to tune them.
+waiting frames plus one in-flight frame, and 64 MiB of encoded queued/in-flight
+bytes. Admission happens before expensive frame encoding, and only one encoded
+frame per connection may wait outside the byte budget while budget becomes
+available. Use `transport.WithWriteQueue` and `transport.WithMaxQueuedBytes` to
+tune these limits.
 
 `Conn.Done()` is a shutdown barrier: it closes only after reader/writer work has
 stopped, pending sends have been released, and `OnClose` has returned. `Conn.Err()`
 is stable once `Done` is closed. `Listener.Done()` similarly waits for the
-accept loop to stop. `Engine.Close()` initiates shutdown but does not wait for
-user callbacks; wait on the returned connection/listener `Done` channels when a
-barrier is required.
+accept loop to stop.
+
+`Engine.Close()` initiates shutdown and is idempotent. `Engine.Done()` is the
+global barrier and closes only after all tracked listeners and connections have
+reached their own Done barriers. `Engine.Shutdown(ctx)` combines Close with a
+context-bounded wait for Engine.Done. Do not call Shutdown synchronously from a
+Handler callback on the same Engine, because that callback is part of the
+barrier being awaited.
 
 ## Portable stream Engine
 
@@ -164,8 +174,9 @@ type KeyWrapper interface {
 }
 ```
 
-SM3 is a digest, not a reversible cipher. RSA-OAEP and SM2 are intended to wrap
-session keys rather than bulk application messages.
+`Algorithm` values are explicit stable wire identifiers; existing numeric IDs
+must never be renumbered. SM3 is a digest, not a reversible cipher. RSA-OAEP and
+SM2 are intended to wrap session keys rather than bulk application messages.
 
 ### Standard backend
 
