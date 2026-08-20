@@ -30,7 +30,15 @@ type Header struct {
 	Length    uint32
 }
 
-// Framer converts application Messages to and from a stream framing format.
+// Framer converts application Messages to and from a byte stream.
+//
+// Encode may return a reusable/internal buffer; transport implementations are
+// expected to copy it before retaining it asynchronously.
+//
+// DecodeOne must return ErrNeedMore with consumed == 0 when src does not contain
+// a complete frame. On success consumed must be in [1, len(src)]. The returned
+// Message.Data must remain valid independently of src and subsequent DecodeOne
+// calls, because applications may retain a Message after its Handler returns.
 type Framer interface {
 	Encode(msg ogrenet.Message) ([]byte, error)
 	DecodeOne(src []byte) (msg ogrenet.Message, consumed int, err error)
