@@ -4,7 +4,7 @@
 
 **Goal:** Add a production-grade HTTP/3-only `net/http` client transport with bounded QUIC policy, no H3→H2/H1 fallback, no 0-RTT client dial path, deterministic lifecycle semantics, and cross-platform race-tested coverage.
 
-**Architecture:** Extract the existing QUIC TLS/timeouts/window policy into `internal/quicpolicy`, preserving the public `ogrenet/quic` API and behavior. Add `client.HTTP3Transport` as a small wrapper around `quic-go/http3.Transport`, but override its default early dial path with an ogrenet-owned shared UDP `quic.Transport` that always calls non-early `Dial`.
+**Architecture:** Extract the existing QUIC TLS/timeouts/window policy into `internal/quicpolicy`, preserving the public `ogrenet/quic` API and behavior. Add `client.HTTP3Transport` as a wrapper around `quic-go/http3.Transport`, overriding its default early dial path with an ogrenet-owned shared UDP `quic.Transport` that always calls non-early `Dial`.
 
 **Tech Stack:** Go 1.25+, `net/http`, `crypto/tls`, `net`, `github.com/quic-go/quic-go v0.61.0`, `github.com/quic-go/quic-go/http3`, existing GitHub Actions matrix.
 
@@ -36,16 +36,10 @@
 - Modify: `quic/config_test.go`
 
 **Interfaces:**
-- Consumes: existing `quic.Config` fields and current bounded defaults.
-- Produces:
-  - `quicpolicy.Config`
-  - `quicpolicy.Build(Config) (*tls.Config, *quicgo.Config, error)`
-  - exported internal constants for the shared timeout/window defaults
-  - sentinel errors aliased by public `quic` to preserve `errors.Is` behavior.
+- Consumes: existing `quic.Config` and current bounded defaults.
+- Produces: `quicpolicy.Config`, `quicpolicy.Build(Config) (*tls.Config, *quicgo.Config, error)`, shared default constants, and sentinel errors aliased by public `quic`.
 
-- [ ] **Step 1: Add failing policy tests**
-
-Create `internal/quicpolicy/policy_test.go` with focused tests for the extracted behavior:
+- [ ] **Step 1: Write the failing policy tests**
 
 ```go
 package quicpolicy
@@ -66,52 +60,32 @@ func TestBuildClonesTLSAndPinsALPN(t *testing.T) {
         MaxIncomingUniStreams: -1,
         EnableDatagrams:       true,
     })
-    if err != nil {
-        t.Fatal(err)
-    }
-    if tlsCfg == original {
-        t.Fatal("TLS config was not cloned")
-    }
-    if tlsCfg.MinVersion != tls.VersionTLS13 {
-        t.Fatalf("MinVersion = %d", tlsCfg.MinVersion)
-    }
-    if len(tlsCfg.NextProtos) != 1 || tlsCfg.NextProtos[0] != "ogrenet-test" {
-        t.Fatalf("NextProtos = %v", tlsCfg.NextProtos)
-    }
-    if !qcfg.EnableDatagrams || qcfg.Allow0RTT {
-        t.Fatalf("datagrams=%v Allow0RTT=%v", qcfg.EnableDatagrams, qcfg.Allow0RTT)
-    }
-    if qcfg.MaxIncomingStreams != 32 || qcfg.MaxIncomingUniStreams != -1 {
-        t.Fatalf("stream limits = %d/%d", qcfg.MaxIncomingStreams, qcfg.MaxIncomingUniStreams)
-    }
+    if err != nil { t.Fatal(err) }
+    if tlsCfg == original { t.Fatal("TLS config was not cloned") }
+    if tlsCfg.MinVersion != tls.VersionTLS13 { t.Fatalf("MinVersion = %d", tlsCfg.MinVersion) }
+    if len(tlsCfg.NextProtos) != 1 || tlsCfg.NextProtos[0] != "ogrenet-test" { t.Fatalf("NextProtos = %v", tlsCfg.NextProtos) }
+    if !qcfg.EnableDatagrams || qcfg.Allow0RTT { t.Fatalf("datagrams=%v Allow0RTT=%v", qcfg.EnableDatagrams, qcfg.Allow0RTT) }
+    if qcfg.MaxIncomingStreams != 32 || qcfg.MaxIncomingUniStreams != -1 { t.Fatalf("limits = %d/%d", qcfg.MaxIncomingStreams, qcfg.MaxIncomingUniStreams) }
 }
 
 func TestBuildValidation(t *testing.T) {
-    if _, _, err := Build(Config{}); !errors.Is(err, ErrALPNRequired) {
-        t.Fatalf("empty ALPN: %v", err)
-    }
-    if _, _, err := Build(Config{ALPN: "x", HandshakeTimeout: -time.Second}); !errors.Is(err, ErrInvalidTimeout) {
-        t.Fatalf("negative timeout: %v", err)
-    }
-    if _, _, err := Build(Config{ALPN: "x", TLSConfig: &tls.Config{MinVersion: tls.VersionTLS12}}); !errors.Is(err, ErrTLSVersion) {
-        t.Fatalf("TLS 1.2: %v", err)
-    }
+    if _, _, err := Build(Config{}); !errors.Is(err, ErrALPNRequired) { t.Fatalf("empty ALPN: %v", err) }
+    if _, _, err := Build(Config{ALPN: "x", HandshakeTimeout: -time.Second}); !errors.Is(err, ErrInvalidTimeout) { t.Fatalf("timeout: %v", err) }
+    if _, _, err := Build(Config{ALPN: "x", TLSConfig: &tls.Config{MinVersion: tls.VersionTLS12}}); !errors.Is(err, ErrTLSVersion) { t.Fatalf("TLS: %v", err) }
 }
 ```
 
-- [ ] **Step 2: Run the new test and verify red**
-
-Run:
+- [ ] **Step 2: Verify red**
 
 ```bash
 go test ./internal/quicpolicy
 ```
 
-Expected: FAIL because package/functions do not exist yet.
+Expected: FAIL because the package does not exist.
 
-- [ ] **Step 3: Move the policy into `internal/quicpolicy`**
+- [ ] **Step 3: Implement the shared policy**
 
-Create `internal/quicpolicy/policy.go` with this shape:
+Create `internal/quicpolicy/policy.go`:
 
 ```go
 package quicpolicy
@@ -127,7 +101,6 @@ import (
 const (
     DefaultHandshakeTimeout = 5 * time.Second
     DefaultIdleTimeout      = 30 * time.Second
-
     DefaultMaxIncomingStreams             int64  = 32
     DefaultInitialStreamReceiveWindow     uint64 = 512 << 10
     DefaultMaxStreamReceiveWindow         uint64 = 4 << 20
@@ -152,37 +125,18 @@ type Config struct {
 }
 
 func Build(c Config) (*tls.Config, *quicgo.Config, error) {
-    if c.ALPN == "" {
-        return nil, nil, ErrALPNRequired
-    }
-    if c.HandshakeTimeout < 0 || c.IdleTimeout < 0 {
-        return nil, nil, ErrInvalidTimeout
-    }
-
+    if c.ALPN == "" { return nil, nil, ErrALPNRequired }
+    if c.HandshakeTimeout < 0 || c.IdleTimeout < 0 { return nil, nil, ErrInvalidTimeout }
     tlsCfg := &tls.Config{}
-    if c.TLSConfig != nil {
-        tlsCfg = c.TLSConfig.Clone()
-    }
-    if tlsCfg.MinVersion != 0 && tlsCfg.MinVersion < tls.VersionTLS13 {
-        return nil, nil, ErrTLSVersion
-    }
-    if tlsCfg.MaxVersion != 0 && tlsCfg.MaxVersion < tls.VersionTLS13 {
-        return nil, nil, ErrTLSVersion
-    }
-    if tlsCfg.MinVersion == 0 {
-        tlsCfg.MinVersion = tls.VersionTLS13
-    }
+    if c.TLSConfig != nil { tlsCfg = c.TLSConfig.Clone() }
+    if tlsCfg.MinVersion != 0 && tlsCfg.MinVersion < tls.VersionTLS13 { return nil, nil, ErrTLSVersion }
+    if tlsCfg.MaxVersion != 0 && tlsCfg.MaxVersion < tls.VersionTLS13 { return nil, nil, ErrTLSVersion }
+    if tlsCfg.MinVersion == 0 { tlsCfg.MinVersion = tls.VersionTLS13 }
     tlsCfg.NextProtos = []string{c.ALPN}
-
     handshake := c.HandshakeTimeout
-    if handshake == 0 {
-        handshake = DefaultHandshakeTimeout
-    }
+    if handshake == 0 { handshake = DefaultHandshakeTimeout }
     idle := c.IdleTimeout
-    if idle == 0 {
-        idle = DefaultIdleTimeout
-    }
-
+    if idle == 0 { idle = DefaultIdleTimeout }
     return tlsCfg, &quicgo.Config{
         HandshakeIdleTimeout:           handshake,
         MaxIdleTimeout:                 idle,
@@ -198,33 +152,9 @@ func Build(c Config) (*tls.Config, *quicgo.Config, error) {
 }
 ```
 
-Modify `quic/config.go` so the public errors remain aliases and `build` delegates exactly once:
+Modify `quic/config.go` so public sentinels alias `quicpolicy` sentinels and `build` delegates with `MaxIncomingStreams: quicpolicy.DefaultMaxIncomingStreams` and `MaxIncomingUniStreams: -1`. Update `quic/config_test.go` to assert the same values via `quicpolicy.Default...` constants.
 
-```go
-var (
-    ErrALPNRequired   = quicpolicy.ErrALPNRequired
-    ErrInvalidTimeout = quicpolicy.ErrInvalidTimeout
-    ErrTLSVersion     = quicpolicy.ErrTLSVersion
-)
-
-func (c Config) build() (*tls.Config, *quicgo.Config, error) {
-    return quicpolicy.Build(quicpolicy.Config{
-        TLSConfig:             c.TLSConfig,
-        ALPN:                  c.ALPN,
-        HandshakeTimeout:      c.HandshakeTimeout,
-        IdleTimeout:           c.IdleTimeout,
-        EnableDatagrams:       c.EnableDatagrams,
-        MaxIncomingStreams:    quicpolicy.DefaultMaxIncomingStreams,
-        MaxIncomingUniStreams: -1,
-    })
-}
-```
-
-Update `quic/config_test.go` references from the removed local constants to `quicpolicy.Default...` constants.
-
-- [ ] **Step 4: Verify policy and existing QUIC parity**
-
-Run:
+- [ ] **Step 4: Verify policy extraction parity**
 
 ```bash
 gofmt -w internal/quicpolicy quic/config.go quic/config_test.go
@@ -232,9 +162,9 @@ go test ./internal/quicpolicy ./quic
 go test -race ./quic
 ```
 
-Expected: PASS. Existing `quic` tests must not need semantic expectation changes.
+Expected: PASS with no changed public QUIC expectations.
 
-- [ ] **Step 5: Commit Task 1**
+- [ ] **Step 5: Commit**
 
 ```bash
 git add internal/quicpolicy/policy.go internal/quicpolicy/policy_test.go quic/config.go quic/config_test.go
@@ -251,45 +181,24 @@ git commit -m "refactor: share QUIC client policy"
 - Modify: `client/doc.go`
 
 **Interfaces:**
-- Consumes: `quicpolicy.Build` from Task 1.
-- Produces:
-  - `HTTP3Config`
-  - `HTTP3ErrorKind`
-  - `HTTP3Error`
-  - `ErrInvalidHTTP3Config`, `ErrHTTP3TLSVersion`, `ErrHTTP3TransportClosed`
-  - `normalizeHTTP3Config(HTTP3Config) (normalizedHTTP3Config, error)`.
+- Consumes: `quicpolicy.Build`.
+- Produces: `HTTP3Config`, `HTTP3ErrorKind`, `HTTP3Error`, `ErrInvalidHTTP3Config`, `ErrHTTP3TLSVersion`, `ErrHTTP3TransportClosed`, and `normalizeHTTP3Config`.
 
-- [ ] **Step 1: Write failing HTTP/3 config tests**
-
-Add tests in `client/http3_test.go`:
+- [ ] **Step 1: Write failing config tests**
 
 ```go
 func TestHTTP3ConfigDefaultsAndPolicy(t *testing.T) {
     got, err := normalizeHTTP3Config(HTTP3Config{})
-    if err != nil {
-        t.Fatal(err)
-    }
-    if got.tlsConfig.MinVersion != tls.VersionTLS13 {
-        t.Fatalf("TLS min = %d", got.tlsConfig.MinVersion)
-    }
-    if len(got.tlsConfig.NextProtos) != 1 || got.tlsConfig.NextProtos[0] != http3.NextProtoH3 {
-        t.Fatalf("ALPN = %v", got.tlsConfig.NextProtos)
-    }
-    if got.quicConfig.MaxIncomingStreams != -1 {
-        t.Fatalf("peer bidi streams = %d", got.quicConfig.MaxIncomingStreams)
-    }
-    if got.quicConfig.MaxIncomingUniStreams != 16 {
-        t.Fatalf("peer uni streams = %d", got.quicConfig.MaxIncomingUniStreams)
-    }
-    if got.quicConfig.EnableDatagrams || got.quicConfig.Allow0RTT {
-        t.Fatalf("datagrams=%v Allow0RTT=%v", got.quicConfig.EnableDatagrams, got.quicConfig.Allow0RTT)
-    }
-    if got.maxResponseHeaderBytes != 1<<20 {
-        t.Fatalf("header bound = %d", got.maxResponseHeaderBytes)
-    }
+    if err != nil { t.Fatal(err) }
+    if got.tlsConfig.MinVersion != tls.VersionTLS13 { t.Fatalf("TLS min = %d", got.tlsConfig.MinVersion) }
+    if len(got.tlsConfig.NextProtos) != 1 || got.tlsConfig.NextProtos[0] != http3.NextProtoH3 { t.Fatalf("ALPN = %v", got.tlsConfig.NextProtos) }
+    if got.quicConfig.MaxIncomingStreams != -1 { t.Fatalf("peer bidi = %d", got.quicConfig.MaxIncomingStreams) }
+    if got.quicConfig.MaxIncomingUniStreams != 16 { t.Fatalf("peer uni = %d", got.quicConfig.MaxIncomingUniStreams) }
+    if got.quicConfig.EnableDatagrams || got.quicConfig.Allow0RTT { t.Fatalf("datagrams=%v Allow0RTT=%v", got.quicConfig.EnableDatagrams, got.quicConfig.Allow0RTT) }
+    if got.maxResponseHeaderBytes != 1<<20 { t.Fatalf("header bound = %d", got.maxResponseHeaderBytes) }
 }
 
-func TestHTTP3ConfigRejectsInvalidValues(t *testing.T) {
+func TestHTTP3ConfigValidation(t *testing.T) {
     cases := []HTTP3Config{
         {HandshakeTimeout: -time.Second},
         {IdleTimeout: -time.Second},
@@ -298,36 +207,28 @@ func TestHTTP3ConfigRejectsInvalidValues(t *testing.T) {
         {TLSConfig: &tls.Config{MaxVersion: tls.VersionTLS12}},
     }
     for _, cfg := range cases {
-        if _, err := normalizeHTTP3Config(cfg); err == nil {
-            t.Fatalf("normalizeHTTP3Config(%+v) succeeded", cfg)
-        }
+        if _, err := normalizeHTTP3Config(cfg); err == nil { t.Fatalf("accepted %+v", cfg) }
     }
 }
 
-func TestHTTP3DatagramsAreEnabledAtBothLayers(t *testing.T) {
+func TestHTTP3DatagramPolicy(t *testing.T) {
     got, err := normalizeHTTP3Config(HTTP3Config{EnableDatagrams: true})
-    if err != nil {
-        t.Fatal(err)
-    }
-    if !got.enableDatagrams || !got.quicConfig.EnableDatagrams {
-        t.Fatalf("H3=%v QUIC=%v", got.enableDatagrams, got.quicConfig.EnableDatagrams)
-    }
+    if err != nil { t.Fatal(err) }
+    if !got.enableDatagrams || !got.quicConfig.EnableDatagrams { t.Fatalf("H3=%v QUIC=%v", got.enableDatagrams, got.quicConfig.EnableDatagrams) }
 }
 ```
 
-Add a platform-range helper test that constructs `MaxResponseHeaderBytes` larger than `int` when `strconv.IntSize == 32`, and on 64-bit directly test `math.MaxInt64` converts without overflow while negatives are rejected.
+Also add `TestHTTP3MaxResponseHeaderBytesFitsInt`: calculate `maxInt := uint64(^uint(0) >> 1)` and reject any positive `MaxResponseHeaderBytes` whose `uint64` value exceeds it before conversion to `int`.
 
-- [ ] **Step 2: Run the tests and verify red**
+- [ ] **Step 2: Verify red**
 
 ```bash
-go test ./client -run 'TestHTTP3Config|TestHTTP3Datagrams'
+go test ./client -run 'TestHTTP3(Config|Datagram|MaxResponse)'
 ```
 
 Expected: FAIL with undefined HTTP/3 symbols.
 
-- [ ] **Step 3: Implement configuration normalization**
-
-In `client/http3.go`, define exactly:
+- [ ] **Step 3: Implement normalization and API types**
 
 ```go
 type HTTP3Config struct {
@@ -353,29 +254,12 @@ type normalizedHTTP3Config struct {
 }
 ```
 
-Normalization must call:
+Call `quicpolicy.Build` with `ALPN: http3.NextProtoH3`, `MaxIncomingStreams: -1`, `MaxIncomingUniStreams: 16`, and `EnableDatagrams: cfg.EnableDatagrams`. Map policy TLS failures to `ErrHTTP3TLSVersion`; map negative timeout/header and integer-overflow cases to `ErrInvalidHTTP3Config`.
 
-```go
-quicpolicy.Build(quicpolicy.Config{
-    TLSConfig:             cfg.TLSConfig,
-    ALPN:                  http3.NextProtoH3,
-    HandshakeTimeout:      cfg.HandshakeTimeout,
-    IdleTimeout:           cfg.IdleTimeout,
-    EnableDatagrams:       cfg.EnableDatagrams,
-    MaxIncomingStreams:    -1,
-    MaxIncomingUniStreams: http3MaxIncomingUniStreams,
-})
-```
-
-Map `quicpolicy.ErrTLSVersion` to `ErrHTTP3TLSVersion`; map negative timeout/header values to `ErrInvalidHTTP3Config`. Validate `MaxResponseHeaderBytes` against platform `int` width before converting.
-
-- [ ] **Step 4: Implement stable HTTP/3 error types**
-
-Add:
+- [ ] **Step 4: Implement the error taxonomy**
 
 ```go
 type HTTP3ErrorKind uint8
-
 const (
     HTTP3ErrorUnknown HTTP3ErrorKind = iota
     HTTP3ErrorTransport
@@ -383,48 +267,26 @@ const (
     HTTP3ErrorClosed
 )
 
-type HTTP3Error struct {
-    Kind  HTTP3ErrorKind
-    Cause error
-}
-
-func (e *HTTP3Error) Error() string {
-    if e == nil {
-        return "<nil>"
-    }
-    return fmt.Sprintf("client: HTTP/3 %d: %v", e.Kind, e.Cause)
-}
-
-func (e *HTTP3Error) Unwrap() error {
-    if e == nil {
-        return nil
-    }
-    return e.Cause
-}
+type HTTP3Error struct { Kind HTTP3ErrorKind; Cause error }
+func (e *HTTP3Error) Error() string { if e == nil { return "<nil>" }; return fmt.Sprintf("client: HTTP/3 %d: %v", e.Kind, e.Cause) }
+func (e *HTTP3Error) Unwrap() error { if e == nil { return nil }; return e.Cause }
 ```
 
-Add the sentinels from the spec. Do not add header/body error kinds.
+Add the three sentinel errors from the spec. Do not add header/body categories.
 
-- [ ] **Step 5: Verify Task 2**
+- [ ] **Step 5: Verify and commit**
 
 ```bash
 gofmt -w client/http3.go client/http3_test.go client/doc.go
 go test ./client ./internal/quicpolicy ./quic
 go vet ./client ./internal/quicpolicy ./quic
-```
-
-Expected: PASS.
-
-- [ ] **Step 6: Commit Task 2**
-
-```bash
 git add client/http3.go client/http3_test.go client/doc.go
 git commit -m "client: add HTTP/3 configuration policy"
 ```
 
 ---
 
-### Task 3: Implement non-early shared UDP dial bridge and transport lifecycle
+### Task 3: Implement non-early shared UDP dial bridge and lifecycle
 
 **Files:**
 - Create: `client/http3_dial.go`
@@ -432,59 +294,44 @@ git commit -m "client: add HTTP/3 configuration policy"
 - Modify: `client/http3_test.go`
 
 **Interfaces:**
-- Consumes: `normalizedHTTP3Config` from Task 2.
-- Produces:
-  - `HTTP3Transport`
-  - `NewHTTP3Transport(HTTP3Config) (*HTTP3Transport, error)`
-  - `NewHTTP3Client(HTTP3Config) (*http.Client, error)`
-  - `(*HTTP3Transport).RoundTrip`, `Close`, `CloseIdleConnections`
-  - internal `http3Dialer` that resolves with context and calls only `quic.Transport.Dial`.
+- Consumes: normalized config from Task 2.
+- Produces: `HTTP3Transport`, `NewHTTP3Transport`, `NewHTTP3Client`, `RoundTrip`, `Close`, `CloseIdleConnections`, and private `http3Dialer`.
 
-- [ ] **Step 1: Write lifecycle and dial-path tests first**
-
-Add tests:
+- [ ] **Step 1: Write lifecycle tests**
 
 ```go
 func TestHTTP3TransportCloseIsIdempotent(t *testing.T) {
     tr, err := NewHTTP3Transport(HTTP3Config{})
-    if err != nil {
-        t.Fatal(err)
-    }
-    if err := tr.Close(); err != nil {
-        t.Fatal(err)
-    }
-    if err := tr.Close(); err != nil {
-        t.Fatalf("second Close: %v", err)
-    }
-
+    if err != nil { t.Fatal(err) }
+    if err := tr.Close(); err != nil { t.Fatal(err) }
+    if err := tr.Close(); err != nil { t.Fatalf("second Close: %v", err) }
     req, _ := http.NewRequest(http.MethodGet, "https://127.0.0.1/", nil)
     _, err = tr.RoundTrip(req)
-    if !errors.Is(err, ErrHTTP3TransportClosed) {
-        t.Fatalf("RoundTrip after Close = %v", err)
-    }
+    if !errors.Is(err, ErrHTTP3TransportClosed) { t.Fatalf("after close: %v", err) }
 }
 
 func TestHTTP3ClientHasNoWholeRequestTimeout(t *testing.T) {
     c, err := NewHTTP3Client(HTTP3Config{})
-    if err != nil {
-        t.Fatal(err)
-    }
-    if c.Timeout != 0 {
-        t.Fatalf("Client.Timeout = %v", c.Timeout)
-    }
+    if err != nil { t.Fatal(err) }
+    if c.Timeout != 0 { t.Fatalf("Timeout = %v", c.Timeout) }
     _ = c.Transport.(*HTTP3Transport).Close()
 }
 ```
 
-For the dial path, inject a private `dialQUIC` function into `http3Dialer`; the test should record that the production path reaches that function after resolver/UDP setup. The production default must be exactly:
+- [ ] **Step 2: Write a dial-path seam test**
+
+Define in production:
 
 ```go
-func(tr *quicgo.Transport, ctx context.Context, addr net.Addr, tlsCfg *tls.Config, qcfg *quicgo.Config) (*quicgo.Conn, error) {
-    return tr.Dial(ctx, addr, tlsCfg, qcfg)
+type http3Resolver interface {
+    LookupIPAddr(context.Context, string) ([]net.IPAddr, error)
+    LookupPort(context.Context, string, string) (int, error)
 }
 ```
 
-- [ ] **Step 2: Run and verify red**
+In the test, use a resolver that returns `127.0.0.1` and port `443`, and a `dialQUIC` closure that sets `called = true` and returns a sentinel error. Assert `http3Dialer.Dial` returns that sentinel and `called` is true. This proves the custom path is used without requiring a real QUIC connection.
+
+- [ ] **Step 3: Verify red**
 
 ```bash
 go test ./client -run 'TestHTTP3TransportClose|TestHTTP3ClientHasNoWholeRequestTimeout|TestHTTP3Dial'
@@ -492,16 +339,9 @@ go test ./client -run 'TestHTTP3TransportClose|TestHTTP3ClientHasNoWholeRequestT
 
 Expected: FAIL because constructors/dialer do not exist.
 
-- [ ] **Step 3: Implement `http3Dialer`**
-
-Use this private structure:
+- [ ] **Step 4: Implement `http3Dialer`**
 
 ```go
-type http3Resolver interface {
-    LookupIPAddr(context.Context, string) ([]net.IPAddr, error)
-    LookupPort(context.Context, string, string) (int, error)
-}
-
 type http3Dialer struct {
     mu        sync.Mutex
     resolver  http3Resolver
@@ -513,22 +353,17 @@ type http3Dialer struct {
 }
 ```
 
-`Dial` must:
+Production `dialQUIC` is exactly:
 
-1. `net.SplitHostPort(addr)`.
-2. resolve the port with `LookupPort(ctx, "udp", port)`.
-3. resolve addresses with `LookupIPAddr(ctx, host)`.
-4. fail if the returned address list is empty.
-5. use the first returned IP deterministically.
-6. lazily create one `udp4`/`udp6`-capable UDP socket using `net.ListenUDP("udp", nil)`.
-7. lazily create one `quicgo.Transport{Conn: udp}`.
-8. call only `dialQUIC`, whose production implementation calls `transport.Dial`.
+```go
+func(tr *quicgo.Transport, ctx context.Context, addr net.Addr, tlsCfg *tls.Config, qcfg *quicgo.Config) (*quicgo.Conn, error) {
+    return tr.Dial(ctx, addr, tlsCfg, qcfg)
+}
+```
 
-`Close` must close the `quicgo.Transport` and then the UDP socket, and be safe if initialization never happened.
+`Dial` must split host/port, call `resolver.LookupPort(ctx, "udp", port)`, call `resolver.LookupIPAddr(ctx, host)`, reject an empty address list, use the first IP deterministically, lazily allocate `net.ListenUDP("udp", nil)`, lazily construct `quicgo.Transport{Conn: udp}`, then call `dialQUIC`. `Close` closes the QUIC transport then UDP socket and is safe before initialization.
 
-- [ ] **Step 4: Implement `HTTP3Transport`**
-
-Use:
+- [ ] **Step 5: Implement `HTTP3Transport`**
 
 ```go
 type HTTP3Transport struct {
@@ -540,46 +375,43 @@ type HTTP3Transport struct {
 }
 ```
 
-`NewHTTP3Transport` must build `raw := &http3.Transport{...}` with:
+Constructor wiring:
 
 ```go
-raw.TLSClientConfig = normalized.tlsConfig
-raw.QUICConfig = normalized.quicConfig
-raw.EnableDatagrams = normalized.enableDatagrams
-raw.MaxResponseHeaderBytes = normalized.maxResponseHeaderBytes
-raw.DisableCompression = normalized.disableCompression
+raw := &http3.Transport{
+    TLSClientConfig:        n.tlsConfig,
+    QUICConfig:             n.quicConfig,
+    EnableDatagrams:        n.enableDatagrams,
+    MaxResponseHeaderBytes: n.maxResponseHeaderBytes,
+    DisableCompression:     n.disableCompression,
+}
 raw.Dial = dialer.Dial
 ```
 
-`RoundTrip` short-circuits when `closed` is set. `Close` order is `raw.Close()` then `dialer.Close()`, preserving the first non-nil error. `CloseIdleConnections` delegates to `raw.CloseIdleConnections()` and does not close the shared UDP socket.
+`RoundTrip` checks `closed` before calling `raw.RoundTrip`. `Close` sets `closed`, calls `raw.Close`, then always calls `dialer.Close`, returning the first non-nil error. `CloseIdleConnections` delegates to `raw` and does not close the shared UDP socket.
 
-- [ ] **Step 5: Implement runtime error mapping**
+- [ ] **Step 6: Implement runtime error mapping**
 
-`mapHTTP3Error(err error)` must preserve `context.Canceled` and `context.DeadlineExceeded`; map `*http3.Error` to `HTTP3ErrorProtocol`; map QUIC transport/application/timeout/reset/version-negotiation errors to `HTTP3ErrorTransport`; and map `http3.ErrTransportClosed` to an `HTTP3Error{Kind: HTTP3ErrorClosed, Cause: errors.Join(ErrHTTP3TransportClosed, err)}`.
+Preserve context cancellation/deadline. Map `*http3.Error` to protocol, QUIC handshake/transport/application/reset/version/timeout errors to transport, and `http3.ErrTransportClosed` to:
 
-Do not classify ordinary request validation errors unless they match a stable type.
+```go
+&HTTP3Error{Kind: HTTP3ErrorClosed, Cause: errors.Join(ErrHTTP3TransportClosed, err)}
+```
 
-- [ ] **Step 6: Verify no early-dial reference exists in client implementation**
+Leave unrecognized request-validation errors unwrapped.
 
-Run:
+- [ ] **Step 7: Verify no early dial and run race tests**
 
 ```bash
 grep -R "DialEarly\|DialAddrEarly" client internal/quicpolicy || true
-```
-
-Expected: no production-code match. Test comments may mention the string only if clearly scoped.
-
-Then run:
-
-```bash
 gofmt -w client/http3.go client/http3_dial.go client/http3_test.go
 go test ./client ./internal/quicpolicy ./quic
 go test -race ./client
 ```
 
-Expected: PASS.
+Expected: no production early-dial match; all tests PASS.
 
-- [ ] **Step 7: Commit Task 3**
+- [ ] **Step 8: Commit**
 
 ```bash
 git add client/http3.go client/http3_dial.go client/http3_test.go
@@ -588,111 +420,104 @@ git commit -m "client: add HTTP/3 transport lifecycle"
 
 ---
 
-### Task 4: Add deterministic HTTP/3 loopback, streaming, cancellation and multiplexing
+### Task 4: Add deterministic H3 loopback, streaming, cancellation and multiplexing
 
 **Files:**
 - Create: `client/http3_integration_test.go`
-- Modify: `client/http3_test.go` only if a shared test helper belongs there.
 
 **Interfaces:**
-- Consumes: public constructors and lifecycle from Task 3.
-- Produces: deterministic local proof of standard `net/http` semantics over H3.
+- Consumes: Task 3 public constructors.
+- Produces: local H3 integration helper usable by both tests and benchmarks.
 
-- [ ] **Step 1: Build a reusable local H3 test server helper**
-
-In `client/http3_integration_test.go`, generate an Ed25519 self-signed certificate valid for `localhost`, build trusted client roots, then create a UDP socket and non-early QUIC listener:
+- [ ] **Step 1: Implement a benchmark-compatible test helper**
 
 ```go
-pc, err := net.ListenUDP("udp4", &net.UDPAddr{IP: net.ParseIP("127.0.0.1"), Port: 0})
-if err != nil { t.Fatal(err) }
-ln, err := quicgo.Listen(pc, http3.ConfigureTLSConfig(serverTLS), &quicgo.Config{MaxIdleTimeout: 5 * time.Second})
-if err != nil { t.Fatal(err) }
-server := &http3.Server{Handler: handler}
-go func() { _ = server.ServeListener(ln) }()
+type http3TestTB interface {
+    Helper()
+    Fatal(args ...any)
+    Cleanup(func())
+}
+
+func http3TLSConfigs(tb http3TestTB) (*tls.Config, *tls.Config) {
+    tb.Helper()
+    _, key, err := ed25519.GenerateKey(rand.Reader)
+    if err != nil { tb.Fatal(err) }
+    now := time.Now()
+    tmpl := &x509.Certificate{
+        SerialNumber: big.NewInt(1),
+        Subject: pkix.Name{CommonName: "localhost"},
+        DNSNames: []string{"localhost"},
+        NotBefore: now.Add(-time.Minute),
+        NotAfter: now.Add(time.Hour),
+        KeyUsage: x509.KeyUsageDigitalSignature,
+        ExtKeyUsage: []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
+    }
+    der, err := x509.CreateCertificate(rand.Reader, tmpl, tmpl, key.Public(), key)
+    if err != nil { tb.Fatal(err) }
+    cert, err := x509.ParseCertificate(der)
+    if err != nil { tb.Fatal(err) }
+    roots := x509.NewCertPool(); roots.AddCert(cert)
+    server := &tls.Config{Certificates: []tls.Certificate{{Certificate: [][]byte{der}, PrivateKey: key}}, MinVersion: tls.VersionTLS13}
+    client := &tls.Config{RootCAs: roots, ServerName: "localhost", MinVersion: tls.VersionTLS13}
+    return server, client
+}
+
+func startHTTP3Server(tb http3TestTB, handler http.Handler) (string, *tls.Config) {
+    tb.Helper()
+    serverTLS, clientTLS := http3TLSConfigs(tb)
+    pc, err := net.ListenUDP("udp4", &net.UDPAddr{IP: net.ParseIP("127.0.0.1"), Port: 0})
+    if err != nil { tb.Fatal(err) }
+    ln, err := quicgo.Listen(pc, http3.ConfigureTLSConfig(serverTLS), &quicgo.Config{MaxIdleTimeout: 5 * time.Second})
+    if err != nil { tb.Fatal(err) }
+    server := &http3.Server{Handler: handler}
+    go func() { _ = server.ServeListener(ln) }()
+    tb.Cleanup(func() { _ = server.Close(); _ = ln.Close(); _ = pc.Close() })
+    return "https://" + ln.Addr().String(), clientTLS
+}
 ```
 
-The helper returns `https://<listener address>`, a client TLS config with `ServerName: "localhost"`, and a close function that closes server, listener and UDP socket.
-
-- [ ] **Step 2: Write and run a failing H3 loopback test**
+- [ ] **Step 2: Add loopback test**
 
 ```go
 func TestHTTP3Loopback(t *testing.T) {
-    url, tlsCfg, closeServer := startHTTP3Server(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-        w.Header().Set("X-Proto", r.Proto)
+    url, tlsCfg := startHTTP3Server(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
         _, _ = io.WriteString(w, "ok")
     }))
-    defer closeServer()
-
     tr, err := NewHTTP3Transport(HTTP3Config{TLSConfig: tlsCfg})
     if err != nil { t.Fatal(err) }
     defer tr.Close()
-
     resp, err := (&http.Client{Transport: tr}).Get(url)
     if err != nil { t.Fatal(err) }
     defer resp.Body.Close()
-    if resp.ProtoMajor != 3 {
-        t.Fatalf("protocol = %s", resp.Proto)
-    }
+    if resp.ProtoMajor != 3 { t.Fatalf("protocol = %s", resp.Proto) }
 }
 ```
 
-Run:
+Run `go test ./client -run TestHTTP3Loopback -count=1`; make it green before adding more integration cases.
 
-```bash
-go test ./client -run TestHTTP3Loopback -count=1
-```
+- [ ] **Step 3: Add response streaming**
 
-Expected before all helper/wiring is correct: FAIL; after fixes: PASS.
+Use channels `firstWritten` and `releaseSecond`. Handler writes `first`, calls `Flush`, closes `firstWritten`, waits, then writes `second`. Client must read `first` before closing `releaseSecond`.
 
-- [ ] **Step 3: Add response and request streaming tests**
+- [ ] **Step 4: Add request streaming**
 
-For response streaming, have the handler write/flush `first`, block on a channel, then write `second`; assert the client can read `first` before releasing the second write.
+Use `io.Pipe`; start `client.Do(req)` in a goroutine, write `first` and `second` to the pipe, close the writer, and assert the handler reads `firstsecond`.
 
-For request streaming, use `io.Pipe()` as `Request.Body`; write two chunks after `client.Do` starts and assert the handler receives the concatenated body without requiring the whole body up front.
+- [ ] **Step 5: Add active cancellation**
 
-Run:
+Handler closes `entered` then waits on `r.Context().Done()`. Client cancels the request context after `<-entered`; assert `errors.Is(err, context.Canceled)`.
 
-```bash
-go test ./client -run 'TestHTTP3(Response|Request)Streaming' -count=1
-```
+- [ ] **Step 6: Add reuse and multiplexing**
 
-Expected: PASS.
+Set `server.ConnContext` in a second helper variant to increment `atomic.Int32`. Send 16 concurrent requests and require all 16 to succeed with connection count 1. Then send two sequential requests and require the count remain 1.
 
-- [ ] **Step 4: Add active-request cancellation test**
-
-Use a handler that signals entry and waits on `r.Context().Done()`. Cancel the request context and assert:
-
-```go
-if !errors.Is(err, context.Canceled) {
-    t.Fatalf("error = %v", err)
-}
-```
-
-- [ ] **Step 5: Add connection reuse and concurrent multiplexing test**
-
-Use `http3.Server.ConnContext` with an `atomic.Int32` counter. Send at least 16 concurrent requests to one origin and assert all complete while the connection count remains 1. Then send two sequential requests and assert the count still remains 1.
-
-Run:
-
-```bash
-go test ./client -run 'TestHTTP3(ConnectionReuse|ConcurrentMultiplex)' -count=10
-```
-
-Expected: PASS for all repetitions.
-
-- [ ] **Step 6: Verify Task 4 under race detector**
+- [ ] **Step 7: Stress/race verify and commit**
 
 ```bash
 gofmt -w client/http3_integration_test.go
+go test ./client -run 'TestHTTP3(Loopback|ResponseStreaming|RequestStreaming|Cancellation|ConnectionReuse|ConcurrentMultiplex)' -count=10
 go test -race ./client -run 'TestHTTP3' -count=1
-```
-
-Expected: PASS with no race report.
-
-- [ ] **Step 7: Commit Task 4**
-
-```bash
-git add client/http3_integration_test.go client/http3_test.go
+git add client/http3_integration_test.go
 git commit -m "test: cover HTTP/3 streaming and multiplexing"
 ```
 
@@ -705,51 +530,67 @@ git commit -m "test: cover HTTP/3 streaming and multiplexing"
 - Modify: `client/http3_test.go`
 
 **Interfaces:**
-- Consumes: completed H3 transport.
-- Produces: acceptance coverage for no fallback, DNS/dial cancellation, handshake failure, resource cleanup and active-request close-idle behavior.
+- Consumes: completed H3 transport and private resolver seam.
+- Produces: acceptance coverage for failure classification and cleanup.
 
 - [ ] **Step 1: Add no-fallback test**
 
-Start an `httptest.NewTLSServer` and first prove its ordinary TCP client succeeds. Then create `NewHTTP3Transport` targeting the same `https://host:port` with a short `HandshakeTimeout` and the test server TLS config.
-
-The H3 request must fail. The test must not inspect an HTTP response because any successful response would mean fallback occurred:
-
 ```go
-resp, err := h3Client.Get(tcpServer.URL)
-if err == nil {
+func TestHTTP3NoFallbackToTCP(t *testing.T) {
+    tcp := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusNoContent) }))
+    defer tcp.Close()
+    resp, err := tcp.Client().Get(tcp.URL)
+    if err != nil { t.Fatal(err) }
     resp.Body.Close()
-    t.Fatal("HTTP/3 client silently fell back to TCP HTTP")
+
+    tlsCfg := tcp.Client().Transport.(*http.Transport).TLSClientConfig.Clone()
+    tr, err := NewHTTP3Transport(HTTP3Config{TLSConfig: tlsCfg, HandshakeTimeout: 150 * time.Millisecond})
+    if err != nil { t.Fatal(err) }
+    defer tr.Close()
+    resp, err = (&http.Client{Transport: tr}).Get(tcp.URL)
+    if err == nil {
+        resp.Body.Close()
+        t.Fatal("HTTP/3 client silently fell back to TCP HTTP")
+    }
 }
 ```
 
-- [ ] **Step 2: Add ALPN/TLS handshake failure test**
+- [ ] **Step 2: Add ALPN mismatch test**
 
-Run a local QUIC listener whose TLS `NextProtos` deliberately excludes `h3`; assert the client request fails with `HTTP3ErrorTransport` and preserves the underlying cause through `errors.As`/`errors.Unwrap`.
+Create a UDP socket and QUIC listener using a TLS config with `NextProtos: []string{"not-h3"}`. Start `ln.Accept` in a goroutine so the handshake is driven. Request the listener address with H3; require an error and `errors.As(err, &HTTP3Error{})` with kind `HTTP3ErrorTransport`.
 
-- [ ] **Step 3: Add DNS/connection cancellation test using the resolver seam**
+- [ ] **Step 3: Add DNS cancellation test with exact fake resolver**
 
-Inject a test resolver whose `LookupIPAddr` blocks until `ctx.Done()` and returns `context.Cause(ctx)`. Cancel the request context and assert `errors.Is(err, context.Canceled)` and that no UDP transport was initialized before DNS completed.
+```go
+type blockingHTTP3Resolver struct{ entered chan struct{} }
+func (r *blockingHTTP3Resolver) LookupPort(context.Context, string, string) (int, error) { return 443, nil }
+func (r *blockingHTTP3Resolver) LookupIPAddr(ctx context.Context, host string) ([]net.IPAddr, error) {
+    close(r.entered)
+    <-ctx.Done()
+    return nil, context.Cause(ctx)
+}
+```
 
-- [ ] **Step 4: Add blackhole QUIC cleanup test**
+Replace `tr.dialer.resolver` in the package-local test, start a request, wait for `entered`, cancel, assert `errors.Is(err, context.Canceled)`, then inspect `tr.dialer.udp` under its mutex and require it is still nil.
 
-Bind a local UDP socket that reads and discards packets. Issue a request with a bounded context. After the request returns, call `Close()` in a goroutine and require it to complete within one second. Call `Close()` a second time and require the same stable result.
+- [ ] **Step 4: Add blackhole cleanup test**
 
-This is the deterministic resource-cleanup assertion; do not use flaky global goroutine-count comparisons.
+Bind `net.ListenUDP("udp4", 127.0.0.1:0)` and run a goroutine that repeatedly `ReadFromUDP` and discards bytes. Issue an H3 request to that port with a 250ms context timeout. After it fails, invoke `tr.Close()` in a buffered result channel and require completion before `time.After(time.Second)`. Call `Close` again and require the same stable result. Do not compare global goroutine counts.
 
 - [ ] **Step 5: Add `CloseIdleConnections` active-request test**
 
-Start one blocking request, call `tr.CloseIdleConnections()`, release the handler, and assert the active request still succeeds. Then issue another request and allow either connection reuse or a new connection, but never failure caused by close-idle.
+Handler closes `entered`, waits on `release`, then writes 204. Start request, wait for `entered`, call `tr.CloseIdleConnections()`, close `release`, and assert the request succeeds. Issue one additional request and assert it also succeeds.
 
-- [ ] **Step 6: Run failure suite repeatedly**
+- [ ] **Step 6: Repeat failure suite under race**
 
 ```bash
 go test ./client -run 'TestHTTP3(NoFallback|ALPN|DNS|Blackhole|CloseIdle)' -count=20
 go test -race ./client -run 'TestHTTP3(NoFallback|ALPN|DNS|Blackhole|CloseIdle)' -count=1
 ```
 
-Expected: PASS without intermittent timeout/race failures.
+Expected: PASS with no intermittent timeout/race failure.
 
-- [ ] **Step 7: Commit Task 5**
+- [ ] **Step 7: Commit**
 
 ```bash
 git add client/http3_integration_test.go client/http3_test.go
@@ -765,28 +606,20 @@ git commit -m "test: enforce HTTP/3 failure semantics"
 - Create: `docs/http3-client.md`
 - Modify: `docs/http-client.md`
 - Modify: `client/doc.go`
-- Do not modify `.github/workflows/netpoll-v2.yml` unless a real H3 platform failure demonstrates a necessary CI change.
 
 **Interfaces:**
-- Consumes: complete Phase 3 API.
-- Produces: user-facing ownership/security docs and regression benchmark.
+- Consumes: complete Phase 3 API and `startHTTP3Server(http3TestTB, http.Handler)` from Task 4.
+- Produces: ownership/security docs and regression benchmark.
 
-- [ ] **Step 1: Add HTTP/3 multiplex benchmark**
-
-Use the same local server helper and one long-lived transport:
+- [ ] **Step 1: Add multiplex benchmark**
 
 ```go
 func BenchmarkHTTP3MultiplexedRequests(b *testing.B) {
-    url, tlsCfg, closeServer := startHTTP3Server(b, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-        _, _ = io.WriteString(w, "ok")
-    }))
-    defer closeServer()
-
+    url, tlsCfg := startHTTP3Server(b, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { _, _ = io.WriteString(w, "ok") }))
     tr, err := NewHTTP3Transport(HTTP3Config{TLSConfig: tlsCfg})
     if err != nil { b.Fatal(err) }
     defer tr.Close()
     client := &http.Client{Transport: tr}
-
     b.ReportAllocs()
     b.ResetTimer()
     b.RunParallel(func(pb *testing.PB) {
@@ -800,33 +633,17 @@ func BenchmarkHTTP3MultiplexedRequests(b *testing.B) {
 }
 ```
 
-If the helper currently accepts only `*testing.T`, refactor it to a small interface containing `Helper`, `Fatal`, `Cleanup` rather than duplicate server setup.
-
 - [ ] **Step 2: Write `docs/http3-client.md`**
 
-Document these exact points:
+Document: H3-only HTTPS, no fallback, TLS 1.3/ALPN `h3`, cloned TLS config, non-early dial/0-RTT disabled, opt-in datagrams, transport ownership, `Close`/`CloseIdleConnections`, request-context cancellation/streaming, and zero `http.Client.Timeout`. Link it from `docs/http-client.md` without changing HTTP1/2 protocol semantics.
 
-- `NewHTTP3Transport` is H3-only and accepts only HTTPS requests.
-- no H3→H2/H1 fallback exists.
-- TLS 1.3+ and ALPN `h3` are enforced.
-- caller TLS config is cloned; certificate verification is ordinary Go TLS policy.
-- 0-RTT is disabled because the transport uses non-early QUIC dial.
-- datagrams are opt-in and do not imply WebTransport/MASQUE support.
-- `HTTP3Transport` owns its H3 pool/shared QUIC transport/UDP socket and should be closed.
-- `CloseIdleConnections` leaves active multiplexed requests alone.
-- request contexts govern cancellation and streaming; `http.Client.Timeout` remains zero.
-
-Add a short link from `docs/http-client.md` to the H3-specific document while keeping HTTP1/2 protocol-selection text unchanged.
-
-- [ ] **Step 3: Run benchmark as a smoke check**
+- [ ] **Step 3: Benchmark smoke check**
 
 ```bash
 go test ./client -run '^$' -bench BenchmarkHTTP3MultiplexedRequests -benchtime=100x -count=1
 ```
 
-Expected: benchmark completes without error. No numeric threshold is required.
-
-- [ ] **Step 4: Run complete local verification**
+- [ ] **Step 4: Run complete verification**
 
 ```bash
 test -z "$(gofmt -l .)"
@@ -837,11 +654,9 @@ go test -count=1 ./...
 go test -race -count=1 ./...
 ```
 
-Expected: every command exits 0; `go mod tidy` produces no module diff.
+Every command must exit 0 before a completion claim.
 
-- [ ] **Step 5: Verify public API does not leak quic-go types**
-
-Run:
+- [ ] **Step 5: Verify exported API boundary**
 
 ```bash
 go doc github.com/qigao/ogrenet/client
@@ -849,26 +664,24 @@ go doc github.com/qigao/ogrenet/quic
 grep -R "github.com/quic-go/quic-go" client/*.go quic/*.go
 ```
 
-The grep may show private implementation imports, but `go doc` exported signatures must not contain `quic-go` types.
+Private imports are allowed. Exported `go doc` signatures must not expose dependency concrete types.
 
-- [ ] **Step 6: Commit Task 6**
+- [ ] **Step 6: Commit docs/benchmark**
 
 ```bash
 git add client/http3_benchmark_test.go docs/http3-client.md docs/http-client.md client/doc.go
 git commit -m "docs: document HTTP/3 client runtime"
 ```
 
-- [ ] **Step 7: Review stacked diff before PR work**
+- [ ] **Step 7: Review stacked diff**
 
 ```bash
 git diff --stat feat/quic-client-runtime...HEAD
 git diff feat/quic-client-runtime...HEAD -- client quic internal/quicpolicy docs go.mod go.sum
 ```
 
-Expected: only Phase 3 shared-policy/H3/docs changes; no unrelated repository edits.
+Expected: only Phase 3 shared-policy/H3/docs changes.
 
-- [ ] **Step 8: Push and create/update the stacked Draft PR only after explicit authorization**
+- [ ] **Step 8: Push and create/update stacked Draft PR only after explicit authorization**
 
-The PR base must be `feat/quic-client-runtime`, head `feat/http3-client-runtime`, and remain Draft. Its body must cite #41 and #38, state that #43 is the stacked prerequisite, state that H3 fallback and 0-RTT are absent, and report the actual GitHub Actions run rather than claiming CI before it finishes.
-
-After #43 merges, retarget/rebase this PR to `master` and re-verify the resulting diff before merge.
+Base: `feat/quic-client-runtime`. Head: `feat/http3-client-runtime`. Keep Draft. Cite #41/#38 and #43 as prerequisite. State explicitly that fallback and 0-RTT are absent. Report actual GitHub Actions results only after the run completes. After #43 merges, retarget/rebase to `master` and re-verify the diff before merge.
