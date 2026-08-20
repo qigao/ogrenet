@@ -20,6 +20,8 @@ type Engine struct {
 	closed    bool
 	listeners map[*listener]struct{}
 	conns     map[*conn]struct{}
+	done      chan struct{}
+	doneOnce  sync.Once
 	nextID    atomic.Uint64
 }
 
@@ -38,6 +40,7 @@ func New(opts ...Option) (*Engine, error) {
 		cfg:       cfg,
 		listeners: make(map[*listener]struct{}),
 		conns:     make(map[*conn]struct{}),
+		done:      make(chan struct{}),
 	}, nil
 }
 
@@ -106,10 +109,29 @@ func (e *Engine) Dial(ctx context.Context, network, address string, h ogrenet.Ha
 	return c, nil
 }
 
+// Done closes after Close has been initiated and every listener and connection
+// has reached its own Done barrier.
+func (e *Engine) Done() <-chan struct{} { return e.done }
+
+// Shutdown initiates shutdown and waits for the Engine Done barrier or ctx.
+// Do not call Shutdown synchronously from a Handler callback on the same Engine:
+// that callback is part of the barrier being awaited.
+func (e *Engine) Shutdown(ctx context.Context) error {
+	if ctx == nil {
+		return ErrNilContext
+	}
+	closeErr := e.Close()
+	select {
+	case <-e.done:
+		return closeErr
+	case <-ctx.Done():
+		return errors.Join(closeErr, ctx.Err())
+	}
+}
+
 // Close initiates shutdown of all listeners and connections and is idempotent.
-// It does not wait for user callbacks to return. Wait on each Listener.Done or
-// Conn.Done when a shutdown barrier is required; Conn.Done closes only after
-// both I/O loops have stopped, queued sends are released, and OnClose returns.
+// It does not wait for user callbacks to return. Use Shutdown or wait on Done
+// when a global shutdown barrier is required.
 func (e *Engine) Close() error {
 	e.mu.Lock()
 	if e.closed {
@@ -125,6 +147,7 @@ func (e *Engine) Close() error {
 	for c := range e.conns {
 		conns = append(conns, c)
 	}
+	e.maybeDoneLocked()
 	e.mu.Unlock()
 
 	var errs []error
@@ -186,6 +209,7 @@ func (e *Engine) addListener(l *listener) error {
 func (e *Engine) removeListener(l *listener) {
 	e.mu.Lock()
 	delete(e.listeners, l)
+	e.maybeDoneLocked()
 	e.mu.Unlock()
 }
 
@@ -202,7 +226,14 @@ func (e *Engine) addConn(c *conn) error {
 func (e *Engine) removeConn(c *conn) {
 	e.mu.Lock()
 	delete(e.conns, c)
+	e.maybeDoneLocked()
 	e.mu.Unlock()
+}
+
+func (e *Engine) maybeDoneLocked() {
+	if e.closed && len(e.listeners) == 0 && len(e.conns) == 0 {
+		e.doneOnce.Do(func() { close(e.done) })
+	}
 }
 
 func normalizeHandler(h ogrenet.Handler) ogrenet.Handler {
