@@ -170,18 +170,20 @@ func (e *Engine) adopt(raw net.Conn, h ogrenet.Handler) (*conn, error) {
 		return nil, err
 	}
 	c := &conn{
-		engine:   e,
-		id:       e.nextID.Add(1),
-		raw:      raw,
-		framer:   framer,
-		handler:  h,
-		queue:    make(chan outbound, e.cfg.writeQueue),
-		quota:    newByteQuota(e.cfg.maxQueuedBytes),
-		gate:     newSendGate(),
-		closing:  make(chan struct{}),
-		done:     make(chan struct{}),
-		readSize: e.cfg.readBuffer,
-		maxRead:  e.cfg.maxBufferedRead,
+		engine:     e,
+		id:         e.nextID.Add(1),
+		raw:        raw,
+		framer:     framer,
+		handler:    h,
+		queue:      make(chan outbound, e.cfg.writeQueue),
+		quota:      newByteQuota(e.cfg.maxQueuedBytes),
+		gate:       newSendGate(),
+		frameSlots: make(chan struct{}, e.cfg.writeQueue+1),
+		encodeSlot: make(chan struct{}, 1),
+		closing:    make(chan struct{}),
+		done:       make(chan struct{}),
+		readSize:   e.cfg.readBuffer,
+		maxRead:    e.cfg.maxBufferedRead,
 	}
 	if err := e.addConn(c); err != nil {
 		return nil, err
