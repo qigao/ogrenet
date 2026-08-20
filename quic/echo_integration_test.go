@@ -94,7 +94,7 @@ func TestStreamEcho(t *testing.T) {
 	close(clientClosed)
 }
 
-func echoTLSConfigs(t *testing.T) (*tls.Config, *tls.Config) {
+func echoTLSConfigs(t testing.TB) (*tls.Config, *tls.Config) {
 	t.Helper()
 	_, key, err := ed25519.GenerateKey(rand.Reader)
 	if err != nil {
