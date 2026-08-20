@@ -6,6 +6,8 @@ import (
 	"bytes"
 	"encoding/hex"
 	"testing"
+
+	"github.com/qigao/ogrenet/secure"
 )
 
 func TestSM3KnownVector(t *testing.T) {
@@ -39,6 +41,28 @@ func TestSM4GCMRoundTripAndTamper(t *testing.T) {
 	sealed[len(sealed)-1] ^= 1
 	if _, err := c.Open(nil, sealed); err == nil {
 		t.Fatal("tampered SM4-GCM ciphertext authenticated successfully")
+	}
+}
+
+func TestSM4GCMAssociatedData(t *testing.T) {
+	c, err := NewSM4GCM([]byte("0123456789abcdef"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var authenticated secure.AuthenticatedCipher = c
+	sealed, err := authenticated.SealAAD(nil, []byte("payload"), []byte("header-a"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	opened, err := authenticated.OpenAAD(nil, sealed, []byte("header-a"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(opened, []byte("payload")) {
+		t.Fatalf("got %q", opened)
+	}
+	if _, err := authenticated.OpenAAD(nil, sealed, []byte("header-b")); err == nil {
+		t.Fatal("ciphertext authenticated with different associated data")
 	}
 }
 
