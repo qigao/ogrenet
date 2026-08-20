@@ -31,7 +31,7 @@ type listener struct {
 
 func (l *listener) Endpoint() ogrenet.Endpoint { return l.endpoint }
 func (l *listener) Addr() net.Addr             { return l.ln.Addr() }
-func (l *listener) Done() <-chan struct{}       { return l.done }
+func (l *listener) Done() <-chan struct{}      { return l.done }
 
 func (l *listener) Err() error {
 	l.errMu.RLock()

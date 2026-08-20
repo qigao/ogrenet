@@ -223,10 +223,10 @@ func testTLSConfigs(t *testing.T) (*tls.Config, *tls.Config) {
 	roots := x509.NewCertPool()
 	roots.AddCert(parsed)
 	return &tls.Config{
-		Certificates: []tls.Certificate{cert},
-		MinVersion:   tls.VersionTLS13,
-	}, &tls.Config{
-		RootCAs:    roots,
-		MinVersion: tls.VersionTLS13,
-	}
+			Certificates: []tls.Certificate{cert},
+			MinVersion:   tls.VersionTLS13,
+		}, &tls.Config{
+			RootCAs:    roots,
+			MinVersion: tls.VersionTLS13,
+		}
 }

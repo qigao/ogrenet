@@ -41,7 +41,7 @@ type packetConn struct {
 func (p *packetConn) Protocol() ogrenet.Scheme   { return ogrenet.SchemeUDP }
 func (p *packetConn) Endpoint() ogrenet.Endpoint { return p.endpoint }
 func (p *packetConn) LocalAddr() net.Addr        { return p.conn.LocalAddr() }
-func (p *packetConn) Done() <-chan struct{}       { return p.done }
+func (p *packetConn) Done() <-chan struct{}      { return p.done }
 func (p *packetConn) RemoteAddr() net.Addr {
 	if p.remote == nil {
 		return nil

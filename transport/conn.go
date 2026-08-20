@@ -46,12 +46,12 @@ type conn struct {
 	err   error
 }
 
-func (c *conn) ID() uint64                    { return c.id }
-func (c *conn) Protocol() ogrenet.Scheme       { return c.protocol }
-func (c *conn) Endpoint() ogrenet.Endpoint     { return c.endpoint }
-func (c *conn) LocalAddr() net.Addr            { return c.raw.LocalAddr() }
-func (c *conn) RemoteAddr() net.Addr           { return c.raw.RemoteAddr() }
-func (c *conn) Done() <-chan struct{}           { return c.done }
+func (c *conn) ID() uint64                 { return c.id }
+func (c *conn) Protocol() ogrenet.Scheme   { return c.protocol }
+func (c *conn) Endpoint() ogrenet.Endpoint { return c.endpoint }
+func (c *conn) LocalAddr() net.Addr        { return c.raw.LocalAddr() }
+func (c *conn) RemoteAddr() net.Addr       { return c.raw.RemoteAddr() }
+func (c *conn) Done() <-chan struct{}      { return c.done }
 
 func (c *conn) Err() error {
 	c.errMu.RLock()

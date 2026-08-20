@@ -53,12 +53,12 @@ type wsSession struct {
 	err       error
 }
 
-func (s *wsSession) ID() uint64                  { return s.id }
-func (s *wsSession) Protocol() ogrenet.Scheme    { return s.protocol }
-func (s *wsSession) Endpoint() ogrenet.Endpoint  { return s.endpoint }
-func (s *wsSession) LocalAddr() net.Addr         { return s.local }
-func (s *wsSession) RemoteAddr() net.Addr        { return s.remote }
-func (s *wsSession) Done() <-chan struct{}        { return s.done }
+func (s *wsSession) ID() uint64                 { return s.id }
+func (s *wsSession) Protocol() ogrenet.Scheme   { return s.protocol }
+func (s *wsSession) Endpoint() ogrenet.Endpoint { return s.endpoint }
+func (s *wsSession) LocalAddr() net.Addr        { return s.local }
+func (s *wsSession) RemoteAddr() net.Addr       { return s.remote }
+func (s *wsSession) Done() <-chan struct{}      { return s.done }
 
 func (s *wsSession) Err() error {
 	s.errMu.RLock()
@@ -483,7 +483,7 @@ type wsListener struct {
 
 func (l *wsListener) Endpoint() ogrenet.Endpoint { return l.endpoint }
 func (l *wsListener) Addr() net.Addr             { return l.ln.Addr() }
-func (l *wsListener) Done() <-chan struct{}       { return l.done }
+func (l *wsListener) Done() <-chan struct{}      { return l.done }
 
 func (l *wsListener) Err() error {
 	l.errMu.RLock()
