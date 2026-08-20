@@ -141,10 +141,19 @@ func validateHTTPClientConfig(cfg HTTPClientConfig) ([]HTTPProtocol, error) {
 
 func buildProtocolTransport(protocol HTTPProtocol, cfg HTTPClientConfig) (http.RoundTripper, error) {
 	switch protocol {
-	case HTTP1, HTTP2:
+	case HTTP1:
 		httpCfg := cfg.HTTP
-		httpCfg.Protocols = []HTTPProtocol{protocol}
+		httpCfg.Protocols = []HTTPProtocol{HTTP1}
 		return NewHTTPTransport(httpCfg)
+	case HTTP2:
+		httpCfg := cfg.HTTP
+		httpCfg.Protocols = []HTTPProtocol{HTTP2}
+		transport, err := NewHTTPTransport(httpCfg)
+		if err != nil {
+			return nil, err
+		}
+		prepareFacadeHTTP2Transport(transport)
+		return transport, nil
 	case HTTP3:
 		return NewHTTP3Transport(cfg.HTTP3)
 	default:
