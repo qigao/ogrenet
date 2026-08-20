@@ -1,11 +1,15 @@
 package client
 
 import (
+	"context"
 	"crypto/tls"
 	"errors"
+	"net"
+	"net/http"
 	"testing"
 	"time"
 
+	quicgo "github.com/quic-go/quic-go"
 	"github.com/quic-go/quic-go/http3"
 )
 
@@ -86,5 +90,91 @@ func TestHTTP3MaxResponseHeaderBytesFitsInt(t *testing.T) {
 		if _, err := normalizeHTTP3Config(cfg); !errors.Is(err, ErrInvalidHTTP3Config) {
 			t.Fatalf("overflow = %v", err)
 		}
+	}
+}
+
+func TestHTTP3TransportCloseIsIdempotent(t *testing.T) {
+	tr, err := NewHTTP3Transport(HTTP3Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := tr.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := tr.Close(); err != nil {
+		t.Fatalf("second Close: %v", err)
+	}
+	req, _ := http.NewRequest(http.MethodGet, "https://127.0.0.1/", nil)
+	_, err = tr.RoundTrip(req)
+	if !errors.Is(err, ErrHTTP3TransportClosed) {
+		t.Fatalf("after close: %v", err)
+	}
+}
+
+func TestHTTP3ClientHasNoWholeRequestTimeout(t *testing.T) {
+	c, err := NewHTTP3Client(HTTP3Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.Timeout != 0 {
+		t.Fatalf("Timeout = %v", c.Timeout)
+	}
+	_ = c.Transport.(*HTTP3Transport).Close()
+}
+
+type staticHTTP3Resolver struct{}
+
+func (staticHTTP3Resolver) LookupIPAddr(context.Context, string) ([]net.IPAddr, error) {
+	return []net.IPAddr{{IP: net.ParseIP("127.0.0.1")}}, nil
+}
+
+func (staticHTTP3Resolver) LookupPort(context.Context, string, string) (int, error) {
+	return 443, nil
+}
+
+func TestHTTP3DialUsesNonEarlyQUICTransport(t *testing.T) {
+	sentinel := errors.New("dial reached")
+	called := false
+	d := &http3Dialer{
+		resolver:  staticHTTP3Resolver{},
+		listenUDP: net.ListenUDP,
+		dialQUIC: func(_ *quicgo.Transport, _ context.Context, _ net.Addr, _ *tls.Config, _ *quicgo.Config) (*quicgo.Conn, error) {
+			called = true
+			return nil, sentinel
+		},
+	}
+	defer d.Close()
+	_, err := d.Dial(context.Background(), "example.test:443", &tls.Config{}, &quicgo.Config{})
+	if !errors.Is(err, sentinel) {
+		t.Fatalf("Dial = %v", err)
+	}
+	if !called {
+		t.Fatal("non-early quic.Transport.Dial seam was not reached")
+	}
+}
+
+func TestMapHTTP3ErrorPreservesContext(t *testing.T) {
+	if err := mapHTTP3Error(context.Canceled); !errors.Is(err, context.Canceled) {
+		t.Fatalf("canceled = %v", err)
+	}
+	if err := mapHTTP3Error(context.DeadlineExceeded); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("deadline = %v", err)
+	}
+}
+
+func TestMapHTTP3ErrorClassifiesProtocolAndClosed(t *testing.T) {
+	p := &http3.Error{}
+	err := mapHTTP3Error(p)
+	var h3err *HTTP3Error
+	if !errors.As(err, &h3err) || h3err.Kind != HTTP3ErrorProtocol {
+		t.Fatalf("protocol = %#v", err)
+	}
+
+	err = mapHTTP3Error(http3.ErrTransportClosed)
+	if !errors.Is(err, ErrHTTP3TransportClosed) {
+		t.Fatalf("closed = %v", err)
+	}
+	if !errors.As(err, &h3err) || h3err.Kind != HTTP3ErrorClosed {
+		t.Fatalf("closed kind = %#v", err)
 	}
 }

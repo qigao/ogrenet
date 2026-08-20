@@ -1,9 +1,14 @@
 package client
 
 import (
+	"context"
 	"crypto/tls"
 	"errors"
 	"fmt"
+	"io"
+	"net/http"
+	"sync"
+	"sync/atomic"
 	"time"
 
 	quicgo "github.com/quic-go/quic-go"
@@ -112,4 +117,113 @@ func normalizeHTTP3Config(cfg HTTP3Config) (normalizedHTTP3Config, error) {
 		disableCompression:     cfg.DisableCompression,
 		enableDatagrams:        cfg.EnableDatagrams,
 	}, nil
+}
+
+// HTTP3Transport is a reusable, concurrent-safe HTTP/3-only RoundTripper.
+type HTTP3Transport struct {
+	raw       *http3.Transport
+	dialer    *http3Dialer
+	closed    atomic.Bool
+	closeOnce sync.Once
+	closeErr  error
+}
+
+var (
+	_ http.RoundTripper = (*HTTP3Transport)(nil)
+	_ io.Closer         = (*HTTP3Transport)(nil)
+)
+
+// NewHTTP3Transport creates a reusable HTTP/3-only transport. It never falls
+// back to HTTP/2 or HTTP/1.1 and uses a non-early QUIC dial path.
+func NewHTTP3Transport(cfg HTTP3Config) (*HTTP3Transport, error) {
+	n, err := normalizeHTTP3Config(cfg)
+	if err != nil {
+		return nil, err
+	}
+	dialer := newHTTP3Dialer()
+	raw := &http3.Transport{
+		TLSClientConfig:        n.tlsConfig,
+		QUICConfig:             n.quicConfig,
+		EnableDatagrams:        n.enableDatagrams,
+		MaxResponseHeaderBytes: n.maxResponseHeaderBytes,
+		DisableCompression:     n.disableCompression,
+	}
+	raw.Dial = dialer.Dial
+	return &HTTP3Transport{raw: raw, dialer: dialer}, nil
+}
+
+// NewHTTP3Client creates an http.Client using NewHTTP3Transport. It leaves the
+// whole-request Client.Timeout unset so request contexts govern streaming and cancellation.
+func NewHTTP3Client(cfg HTTP3Config) (*http.Client, error) {
+	tr, err := NewHTTP3Transport(cfg)
+	if err != nil {
+		return nil, err
+	}
+	return &http.Client{Transport: tr}, nil
+}
+
+// RoundTrip performs one HTTP/3-only request.
+func (t *HTTP3Transport) RoundTrip(req *http.Request) (*http.Response, error) {
+	if t == nil || t.closed.Load() {
+		return nil, &HTTP3Error{Kind: HTTP3ErrorClosed, Cause: ErrHTTP3TransportClosed}
+	}
+	resp, err := t.raw.RoundTrip(req)
+	if err != nil {
+		return nil, mapHTTP3Error(err)
+	}
+	return resp, nil
+}
+
+// Close closes pooled HTTP/3 connections and the owned QUIC/UDP dial resources.
+func (t *HTTP3Transport) Close() error {
+	if t == nil {
+		return nil
+	}
+	t.closeOnce.Do(func() {
+		t.closed.Store(true)
+		if t.raw != nil {
+			t.closeErr = t.raw.Close()
+		}
+		if t.dialer != nil {
+			if err := t.dialer.Close(); err != nil && t.closeErr == nil {
+				t.closeErr = err
+			}
+		}
+	})
+	return t.closeErr
+}
+
+// CloseIdleConnections closes currently idle pooled HTTP/3 connections without
+// closing active requests or the shared UDP dial transport.
+func (t *HTTP3Transport) CloseIdleConnections() {
+	if t == nil || t.raw == nil {
+		return
+	}
+	t.raw.CloseIdleConnections()
+}
+
+func mapHTTP3Error(err error) error {
+	if err == nil {
+		return nil
+	}
+	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		return err
+	}
+	if errors.Is(err, http3.ErrTransportClosed) || errors.Is(err, quicgo.ErrTransportClosed) || errors.Is(err, ErrHTTP3TransportClosed) {
+		return &HTTP3Error{Kind: HTTP3ErrorClosed, Cause: errors.Join(ErrHTTP3TransportClosed, err)}
+	}
+	var h3err *http3.Error
+	if errors.As(err, &h3err) {
+		return &HTTP3Error{Kind: HTTP3ErrorProtocol, Cause: err}
+	}
+	var transportErr *quicgo.TransportError
+	var appErr *quicgo.ApplicationError
+	var resetErr *quicgo.StatelessResetError
+	var versionErr *quicgo.VersionNegotiationError
+	var idleErr *quicgo.IdleTimeoutError
+	var handshakeErr *quicgo.HandshakeTimeoutError
+	if errors.As(err, &transportErr) || errors.As(err, &appErr) || errors.As(err, &resetErr) || errors.As(err, &versionErr) || errors.As(err, &idleErr) || errors.As(err, &handshakeErr) {
+		return &HTTP3Error{Kind: HTTP3ErrorTransport, Cause: err}
+	}
+	return err
 }
