@@ -152,7 +152,7 @@ func (c *blockingConn) Read([]byte) (int, error) {
 	return 0, net.ErrClosed
 }
 
-func (c *blockingConn) Write(p []byte) (int, error) {
+func (c *blockingConn) Write([]byte) (int, error) {
 	c.writeOnce.Do(func() { close(c.writeStarted) })
 	<-c.closed
 	return 0, net.ErrClosed
@@ -163,11 +163,11 @@ func (c *blockingConn) Close() error {
 	return nil
 }
 
-func (*blockingConn) LocalAddr() net.Addr                { return stubAddr("local") }
-func (*blockingConn) RemoteAddr() net.Addr               { return stubAddr("remote") }
-func (*blockingConn) SetDeadline(time.Time) error        { return nil }
-func (*blockingConn) SetReadDeadline(time.Time) error    { return nil }
-func (*blockingConn) SetWriteDeadline(time.Time) error   { return nil }
+func (*blockingConn) LocalAddr() net.Addr              { return stubAddr("local") }
+func (*blockingConn) RemoteAddr() net.Addr             { return stubAddr("remote") }
+func (*blockingConn) SetDeadline(time.Time) error      { return nil }
+func (*blockingConn) SetReadDeadline(time.Time) error  { return nil }
+func (*blockingConn) SetWriteDeadline(time.Time) error { return nil }
 
 type stubAddr string
 
