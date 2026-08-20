@@ -13,7 +13,7 @@ manage readiness/completion details themselves.
 | `iocp` | Windows native completion backend |
 | `kqueue` | macOS / FreeBSD native readiness backend |
 | root `ogrenet` | `Engine`, `Conn`, `Listener`, `Handler`, `Message` contracts |
-| `transport` | portable stream Engine implementing the common contracts |
+| `transport` | portable byte-stream Engine implementing the common contracts |
 | `wire` | default text/binary stream framing |
 | `secure` | security interfaces plus AES-GCM and RSA-OAEP |
 | `secure/legacy` | non-GM compatibility transforms such as AES-CFB and legacy `CipherKey` AES-GCM |
@@ -52,8 +52,9 @@ is full. `Conn.Done` and `Conn.Err` expose connection termination state.
 
 ## Portable stream Engine
 
-The `transport` package supports `tcp`, `tcp4`, `tcp6`, `unix`, and
-`unixpacket` stream-style networks.
+The `transport` package supports byte-stream networks: `tcp`, `tcp4`, `tcp6`,
+and `unix`. Datagram and seqpacket transports are intentionally separate because
+they have different message-boundary and truncation semantics.
 
 ```go
 cipher, err := secure.NewAESGCM(key)
@@ -102,7 +103,9 @@ When encryption is enabled:
 - binary payloads carry raw ciphertext;
 - text payloads carry Base64-encoded ciphertext so the payload remains text-safe;
 - the algorithm identifier is encoded in the header and must match the configured
-  cipher during decoding.
+  cipher during decoding;
+- ciphers implementing `secure.AuthenticatedCipher` authenticate the semantic
+  header fields (`magic`, `version`, flags, algorithm) as AEAD associated data.
 
 Applications with an existing protocol can implement their own `wire.Framer`.
 
@@ -115,6 +118,12 @@ type Cipher interface {
     Algorithm() Algorithm
     Seal(dst, plaintext []byte) ([]byte, error)
     Open(dst, ciphertext []byte) ([]byte, error)
+}
+
+type AuthenticatedCipher interface {
+    Cipher
+    SealAAD(dst, plaintext, aad []byte) ([]byte, error)
+    OpenAAD(dst, ciphertext, aad []byte) ([]byte, error)
 }
 
 type Digest interface {
@@ -135,7 +144,7 @@ intended to wrap session keys rather than bulk application messages.
 
 ### Standard backend
 
-AES-GCM is available without CGO:
+AES-GCM is available without CGO and implements `AuthenticatedCipher`:
 
 ```go
 cipher, err := secure.NewAESGCM(key)
@@ -162,7 +171,7 @@ and `CGO_LDFLAGS` accordingly.
 
 The GmSSL backend provides only the new security model:
 
-- SM4-GCM authenticated encryption;
+- SM4-GCM authenticated encryption with associated-data support;
 - SM3 digest;
 - SM2 session-key wrapping;
 - GmSSL cryptographic random generation for SM4-GCM nonces;
