@@ -71,7 +71,10 @@ func (l *listener) acceptLoop() {
 					continue
 				case <-l.done:
 					if !timer.Stop() {
-						<-timer.C
+						select {
+						case <-timer.C:
+						default:
+						}
 					}
 					return
 				}
