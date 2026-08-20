@@ -106,7 +106,7 @@ func (e *Engine) Dial(ctx context.Context, network, address string, h ogrenet.Ha
 }
 
 // Close initiates shutdown of all listeners and connections. Connection Done
-// channels close when their reader loop has completed lifecycle notification.
+// channels close as their reader loops enter finalization.
 func (e *Engine) Close() error {
 	e.mu.Lock()
 	if e.closed {
@@ -209,7 +209,7 @@ func normalizeHandler(h ogrenet.Handler) ogrenet.Handler {
 
 func isStreamNetwork(network string) bool {
 	switch network {
-	case "tcp", "tcp4", "tcp6", "unix", "unixpacket":
+	case "tcp", "tcp4", "tcp6", "unix":
 		return true
 	default:
 		return false
