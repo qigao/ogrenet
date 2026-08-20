@@ -133,14 +133,10 @@ func classifyError(err error) ErrorKind {
 	if errors.Is(err, context.Canceled) {
 		return ErrorCanceled
 	}
-	if errors.Is(err, net.ErrClosed) {
-		return ErrorClosed
-	}
-	var netErr net.Error
-	if errors.As(err, &netErr) && netErr.Timeout() {
-		return ErrorTimeout
-	}
 
+	// Classify QUIC-native errors before generic net.Error / net.ErrClosed
+	// checks. Some protocol errors intentionally satisfy generic network error
+	// contracts, but callers still need the more precise QUIC classification.
 	var datagramTooLarge *quicgo.DatagramTooLargeError
 	if errors.As(err, &datagramTooLarge) {
 		return ErrorMessageTooLarge
@@ -148,6 +144,14 @@ func classifyError(err error) ErrorKind {
 	var streamLimit quicgo.StreamLimitReachedError
 	if errors.As(err, &streamLimit) {
 		return ErrorResourceExhausted
+	}
+	var transportErr *quicgo.TransportError
+	if errors.As(err, &transportErr) {
+		return ErrorProtocol
+	}
+	var versionErr *quicgo.VersionNegotiationError
+	if errors.As(err, &versionErr) {
+		return ErrorProtocol
 	}
 	var appErr *quicgo.ApplicationError
 	if errors.As(err, &appErr) {
@@ -161,13 +165,13 @@ func classifyError(err error) ErrorKind {
 	if errors.As(err, &statelessReset) {
 		return ErrorClosed
 	}
-	var transportErr *quicgo.TransportError
-	if errors.As(err, &transportErr) {
-		return ErrorProtocol
+
+	if errors.Is(err, net.ErrClosed) {
+		return ErrorClosed
 	}
-	var versionErr *quicgo.VersionNegotiationError
-	if errors.As(err, &versionErr) {
-		return ErrorProtocol
+	var netErr net.Error
+	if errors.As(err, &netErr) && netErr.Timeout() {
+		return ErrorTimeout
 	}
 	return ErrorUnknown
 }

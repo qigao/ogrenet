@@ -22,6 +22,7 @@ func TestAcceptPeerStream(t *testing.T) {
 	defer listener.Close()
 
 	serverErr := make(chan error, 1)
+	clientDone := make(chan struct{})
 	go func() {
 		conn, err := listener.Accept(context.Background())
 		if err != nil {
@@ -38,7 +39,12 @@ func TestAcceptPeerStream(t *testing.T) {
 			serverErr <- err
 			return
 		}
-		serverErr <- stream.Close()
+		if err := stream.Close(); err != nil {
+			serverErr <- err
+			return
+		}
+		serverErr <- nil
+		<-clientDone
 	}()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -63,6 +69,7 @@ func TestAcceptPeerStream(t *testing.T) {
 	if err := <-serverErr; err != nil {
 		t.Fatal(err)
 	}
+	close(clientDone)
 }
 
 func TestDatagramLoopback(t *testing.T) {
@@ -78,6 +85,7 @@ func TestDatagramLoopback(t *testing.T) {
 	defer listener.Close()
 
 	serverErr := make(chan error, 1)
+	clientDone := make(chan struct{})
 	go func() {
 		conn, err := listener.Accept(context.Background())
 		if err != nil {
@@ -96,7 +104,12 @@ func TestDatagramLoopback(t *testing.T) {
 			serverErr <- errors.New("unexpected datagram payload")
 			return
 		}
-		serverErr <- conn.SendDatagram([]byte("pong"))
+		if err := conn.SendDatagram([]byte("pong")); err != nil {
+			serverErr <- err
+			return
+		}
+		serverErr <- nil
+		<-clientDone
 	}()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -124,6 +137,7 @@ func TestDatagramLoopback(t *testing.T) {
 	if err := <-serverErr; err != nil {
 		t.Fatal(err)
 	}
+	close(clientDone)
 }
 
 func TestDatagramsRequireExplicitOptIn(t *testing.T) {
