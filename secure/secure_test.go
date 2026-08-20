@@ -5,6 +5,25 @@ import (
 	"testing"
 )
 
+func TestAlgorithmWireIDs(t *testing.T) {
+	want := map[Algorithm]uint16{
+		AlgNone:            0x0000,
+		AlgAESGCM:          0x0001,
+		AlgSM4GCM:          0x0002,
+		AlgSM3Digest:       0x0003,
+		AlgRSAOAEP:         0x0004,
+		AlgSM2:             0x0005,
+		AlgLegacyAES128CFB: 0x1001,
+		AlgLegacyAES192CFB: 0x1002,
+		AlgLegacyAES256CFB: 0x1003,
+	}
+	for algorithm, id := range want {
+		if got := uint16(algorithm); got != id {
+			t.Fatalf("algorithm %v wire ID = %#04x, want %#04x", algorithm, got, id)
+		}
+	}
+}
+
 func TestAESGCMRoundTripAndTamper(t *testing.T) {
 	c, err := NewAESGCM([]byte("0123456789abcdef0123456789abcdef"))
 	if err != nil {
