@@ -23,7 +23,9 @@ jobs:
           go-version: ${{ matrix.go }}
           cache: true
       - name: Format
-        run: test -z "$(gofmt -l .)"
+        run: |
+          gofmt -w .
+          git diff --exit-code
       - name: Module hygiene
         run: go mod tidy && git diff --exit-code -- go.mod go.sum
       - name: Vet

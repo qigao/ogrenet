@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/qigao/ogrenet/internal/quicpolicy"
 	quicgo "github.com/quic-go/quic-go"
 )
 
@@ -219,8 +220,8 @@ func TestPeerInitiatedStreamLimitIsBounded(t *testing.T) {
 		}
 		defer conn.CloseWithError(0, "")
 
-		streams := make([]*quicgo.Stream, 0, defaultMaxIncomingStreams)
-		for i := 0; i < defaultMaxIncomingStreams; i++ {
+		streams := make([]*quicgo.Stream, 0, quicpolicy.DefaultMaxIncomingStreams)
+		for i := 0; i < int(quicpolicy.DefaultMaxIncomingStreams); i++ {
 			stream, err := conn.OpenStreamSync(context.Background())
 			if err != nil {
 				serverErr <- fmt.Errorf("open stream %d: %w", i, err)

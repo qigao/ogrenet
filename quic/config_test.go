@@ -6,6 +6,8 @@ import (
 	"errors"
 	"testing"
 	"time"
+
+	"github.com/qigao/ogrenet/internal/quicpolicy"
 )
 
 func TestConfigValidation(t *testing.T) {
@@ -41,22 +43,22 @@ func TestConfigBuildClonesTLSPinsALPNAndBoundsResources(t *testing.T) {
 	if quicConfig.Allow0RTT {
 		t.Fatal("0-RTT must remain disabled")
 	}
-	if quicConfig.HandshakeIdleTimeout != defaultHandshakeTimeout {
+	if quicConfig.HandshakeIdleTimeout != quicpolicy.DefaultHandshakeTimeout {
 		t.Fatalf("HandshakeIdleTimeout = %v", quicConfig.HandshakeIdleTimeout)
 	}
-	if quicConfig.MaxIdleTimeout != defaultIdleTimeout {
+	if quicConfig.MaxIdleTimeout != quicpolicy.DefaultIdleTimeout {
 		t.Fatalf("MaxIdleTimeout = %v", quicConfig.MaxIdleTimeout)
 	}
-	if quicConfig.MaxIncomingStreams != defaultMaxIncomingStreams {
+	if quicConfig.MaxIncomingStreams != quicpolicy.DefaultMaxIncomingStreams {
 		t.Fatalf("MaxIncomingStreams = %d", quicConfig.MaxIncomingStreams)
 	}
 	if quicConfig.MaxIncomingUniStreams != -1 {
 		t.Fatalf("MaxIncomingUniStreams = %d", quicConfig.MaxIncomingUniStreams)
 	}
-	if quicConfig.InitialStreamReceiveWindow != defaultInitialStreamReceiveWindow || quicConfig.MaxStreamReceiveWindow != defaultMaxStreamReceiveWindow {
+	if quicConfig.InitialStreamReceiveWindow != quicpolicy.DefaultInitialStreamReceiveWindow || quicConfig.MaxStreamReceiveWindow != quicpolicy.DefaultMaxStreamReceiveWindow {
 		t.Fatalf("stream receive windows = %d/%d", quicConfig.InitialStreamReceiveWindow, quicConfig.MaxStreamReceiveWindow)
 	}
-	if quicConfig.InitialConnectionReceiveWindow != defaultInitialConnectionReceiveWindow || quicConfig.MaxConnectionReceiveWindow != defaultMaxConnectionReceiveWindow {
+	if quicConfig.InitialConnectionReceiveWindow != quicpolicy.DefaultInitialConnectionReceiveWindow || quicConfig.MaxConnectionReceiveWindow != quicpolicy.DefaultMaxConnectionReceiveWindow {
 		t.Fatalf("connection receive windows = %d/%d", quicConfig.InitialConnectionReceiveWindow, quicConfig.MaxConnectionReceiveWindow)
 	}
 }
