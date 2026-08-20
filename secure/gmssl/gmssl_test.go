@@ -42,6 +42,27 @@ func TestSM4GCMRoundTripAndTamper(t *testing.T) {
 	}
 }
 
+func TestSM4GCMEmptyRoundTrip(t *testing.T) {
+	c, err := NewSM4GCM([]byte("0123456789abcdef"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	sealed, err := c.Seal(nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(sealed) != sm4NonceSize+sm4TagSize {
+		t.Fatalf("got encrypted length %d, want %d", len(sealed), sm4NonceSize+sm4TagSize)
+	}
+	opened, err := c.Open(nil, sealed)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(opened) != 0 {
+		t.Fatalf("got %x, want empty plaintext", opened)
+	}
+}
+
 func TestSM2KeyWrapperRoundTrip(t *testing.T) {
 	publicKey, privateKey, err := GenerateSM2Key()
 	if err != nil {
