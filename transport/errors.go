@@ -8,6 +8,8 @@ var (
 	ErrFrameExceedsQueueBudget = errors.New("transport: encoded frame exceeds queued-byte budget")
 	ErrNilContext              = errors.New("transport: nil context")
 	ErrNilFramer               = errors.New("transport: framer factory returned nil")
+	ErrNilCipherFactory        = errors.New("transport: cipher factory is nil")
+	ErrNilCipher               = errors.New("transport: cipher factory returned nil")
 	ErrInvalidFramer           = errors.New("transport: framer returned an invalid consumed length")
 	ErrReadBufferFull          = errors.New("transport: buffered unread data exceeded the configured limit")
 	ErrInvalidQueueSize        = errors.New("transport: write queue size must be positive")
