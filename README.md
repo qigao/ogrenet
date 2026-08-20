@@ -12,15 +12,17 @@ manage readiness/completion details themselves.
 | `epoll` | Linux native readiness backend |
 | `iocp` | Windows native completion backend |
 | `kqueue` | macOS / FreeBSD native readiness backend |
-| root `ogrenet` | `Engine`, `Conn`, `Handler`, `Message` contracts |
+| root `ogrenet` | `Engine`, `Conn`, `Listener`, `Handler`, `Message` contracts |
+| `transport` | portable stream Engine implementing the common contracts |
 | `wire` | default text/binary stream framing |
 | `secure` | security interfaces plus AES-GCM and RSA-OAEP |
 | `secure/legacy` | non-GM compatibility transforms such as AES-CFB and legacy `CipherKey` AES-GCM |
 | `secure/gmssl` | optional GmSSL-backed SM2/SM3/SM4 using the current security model only |
 
 The high-level API does not replace the native packages. epoll, kqueue, and IOCP
-keep their native semantics; Engine implementations compose them above that
-boundary.
+keep their native semantics. The portable `transport` package currently provides
+a cross-platform implementation using Go's `net` package; future native Engines
+can satisfy the same root interfaces without changing application code.
 
 ## Unified message API
 
@@ -33,6 +35,8 @@ raw := ogrenet.Bin([]byte{0x01, 0x02, 0xff})
 
 `Text` payloads must be valid UTF-8. `Binary` payloads are opaque bytes.
 Handlers always receive plaintext messages after framing and security processing.
+Callbacks for one connection are serialized in lifecycle order:
+`OnOpen -> OnMessage* -> OnClose`.
 
 ```go
 type Handler interface {
@@ -42,10 +46,40 @@ type Handler interface {
 }
 ```
 
-`Conn` exposes `Send`, `TrySend`, addresses, a stable ID, and idempotent close.
-`Engine` exposes the common `Listen`/`Dial` lifecycle. Concrete platform engines
-are implemented above the native poller packages rather than by pretending that
-IOCP completion and epoll/kqueue readiness are the same kernel model.
+`Conn.Send` uses a bounded writer queue and waits for the socket write result.
+`Conn.TrySend` never blocks and returns `transport.ErrWouldBlock` when the queue
+is full. `Conn.Done` and `Conn.Err` expose connection termination state.
+
+## Portable stream Engine
+
+The `transport` package supports `tcp`, `tcp4`, `tcp6`, `unix`, and
+`unixpacket` stream-style networks.
+
+```go
+cipher, err := secure.NewAESGCM(key)
+if err != nil {
+    return err
+}
+
+server, err := transport.New(transport.WithCipher(cipher))
+if err != nil {
+    return err
+}
+defer server.Close()
+
+listener, err := server.Listen(ctx, "tcp", "127.0.0.1:9000", ogrenet.HandlerFuncs{
+    Message: func(c ogrenet.Conn, msg ogrenet.Message) {
+        _ = c.Send(context.Background(), msg)
+    },
+})
+if err != nil {
+    return err
+}
+defer listener.Close()
+```
+
+A new framer is created per connection. Custom stateful protocols can use
+`transport.WithFramerFactory`; the default is `wire.Codec`.
 
 ## Default wire format
 
@@ -181,6 +215,8 @@ Multiple workers may block in `Get` concurrently.
 - Poller close is idempotent and wakes blocked waits.
 - Descriptor/handle lifetime is synchronized against concurrent syscalls to
   avoid close/reuse races inside the wrappers.
+- Portable transport connections use bounded send queues and one serialized
+  Handler callback stream per connection.
 - Internal wake events are never exposed as application messages.
 - There is no hidden global goroutine pool or logger.
 
@@ -190,6 +226,6 @@ Multiple workers may block in `Get` concurrently.
 - `golang.org/x/sys` for native OS calls.
 - Optional GmSSL 3.2.0 + a working C toolchain for `-tags gmssl`.
 
-GitHub Actions validates formatting, module hygiene, vet/race tests, native
-Linux/Windows/macOS behavior, cross-architecture builds, and a dedicated GmSSL
-3.2.0 integration job.
+GitHub Actions validates formatting, module hygiene, vet/race tests, portable
+transport behavior, native Linux/Windows/macOS behavior, cross-architecture
+builds, and a dedicated GmSSL 3.2.0 integration job.
