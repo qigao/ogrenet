@@ -7,6 +7,7 @@ import (
 
 const (
 	defaultWriteQueue      = 256
+	defaultMaxQueuedBytes  = 64 << 20
 	defaultReadBuffer      = 64 << 10
 	defaultMaxBufferedRead = 32 << 20
 )
@@ -20,6 +21,7 @@ type config struct {
 	cipher          secure.Cipher
 	framerFactory   FramerFactory
 	writeQueue      int
+	maxQueuedBytes  int
 	readBuffer      int
 	maxBufferedRead int
 }
@@ -27,6 +29,7 @@ type config struct {
 func defaultConfig() config {
 	return config{
 		writeQueue:      defaultWriteQueue,
+		maxQueuedBytes:  defaultMaxQueuedBytes,
 		readBuffer:      defaultReadBuffer,
 		maxBufferedRead: defaultMaxBufferedRead,
 	}
@@ -64,6 +67,19 @@ func WithWriteQueue(size int) Option {
 			return ErrInvalidQueueSize
 		}
 		c.writeQueue = size
+		return nil
+	}
+}
+
+// WithMaxQueuedBytes bounds the total encoded frame bytes retained by one
+// connection's writer queue and in-flight write. Send waits for this budget;
+// TrySend returns ErrWouldBlock when insufficient byte budget is available.
+func WithMaxQueuedBytes(size int) Option {
+	return func(c *config) error {
+		if size <= 0 {
+			return ErrInvalidQueuedBytes
+		}
+		c.maxQueuedBytes = size
 		return nil
 	}
 }
