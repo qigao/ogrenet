@@ -20,9 +20,9 @@ manage readiness/completion details themselves.
 | `secure/gmssl` | optional GmSSL-backed SM2/SM3/SM4 using the current security model only |
 
 The high-level API does not replace the native packages. epoll, kqueue, and IOCP
-keep their native semantics. The portable `transport` package currently provides
-a cross-platform implementation using Go's `net` package; future native Engines
-can satisfy the same root interfaces without changing application code.
+keep their native semantics. The portable `transport` package currently uses
+Go's `net` package; future native Engines can satisfy the same root interfaces
+without changing application code.
 
 ## Unified message API
 
@@ -33,8 +33,8 @@ msg := ogrenet.Text("hello 世界")
 raw := ogrenet.Bin([]byte{0x01, 0x02, 0xff})
 ```
 
-`Text` payloads must be valid UTF-8. `Binary` payloads are opaque bytes.
-Handlers always receive plaintext messages after framing and security processing.
+`Text` payloads must be valid UTF-8. `Binary` payloads are opaque bytes. Handlers
+always receive plaintext messages after framing and security processing.
 Callbacks for one connection are serialized in lifecycle order:
 `OnOpen -> OnMessage* -> OnClose`.
 
@@ -46,9 +46,19 @@ type Handler interface {
 }
 ```
 
-`Conn.Send` uses a bounded writer queue and waits for the socket write result.
-`Conn.TrySend` never blocks and returns `transport.ErrWouldBlock` when the queue
-is full. `Conn.Done` and `Conn.Err` expose connection termination state.
+`Conn.Send` waits for queue admission and the socket-write result. `Conn.TrySend`
+never blocks: it returns `transport.ErrWouldBlock` when either the frame-count
+queue or queued-byte budget is full. Once `TrySend` has admitted a frame it
+returns `nil`, even if close races immediately afterward.
+
+Each connection has both a frame-count limit and a byte budget. Defaults are 256
+waiting frames and 64 MiB including the in-flight write; use
+`transport.WithWriteQueue` and `transport.WithMaxQueuedBytes` to tune them.
+
+`Conn.Done()` is a shutdown barrier: it closes only after reader/writer work has
+stopped, pending sends have been released, and `OnClose` has returned. `Conn.Err()`
+is stable once `Done` is closed. `Listener.Done()` similarly waits for the
+accept loop to stop.
 
 ## Portable stream Engine
 
@@ -95,15 +105,15 @@ A new framer is created per connection. Custom stateful protocols can use
 +----------------------------------------------+
 ```
 
-The fixed header is 10 bytes. `DecodeOne` is incremental: incomplete TCP data
+The fixed header is 10 bytes. `DecodeOne` is incremental: incomplete stream data
 returns `wire.ErrNeedMore` instead of treating a read as a message boundary.
+Unknown flag bits are rejected.
 
 When encryption is enabled:
 
 - binary payloads carry raw ciphertext;
 - text payloads carry Base64-encoded ciphertext so the payload remains text-safe;
-- the algorithm identifier is encoded in the header and must match the configured
-  cipher during decoding;
+- the algorithm identifier must match the configured cipher during decoding;
 - ciphers implementing `secure.AuthenticatedCipher` authenticate the semantic
   header fields (`magic`, `version`, flags, algorithm) as AEAD associated data.
 
@@ -139,8 +149,8 @@ type KeyWrapper interface {
 }
 ```
 
-SM3 is therefore a digest, not a reversible cipher. RSA-OAEP and SM2 are
-intended to wrap session keys rather than bulk application messages.
+SM3 is a digest, not a reversible cipher. RSA-OAEP and SM2 are intended to wrap
+session keys rather than bulk application messages.
 
 ### Standard backend
 
@@ -163,7 +173,7 @@ adapter targets **GmSSL 3.2.0** and is compiled only when both CGO and the
 Build and install GmSSL first, then:
 
 ```bash
-CGO_ENABLED=1 go test -tags gmssl ./secure/gmssl ./wire
+CGO_ENABLED=1 go test -tags gmssl ./secure/gmssl ./wire ./transport
 ```
 
 If GmSSL is installed outside the compiler's default paths, set `CGO_CFLAGS`
@@ -178,10 +188,10 @@ The GmSSL backend provides only the new security model:
 - raw SM2 key generation/import helpers.
 
 Legacy GM wire formats and old GM method semantics are intentionally not
-supported. In particular, there is no legacy SM2 C1C2C3 transform, no SM3
-"encrypt/decrypt" compatibility shim, and no legacy SM4-CBC compatibility mode.
+supported. There is no legacy SM2 C1C2C3 transform, no SM3 `Encrypt/Decrypt`
+compatibility shim, and no legacy SM4-CBC compatibility mode.
 
-GmSSL is optional: the native poller packages and the standard security/wire
+GmSSL is optional: native pollers plus the standard security/wire/transport
 packages continue to build with `CGO_ENABLED=0`.
 
 ## Non-GM legacy crypto compatibility
@@ -195,7 +205,7 @@ non-GM cryptographic methods remain available for protocol interoperability:
 | AES-128-CFB | `secure/legacy.NewAES128CFB` | preserves old key/IV normalization |
 | AES-192-CFB | `secure/legacy.NewAES192CFB` | preserves old key/IV normalization |
 | AES-256-CFB | `secure/legacy.NewAES256CFB` | preserves old key/IV normalization |
-| `CipherKey` AES-GCM | `secure/legacy.CipherKey` | preserves legacy key generation and nonce-prefixed AES-GCM wire behavior |
+| `CipherKey` AES-GCM | `secure/legacy.CipherKey` | preserves legacy key generation and nonce-prefixed AES-GCM behavior |
 
 New encrypted sessions should use an authenticated cipher such as AES-GCM or
 SM4-GCM.
@@ -218,18 +228,7 @@ Multiple workers may block in `Get` concurrently.
 `kqueue.Open`, `Apply`, `Del`, `Wait`, `Wake`, and `Close` preserve native
 `(ident, filter)` event identity and use `EVFILT_USER` for internal wakeups.
 
-## Ownership and lifecycle guarantees
-
-- User sockets/files remain caller-owned by the native poller layer.
-- Poller close is idempotent and wakes blocked waits.
-- Descriptor/handle lifetime is synchronized against concurrent syscalls to
-  avoid close/reuse races inside the wrappers.
-- Portable transport connections use bounded send queues and one serialized
-  Handler callback stream per connection.
-- Internal wake events are never exposed as application messages.
-- There is no hidden global goroutine pool or logger.
-
-## Requirements
+## Requirements and validation
 
 - Go 1.25 or newer.
 - `golang.org/x/sys` for native OS calls.
@@ -237,4 +236,4 @@ Multiple workers may block in `Get` concurrently.
 
 GitHub Actions validates formatting, module hygiene, vet/race tests, portable
 transport behavior, native Linux/Windows/macOS behavior, cross-architecture
-builds, and a dedicated GmSSL 3.2.0 integration job.
+builds, and a dedicated GmSSL 3.2.0 security/wire/transport integration job.
