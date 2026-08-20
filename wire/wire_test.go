@@ -66,7 +66,7 @@ func TestDecodeOnePartialFrame(t *testing.T) {
 	}
 }
 
-func TestEncryptedFrameRejectsTamper(t *testing.T) {
+func TestEncryptedFrameRejectsPayloadTamper(t *testing.T) {
 	cipher, err := secure.NewAESGCM([]byte("0123456789abcdef0123456789abcdef"))
 	if err != nil {
 		t.Fatal(err)
@@ -79,5 +79,34 @@ func TestEncryptedFrameRejectsTamper(t *testing.T) {
 	frame[len(frame)-1] ^= 1
 	if _, err := codec.Decode(frame); err == nil {
 		t.Fatal("tampered encrypted frame decoded successfully")
+	}
+}
+
+func TestEncryptedFrameRejectsSemanticHeaderTamper(t *testing.T) {
+	cipher, err := secure.NewAESGCM([]byte("0123456789abcdef0123456789abcdef"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	codec := New(cipher)
+	frame, err := codec.Encode(ogrenet.Bin([]byte("payload")))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	frame[3] ^= FlagText
+	if _, err := codec.Decode(frame); err == nil {
+		t.Fatal("frame with tampered Text/Binary flag decoded successfully")
+	}
+}
+
+func TestUnsupportedFlagsRejected(t *testing.T) {
+	codec := New(nil)
+	frame, err := codec.Encode(ogrenet.Text("hello"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	frame[3] |= 1 << 7
+	if _, err := codec.Decode(frame); !errors.Is(err, ErrUnsupportedFlags) {
+		t.Fatalf("got %v, want ErrUnsupportedFlags", err)
 	}
 }
