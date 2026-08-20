@@ -23,15 +23,22 @@ func (e *Engine) endOp() {
 func (e *Engine) addStreamListener(v *listener) error { return addTracked(e, e.streamListeners, v) }
 func (e *Engine) addWSListener(v *wsListener) error   { return addTracked(e, e.wsListeners, v) }
 
-func (e *Engine) addStream(v *conn) error {
+func (e *Engine) addStream(v *conn) error { return e.addStreamWithLease(v, nil) }
+
+func (e *Engine) addStreamWithLease(v *conn, lease *connectionLease) error {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	if e.closed {
 		return ErrClosed
 	}
-	lease, err := e.admission.acquireConnection(peerKey(v.raw.RemoteAddr()))
-	if err != nil {
-		return err
+	if lease == nil {
+		var err error
+		lease, err = e.admission.acquireConnection(peerKey(v.raw.RemoteAddr()))
+		if err != nil {
+			return err
+		}
+	} else if !lease.activate() {
+		return ErrClosed
 	}
 	v.quota.setParent(e.admission.bytes)
 	e.streams[v] = struct{}{}
@@ -39,15 +46,22 @@ func (e *Engine) addStream(v *conn) error {
 	return nil
 }
 
-func (e *Engine) addWebSocket(v *wsSession) error {
+func (e *Engine) addWebSocket(v *wsSession) error { return e.addWebSocketWithLease(v, nil) }
+
+func (e *Engine) addWebSocketWithLease(v *wsSession, lease *connectionLease) error {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	if e.closed {
 		return ErrClosed
 	}
-	lease, err := e.admission.acquireConnection(peerKey(v.remote))
-	if err != nil {
-		return err
+	if lease == nil {
+		var err error
+		lease, err = e.admission.acquireConnection(peerKey(v.remote))
+		if err != nil {
+			return err
+		}
+	} else if !lease.activate() {
+		return ErrClosed
 	}
 	v.quota.setParent(e.admission.bytes)
 	e.websockets[v] = struct{}{}

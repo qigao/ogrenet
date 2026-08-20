@@ -83,28 +83,46 @@ func (l *listener) acceptLoop() {
 				continue
 			}
 		}
-		if l.prepare != nil {
-			prepared, err := l.prepare(l.ctx, raw)
-			if err != nil {
-				_ = raw.Close()
-				if l.isClosing() {
-					return
-				}
-				continue
-			}
-			raw = prepared
-		}
+		go l.handleAccepted(raw)
+	}
+}
 
-		if _, err := l.engine.adoptStream(raw, l.endpoint, l.handler); err != nil {
+func (l *listener) handleAccepted(raw net.Conn) {
+	if err := l.engine.beginOp(); err != nil {
+		_ = raw.Close()
+		return
+	}
+	defer l.engine.endOp()
+
+	lease, err := l.engine.acquireOpening(raw.RemoteAddr())
+	if err != nil {
+		_ = raw.Close()
+		return
+	}
+	transferred := false
+	defer func() {
+		if !transferred {
+			lease.release()
+		}
+	}()
+
+	if l.prepare != nil {
+		prepared, err := l.prepare(l.ctx, raw)
+		if err != nil {
 			_ = raw.Close()
-			if errors.Is(err, ErrClosed) {
-				_ = l.initiateClose(nil)
-			} else {
-				_ = l.initiateClose(err)
-			}
 			return
 		}
+		raw = prepared
 	}
+
+	if _, err := l.engine.adoptStreamWithLease(raw, l.endpoint, l.handler, lease); err != nil {
+		_ = raw.Close()
+		if !errors.Is(err, ErrClosed) && !errors.Is(err, ErrResourceExhausted) {
+			_ = l.initiateClose(err)
+		}
+		return
+	}
+	transferred = true
 }
 
 func waitOrClosed(delay time.Duration, closing <-chan struct{}) bool {

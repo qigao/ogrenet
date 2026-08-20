@@ -43,3 +43,40 @@ func TestAdmissionConcurrentAcquireRelease(t *testing.T) {
 		t.Fatalf("final active = %d, want 0", got)
 	}
 }
+
+func TestAdmissionConcurrentHandshakeLimit(t *testing.T) {
+	const limit = 4
+	a := newAdmissionController(Limits{MaxConcurrentHandshakes: limit})
+	var maxSeen atomic.Int64
+	var wg sync.WaitGroup
+	for i := 0; i < 32; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for j := 0; j < 100; j++ {
+				lease, err := a.acquireHandshake()
+				if err != nil {
+					if !errors.Is(err, ErrResourceExhausted) {
+						t.Errorf("acquire handshake: %v", err)
+					}
+					continue
+				}
+				active := int64(a.snapshot().ActiveHandshakes)
+				for {
+					old := maxSeen.Load()
+					if active <= old || maxSeen.CompareAndSwap(old, active) {
+						break
+					}
+				}
+				lease.release()
+			}
+		}()
+	}
+	wg.Wait()
+	if got := maxSeen.Load(); got > limit {
+		t.Fatalf("max handshakes = %d, limit = %d", got, limit)
+	}
+	if got := a.snapshot().ActiveHandshakes; got != 0 {
+		t.Fatalf("final handshakes = %d, want 0", got)
+	}
+}

@@ -13,6 +13,18 @@ func (e *Engine) dialStream(ctx context.Context, endpoint ogrenet.Endpoint, h og
 	if err != nil {
 		return nil, err
 	}
+	lease, err := e.acquireOpening(raw.RemoteAddr())
+	if err != nil {
+		_ = raw.Close()
+		return nil, err
+	}
+	transferred := false
+	defer func() {
+		if !transferred {
+			lease.release()
+		}
+	}()
+
 	var stream net.Conn = raw
 	if endpoint.Scheme == ogrenet.SchemeTLS {
 		cfg, err := e.cfg.clientTLSConfig(endpoint)
@@ -20,22 +32,34 @@ func (e *Engine) dialStream(ctx context.Context, endpoint ogrenet.Endpoint, h og
 			_ = raw.Close()
 			return nil, err
 		}
+		handshake, err := e.acquireHandshake()
+		if err != nil {
+			_ = raw.Close()
+			return nil, err
+		}
 		tlsConn := tls.Client(raw, cfg)
-		if err := e.cfg.handshakeClient(ctx, tlsConn); err != nil {
+		err = e.cfg.handshakeClient(ctx, tlsConn)
+		handshake.release()
+		if err != nil {
 			_ = tlsConn.Close()
 			return nil, err
 		}
 		stream = tlsConn
 	}
-	c, err := e.adoptStream(stream, endpoint, h)
+	c, err := e.adoptStreamWithLease(stream, endpoint, h, lease)
 	if err != nil {
 		_ = stream.Close()
 		return nil, err
 	}
+	transferred = true
 	return c, nil
 }
 
 func (e *Engine) adoptStream(raw net.Conn, endpoint ogrenet.Endpoint, h ogrenet.Handler) (*conn, error) {
+	return e.adoptStreamWithLease(raw, endpoint, h, nil)
+}
+
+func (e *Engine) adoptStreamWithLease(raw net.Conn, endpoint ogrenet.Endpoint, h ogrenet.Handler, lease *connectionLease) (*conn, error) {
 	framer, err := e.cfg.newFramer()
 	if err != nil {
 		return nil, err
@@ -58,7 +82,7 @@ func (e *Engine) adoptStream(raw net.Conn, endpoint ogrenet.Endpoint, h ogrenet.
 		readSize:   e.cfg.readBuffer,
 		maxRead:    e.cfg.maxBufferedRead,
 	}
-	if err := e.addStream(c); err != nil {
+	if err := e.addStreamWithLease(c, lease); err != nil {
 		return nil, err
 	}
 	c.start()

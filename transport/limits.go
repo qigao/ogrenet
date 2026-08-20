@@ -11,13 +11,15 @@ import (
 
 // Limits configures Engine-wide resource bounds. Zero means unlimited.
 type Limits struct {
-	MaxConnections        int
-	MaxConnectionsPerPeer int
-	MaxQueuedBytesTotal   int64
+	MaxConnections          int
+	MaxConnectionsPerPeer   int
+	MaxConcurrentHandshakes int
+	MaxPendingUpgrades      int
+	MaxQueuedBytesTotal     int64
 }
 
 func (l Limits) validate() error {
-	if l.MaxConnections < 0 || l.MaxConnectionsPerPeer < 0 || l.MaxQueuedBytesTotal < 0 {
+	if l.MaxConnections < 0 || l.MaxConnectionsPerPeer < 0 || l.MaxConcurrentHandshakes < 0 || l.MaxPendingUpgrades < 0 || l.MaxQueuedBytesTotal < 0 {
 		return ErrInvalidLimits
 	}
 	return nil
@@ -29,6 +31,8 @@ type LimitKind uint8
 const (
 	LimitConnections LimitKind = iota + 1
 	LimitConnectionsPerPeer
+	LimitHandshakes
+	LimitUpgrades
 	LimitQueuedBytes
 )
 
@@ -38,6 +42,10 @@ func (k LimitKind) String() string {
 		return "connections"
 	case LimitConnectionsPerPeer:
 		return "connections-per-peer"
+	case LimitHandshakes:
+		return "handshakes"
+	case LimitUpgrades:
+		return "websocket-upgrades"
 	case LimitQueuedBytes:
 		return "queued-bytes"
 	default:
@@ -69,12 +77,17 @@ var (
 type admissionController struct {
 	limits Limits
 
-	mu      sync.Mutex
-	active  int
-	perPeer map[string]int
+	mu         sync.Mutex
+	opening    int
+	active     int
+	handshakes int
+	upgrades   int
+	perPeer    map[string]int
 
 	rejectedConnections atomic.Uint64
 	rejectedPeers       atomic.Uint64
+	rejectedHandshakes  atomic.Uint64
+	rejectedUpgrades    atomic.Uint64
 	bytes               *globalByteQuota
 }
 
@@ -86,11 +99,11 @@ func newAdmissionController(limits Limits) *admissionController {
 	}
 }
 
-func (a *admissionController) acquireConnection(peer string) (*connectionLease, error) {
+func (a *admissionController) acquireOpening(peer string) (*connectionLease, error) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 
-	if a.limits.MaxConnections > 0 && a.active >= a.limits.MaxConnections {
+	if a.limits.MaxConnections > 0 && a.opening+a.active >= a.limits.MaxConnections {
 		a.rejectedConnections.Add(1)
 		return nil, &LimitError{Kind: LimitConnections, Limit: int64(a.limits.MaxConnections)}
 	}
@@ -99,27 +112,89 @@ func (a *admissionController) acquireConnection(peer string) (*connectionLease, 
 		return nil, &LimitError{Kind: LimitConnectionsPerPeer, Limit: int64(a.limits.MaxConnectionsPerPeer)}
 	}
 
-	a.active++
+	a.opening++
 	if peer != "" {
 		a.perPeer[peer]++
 	}
-	return &connectionLease{owner: a, peer: peer}, nil
+	return &connectionLease{owner: a, peer: peer, state: connectionOpening}, nil
 }
 
+func (a *admissionController) acquireConnection(peer string) (*connectionLease, error) {
+	lease, err := a.acquireOpening(peer)
+	if err != nil {
+		return nil, err
+	}
+	lease.activate()
+	return lease, nil
+}
+
+type connectionLeaseState uint8
+
+const (
+	connectionOpening connectionLeaseState = iota + 1
+	connectionActive
+	connectionReleased
+)
+
 type connectionLease struct {
-	owner    *admissionController
-	peer     string
-	released atomic.Bool
+	owner *admissionController
+	peer  string
+	mu    sync.Mutex
+	state connectionLeaseState
+}
+
+// activate promotes an opening connection into the active set. It is idempotent
+// for an already-active lease and returns false only after the lease was released.
+func (l *connectionLease) activate() bool {
+	if l == nil || l.owner == nil {
+		return false
+	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	switch l.state {
+	case connectionActive:
+		return true
+	case connectionReleased:
+		return false
+	case connectionOpening:
+		a := l.owner
+		a.mu.Lock()
+		if a.opening > 0 {
+			a.opening--
+		}
+		a.active++
+		a.mu.Unlock()
+		l.state = connectionActive
+		return true
+	default:
+		return false
+	}
 }
 
 func (l *connectionLease) release() {
-	if l == nil || l.owner == nil || !l.released.CompareAndSwap(false, true) {
+	if l == nil || l.owner == nil {
 		return
 	}
+	l.mu.Lock()
+	if l.state == connectionReleased {
+		l.mu.Unlock()
+		return
+	}
+	state := l.state
+	l.state = connectionReleased
+	l.mu.Unlock()
+
 	a := l.owner
 	a.mu.Lock()
-	if a.active > 0 {
-		a.active--
+	switch state {
+	case connectionOpening:
+		if a.opening > 0 {
+			a.opening--
+		}
+	case connectionActive:
+		if a.active > 0 {
+			a.active--
+		}
 	}
 	if l.peer != "" {
 		if n := a.perPeer[l.peer]; n <= 1 {
@@ -131,25 +206,92 @@ func (l *connectionLease) release() {
 	a.mu.Unlock()
 }
 
+type activityLease struct {
+	owner    *admissionController
+	kind     LimitKind
+	released atomic.Bool
+}
+
+func (a *admissionController) acquireHandshake() (*activityLease, error) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if a.limits.MaxConcurrentHandshakes > 0 && a.handshakes >= a.limits.MaxConcurrentHandshakes {
+		a.rejectedHandshakes.Add(1)
+		return nil, &LimitError{Kind: LimitHandshakes, Limit: int64(a.limits.MaxConcurrentHandshakes)}
+	}
+	a.handshakes++
+	return &activityLease{owner: a, kind: LimitHandshakes}, nil
+}
+
+func (a *admissionController) acquireUpgrade() (*activityLease, error) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if a.limits.MaxPendingUpgrades > 0 && a.upgrades >= a.limits.MaxPendingUpgrades {
+		a.rejectedUpgrades.Add(1)
+		return nil, &LimitError{Kind: LimitUpgrades, Limit: int64(a.limits.MaxPendingUpgrades)}
+	}
+	a.upgrades++
+	return &activityLease{owner: a, kind: LimitUpgrades}, nil
+}
+
+func (l *activityLease) release() bool {
+	if l == nil || l.owner == nil || !l.released.CompareAndSwap(false, true) {
+		return false
+	}
+	a := l.owner
+	a.mu.Lock()
+	switch l.kind {
+	case LimitHandshakes:
+		if a.handshakes > 0 {
+			a.handshakes--
+		}
+	case LimitUpgrades:
+		if a.upgrades > 0 {
+			a.upgrades--
+		}
+	}
+	a.mu.Unlock()
+	return true
+}
+
 type admissionSnapshot struct {
+	OpeningConnections  int
 	ActiveConnections   int
+	ActiveHandshakes    int
+	PendingUpgrades     int
 	GlobalQueuedBytes   int64
 	RejectedConnections uint64
 	RejectedPeers       uint64
+	RejectedHandshakes  uint64
+	RejectedUpgrades    uint64
 	RejectedQueuedBytes uint64
 }
 
 func (a *admissionController) snapshot() admissionSnapshot {
 	a.mu.Lock()
+	opening := a.opening
 	active := a.active
+	handshakes := a.handshakes
+	upgrades := a.upgrades
 	a.mu.Unlock()
 	return admissionSnapshot{
+		OpeningConnections:  opening,
 		ActiveConnections:   active,
+		ActiveHandshakes:    handshakes,
+		PendingUpgrades:     upgrades,
 		GlobalQueuedBytes:   a.bytes.current(),
 		RejectedConnections: a.rejectedConnections.Load(),
 		RejectedPeers:       a.rejectedPeers.Load(),
+		RejectedHandshakes:  a.rejectedHandshakes.Load(),
+		RejectedUpgrades:    a.rejectedUpgrades.Load(),
 		RejectedQueuedBytes: a.bytes.rejected.Load(),
 	}
+}
+
+func (a *admissionController) idle() bool {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.opening == 0 && a.active == 0 && a.handshakes == 0 && a.upgrades == 0
 }
 
 func peerKey(addr net.Addr) string {

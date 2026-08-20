@@ -11,6 +11,8 @@ func TestLimitsValidation(t *testing.T) {
 	for _, limits := range []Limits{
 		{MaxConnections: -1},
 		{MaxConnectionsPerPeer: -1},
+		{MaxConcurrentHandshakes: -1},
+		{MaxPendingUpgrades: -1},
 		{MaxQueuedBytesTotal: -1},
 	} {
 		if _, err := New(WithLimits(limits)); !errors.Is(err, ErrInvalidLimits) {
@@ -143,5 +145,103 @@ func TestEngineTrackedResourcesOwnAdmissionLeaseAndGlobalQuota(t *testing.T) {
 	e.removeStream(c2)
 	if got := e.admissionSnapshot().ActiveConnections; got != 0 {
 		t.Fatalf("active after cleanup = %d, want 0", got)
+	}
+}
+
+func TestOpeningConnectionsCountAgainstCapacity(t *testing.T) {
+	a := newAdmissionController(Limits{MaxConnections: 1})
+	lease, err := a.acquireOpening("192.0.2.10")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := a.snapshot(); got.OpeningConnections != 1 || got.ActiveConnections != 0 {
+		t.Fatalf("snapshot while opening = %+v", got)
+	}
+	if _, err := a.acquireConnection("192.0.2.11"); !errors.Is(err, ErrResourceExhausted) {
+		t.Fatalf("second admission = %v, want ErrResourceExhausted", err)
+	}
+	if !lease.activate() {
+		t.Fatal("activate opening lease failed")
+	}
+	if got := a.snapshot(); got.OpeningConnections != 0 || got.ActiveConnections != 1 {
+		t.Fatalf("snapshot after activate = %+v", got)
+	}
+	lease.release()
+	if got := a.snapshot(); got.OpeningConnections != 0 || got.ActiveConnections != 0 {
+		t.Fatalf("snapshot after release = %+v", got)
+	}
+}
+
+func TestHandshakeAndUpgradeLimits(t *testing.T) {
+	a := newAdmissionController(Limits{MaxConcurrentHandshakes: 1, MaxPendingUpgrades: 1})
+	handshake, err := a.acquireHandshake()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := a.acquireHandshake(); !errors.Is(err, ErrResourceExhausted) {
+		t.Fatalf("second handshake = %v, want ErrResourceExhausted", err)
+	} else {
+		var limitErr *LimitError
+		if !errors.As(err, &limitErr) || limitErr.Kind != LimitHandshakes {
+			t.Fatalf("handshake error = %#v, want handshake LimitError", err)
+		}
+	}
+	upgrade, err := a.acquireUpgrade()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := a.acquireUpgrade(); !errors.Is(err, ErrResourceExhausted) {
+		t.Fatalf("second upgrade = %v, want ErrResourceExhausted", err)
+	} else {
+		var limitErr *LimitError
+		if !errors.As(err, &limitErr) || limitErr.Kind != LimitUpgrades {
+			t.Fatalf("upgrade error = %#v, want upgrade LimitError", err)
+		}
+	}
+	if got := a.snapshot(); got.ActiveHandshakes != 1 || got.PendingUpgrades != 1 {
+		t.Fatalf("activity snapshot = %+v", got)
+	}
+	if !handshake.release() || handshake.release() {
+		t.Fatal("handshake release must be exact once")
+	}
+	if !upgrade.release() || upgrade.release() {
+		t.Fatal("upgrade release must be exact once")
+	}
+	if got := a.snapshot(); got.ActiveHandshakes != 0 || got.PendingUpgrades != 0 {
+		t.Fatalf("activity snapshot after release = %+v", got)
+	}
+}
+
+func TestEngineDoneWaitsForInFlightAdmission(t *testing.T) {
+	e, err := New(WithLimits(Limits{MaxConnections: 1, MaxConcurrentHandshakes: 1}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := e.beginOp(); err != nil {
+		t.Fatal(err)
+	}
+	opening, err := e.acquireOpening(&net.TCPAddr{IP: net.ParseIP("192.0.2.20"), Port: 443})
+	if err != nil {
+		t.Fatal(err)
+	}
+	handshake, err := e.acquireHandshake()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := e.Close(); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-e.Done():
+		t.Fatal("Engine.Done closed with opening/handshake admission still held")
+	default:
+	}
+	opening.release()
+	handshake.release()
+	e.endOp()
+	select {
+	case <-e.Done():
+	default:
+		t.Fatal("Engine.Done did not close after admission release")
 	}
 }

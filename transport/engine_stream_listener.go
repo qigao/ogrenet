@@ -23,6 +23,11 @@ func (e *Engine) listenStream(ctx context.Context, endpoint ogrenet.Endpoint, h 
 			return nil, err
 		}
 		prepare = func(ctx context.Context, raw net.Conn) (net.Conn, error) {
+			handshake, err := e.acquireHandshake()
+			if err != nil {
+				return nil, err
+			}
+			defer handshake.release()
 			tlsConn := tls.Server(raw, cfg.Clone())
 			if err := e.cfg.handshakeServer(ctx, tlsConn); err != nil {
 				return nil, err

@@ -2,7 +2,6 @@ package transport
 
 import (
 	"context"
-	"crypto/tls"
 	"encoding/base64"
 	"errors"
 	"fmt"
@@ -517,17 +516,18 @@ func (e *Engine) listenWebSocket(ctx context.Context, endpoint ogrenet.Endpoint,
 		return nil, err
 	}
 	bound := boundEndpoint(endpoint, rawLn.Addr())
+	lctx, cancel := context.WithCancel(ctx)
 	serveLn := net.Listener(configuredTCPListener{Listener: rawLn, engine: e})
 	if endpoint.Scheme == ogrenet.SchemeWSS {
 		tlsCfg, err := e.cfg.serverTLSConfig()
 		if err != nil {
+			cancel()
 			_ = rawLn.Close()
 			return nil, err
 		}
-		serveLn = tls.NewListener(serveLn, tlsCfg)
+		serveLn = newGatedTLSListener(lctx, serveLn, e, tlsCfg)
 	}
 
-	lctx, cancel := context.WithCancel(ctx)
 	l := &wsListener{
 		engine:   e,
 		endpoint: bound,
@@ -547,11 +547,39 @@ func (e *Engine) listenWebSocket(ctx context.Context, endpoint ogrenet.Endpoint,
 			http.NotFound(w, r)
 			return
 		}
+		if err := e.beginOp(); err != nil {
+			w.Header().Set("Connection", "close")
+			http.Error(w, "service unavailable", http.StatusServiceUnavailable)
+			return
+		}
+		defer e.endOp()
+
+		remote := parseRemoteAddr(r.RemoteAddr)
+		connLease, err := e.acquireOpening(remote)
+		if err != nil {
+			w.Header().Set("Connection", "close")
+			http.Error(w, "service unavailable", http.StatusServiceUnavailable)
+			return
+		}
+		transferred := false
+		defer func() {
+			if !transferred {
+				connLease.release()
+			}
+		}()
+
+		upgrade, err := e.acquireUpgrade()
+		if err != nil {
+			w.Header().Set("Connection", "close")
+			http.Error(w, "service unavailable", http.StatusServiceUnavailable)
+			return
+		}
 		ws, err := websocket.Accept(w, r, &websocket.AcceptOptions{
 			Subprotocols:    e.cfg.ws.Subprotocols,
 			OriginPatterns:  e.cfg.ws.OriginPatterns,
 			CompressionMode: websocket.CompressionDisabled,
 		})
+		upgrade.release()
 		if err != nil {
 			return
 		}
@@ -561,12 +589,12 @@ func (e *Engine) listenWebSocket(ctx context.Context, endpoint ogrenet.Endpoint,
 			_ = ws.CloseNow()
 			return
 		}
-		remote := parseRemoteAddr(r.RemoteAddr)
 		s := e.newWSSession(ws, bound, serveLn.Addr(), remote, h, cipher)
-		if err := e.addWebSocket(s); err != nil {
+		if err := e.addWebSocketWithLease(s, connLease); err != nil {
 			_ = ws.CloseNow()
 			return
 		}
+		transferred = true
 		s.start()
 	})
 	l.server = &http.Server{
@@ -610,42 +638,19 @@ func (e *Engine) dialWebSocket(ctx context.Context, endpoint ogrenet.Endpoint, h
 	hctx, cancel := context.WithTimeout(ctx, e.cfg.ws.HandshakeTimeout)
 	defer cancel()
 
-	transport := http.DefaultTransport.(*http.Transport).Clone()
-	transport.ForceAttemptHTTP2 = false
-	transport.TLSHandshakeTimeout = e.cfg.tlsHandshakeTimeout
-	transport.ResponseHeaderTimeout = e.cfg.ws.HandshakeTimeout
+	upgrade, err := e.acquireUpgrade()
+	if err != nil {
+		return nil, err
+	}
+	defer upgrade.release()
 
-	var addrMu sync.Mutex
-	var localAddr, remoteAddr net.Addr
-	dialer := net.Dialer{}
-	if e.cfg.tcp.KeepAlive {
-		dialer.KeepAlive = e.cfg.tcp.KeepAlivePeriod
-	} else {
-		dialer.KeepAlive = -1
+	transport, state, err := e.newWebSocketHTTPTransport(endpoint)
+	if err != nil {
+		return nil, err
 	}
-	transport.DialContext = func(ctx context.Context, network, address string) (net.Conn, error) {
-		raw, err := dialer.DialContext(ctx, network, address)
-		if err != nil {
-			return nil, err
-		}
-		if tcp, ok := raw.(*net.TCPConn); ok {
-			if err := e.configureTCP(tcp); err != nil {
-				_ = raw.Close()
-				return nil, err
-			}
-		}
-		addrMu.Lock()
-		localAddr, remoteAddr = raw.LocalAddr(), raw.RemoteAddr()
-		addrMu.Unlock()
-		return raw, nil
-	}
-	if endpoint.Scheme == ogrenet.SchemeWSS {
-		tlsCfg, err := e.cfg.clientTLSConfig(endpoint)
-		if err != nil {
-			return nil, err
-		}
-		transport.TLSClientConfig = tlsCfg
-	}
+	defer transport.CloseIdleConnections()
+	defer state.release()
+
 	client := &http.Client{
 		Transport: transport,
 		CheckRedirect: func(*http.Request, []*http.Request) error {
@@ -658,19 +663,25 @@ func (e *Engine) dialWebSocket(ctx context.Context, endpoint ogrenet.Endpoint, h
 		CompressionMode: websocket.CompressionDisabled,
 	})
 	if err != nil {
-		transport.CloseIdleConnections()
 		return nil, err
 	}
-	transport.CloseIdleConnections()
 	ws.SetReadLimit(int64(e.cfg.maxMessageBytes))
 	cipher, err := e.cfg.newCipher()
 	if err != nil {
 		_ = ws.CloseNow()
 		return nil, err
 	}
-	addrMu.Lock()
-	local, remote := localAddr, remoteAddr
-	addrMu.Unlock()
+	lease, local, remote := state.take()
+	if lease == nil {
+		_ = ws.CloseNow()
+		return nil, errors.New("transport: websocket dial completed without connection admission")
+	}
+	transferred := false
+	defer func() {
+		if !transferred {
+			lease.release()
+		}
+	}()
 	if local == nil {
 		local = staticAddr{network: endpoint.Scheme.String(), value: "unknown"}
 	}
@@ -678,10 +689,11 @@ func (e *Engine) dialWebSocket(ctx context.Context, endpoint ogrenet.Endpoint, h
 		remote = staticAddr{network: endpoint.Scheme.String(), value: endpoint.Address()}
 	}
 	s := e.newWSSession(ws, endpoint, local, remote, h, cipher)
-	if err := e.addWebSocket(s); err != nil {
+	if err := e.addWebSocketWithLease(s, lease); err != nil {
 		_ = ws.CloseNow()
 		return nil, err
 	}
+	transferred = true
 	s.start()
 	return s, nil
 }
