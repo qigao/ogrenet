@@ -5,6 +5,15 @@ import (
 	"testing"
 )
 
+func TestPayloadTypeIDsStable(t *testing.T) {
+	if got := uint8(PayloadBinary); got != 0x00 {
+		t.Fatalf("PayloadBinary = %#x, want 0x00", got)
+	}
+	if got := uint8(PayloadText); got != 0x01 {
+		t.Fatalf("PayloadText = %#x, want 0x01", got)
+	}
+}
+
 func TestMessageValidation(t *testing.T) {
 	if err := Text("hello").Validate(); err != nil {
 		t.Fatal(err)
