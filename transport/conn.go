@@ -28,7 +28,7 @@ type conn struct {
 	readSize int
 	maxRead  int
 
-	framerMu sync.Mutex
+	framerMu  sync.Mutex
 	closeOnce sync.Once
 	finalOnce sync.Once
 	closing   chan struct{}
