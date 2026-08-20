@@ -8,6 +8,10 @@ HTTP is intentionally **not** represented as `transport.Session`: request/respon
 streaming, connection pooling, multiplexing, redirects, and protocol negotiation
 are HTTP semantics.
 
+HTTP/3 uses a separate H3-only transport so protocol fallback is never implicit.
+See [HTTP/3 client transport](http3-client.md) for its QUIC, TLS, lifecycle, and
+no-fallback policy.
+
 ## Protocol selection
 
 `HTTPConfig.Protocols` accepts `client.HTTP1` and `client.HTTP2`.
