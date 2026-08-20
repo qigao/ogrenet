@@ -26,6 +26,7 @@ type conn struct {
 	handler ogrenet.Handler
 	queue   chan outbound
 	quota   *byteQuota
+	gate    *sendGate
 
 	readSize int
 	maxRead  int
@@ -64,9 +65,10 @@ func (c *conn) Send(ctx context.Context, msg ogrenet.Message) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	if c.isClosing() {
+	if !c.gate.enter() {
 		return ErrClosed
 	}
+	defer c.gate.leave()
 
 	frame, err := c.encode(msg)
 	if err != nil {
@@ -106,9 +108,11 @@ func (c *conn) Send(ctx context.Context, msg ogrenet.Message) error {
 // TrySend queues a frame without blocking. It returns ErrWouldBlock if either
 // the frame-count queue or queued-byte budget is currently full.
 func (c *conn) TrySend(msg ogrenet.Message) error {
-	if c.isClosing() {
+	if !c.gate.enter() {
 		return ErrClosed
 	}
+	defer c.gate.leave()
+
 	frame, err := c.encode(msg)
 	if err != nil {
 		return err
@@ -153,7 +157,10 @@ func (c *conn) encode(msg ogrenet.Message) ([]byte, error) {
 }
 
 func (c *conn) writerLoop() {
-	defer c.failPending(ErrClosed)
+	defer func() {
+		<-c.gate.done()
+		c.failPending(ErrClosed)
+	}()
 	for {
 		select {
 		case <-c.closing:
@@ -258,6 +265,7 @@ func (c *conn) initiateClose(cause error) {
 		c.errMu.Lock()
 		c.err = cause
 		c.errMu.Unlock()
+		c.gate.close()
 		close(c.closing)
 		_ = c.raw.Close()
 	})
@@ -267,7 +275,7 @@ func (c *conn) finalize() {
 	c.finalOnce.Do(func() {
 		c.initiateClose(nil)
 		c.engine.removeConn(c)
-		close(c.done)
+		defer close(c.done)
 		c.handler.OnClose(c, c.Err())
 	})
 }
