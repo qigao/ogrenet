@@ -231,9 +231,11 @@ func (c *conn) readerLoop() {
 		n, readErr := c.raw.Read(readBuf)
 		if n > 0 {
 			pending = append(pending, readBuf[:n]...)
-			for len(pending) > 0 {
+			consumedTotal := 0
+			for consumedTotal < len(pending) {
+				remaining := pending[consumedTotal:]
 				c.framerMu.Lock()
-				msg, consumed, err := c.framer.DecodeOne(pending)
+				msg, consumed, err := c.framer.DecodeOne(remaining)
 				c.framerMu.Unlock()
 				if errors.Is(err, wire.ErrNeedMore) {
 					break
@@ -242,7 +244,7 @@ func (c *conn) readerLoop() {
 					c.initiateClose(fmt.Errorf("transport: decode frame: %w", err))
 					return
 				}
-				if consumed <= 0 || consumed > len(pending) {
+				if consumed <= 0 || consumed > len(remaining) {
 					c.initiateClose(ErrInvalidFramer)
 					return
 				}
@@ -252,9 +254,18 @@ func (c *conn) readerLoop() {
 				}
 
 				c.handler.OnMessage(c, msg)
-				pending = pending[consumed:]
+				consumedTotal += consumed
 				if c.isClosing() {
 					return
+				}
+			}
+
+			if consumedTotal > 0 {
+				if consumedTotal == len(pending) {
+					pending = pending[:0]
+				} else {
+					copy(pending, pending[consumedTotal:])
+					pending = pending[:len(pending)-consumedTotal]
 				}
 			}
 
@@ -262,8 +273,8 @@ func (c *conn) readerLoop() {
 				c.initiateClose(ErrReadBufferFull)
 				return
 			}
-			if len(pending) == 0 {
-				pending = pending[:0]
+			if len(pending) == 0 && cap(pending) > retainedReadCapacity(c.readSize) {
+				pending = make([]byte, 0, c.readSize)
 			}
 		}
 
@@ -275,6 +286,14 @@ func (c *conn) readerLoop() {
 			return
 		}
 	}
+}
+
+func retainedReadCapacity(readSize int) int {
+	maxInt := int(^uint(0) >> 1)
+	if readSize > maxInt/4 {
+		return readSize
+	}
+	return readSize * 4
 }
 
 func (c *conn) initiateClose(cause error) {
