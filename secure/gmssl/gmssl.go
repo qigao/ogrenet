@@ -196,10 +196,8 @@ func (c *SM4GCM) Seal(dst, plaintext []byte) ([]byte, error) {
 		return nil, ErrGmSSL
 	}
 	body := make([]byte, len(plaintext)+sm4TagSize)
-	var bodyPtr *C.uint8_t
-	if len(plaintext) > 0 {
-		bodyPtr = bytePtr(body[:len(plaintext)])
-	}
+	// GmSSL 3.2.0 requires out != NULL even for a zero-length plaintext.
+	bodyPtr := bytePtr(body)
 	tagPtr := (*C.uint8_t)(unsafe.Pointer(&body[len(plaintext)]))
 	if C.ogre_sm4_gcm_encrypt((*C.uint8_t)(unsafe.Pointer(&c.key[0])), (*C.uint8_t)(unsafe.Pointer(&nonce[0])), C.size_t(len(nonce)),
 		bytePtr(plaintext), C.size_t(len(plaintext)), bodyPtr, tagPtr) != 1 {
@@ -215,9 +213,11 @@ func (c *SM4GCM) Open(dst, ciphertext []byte) ([]byte, error) {
 	nonce := ciphertext[:sm4NonceSize]
 	body := ciphertext[sm4NonceSize : len(ciphertext)-sm4TagSize]
 	tag := ciphertext[len(ciphertext)-sm4TagSize:]
-	plain := make([]byte, len(body))
+	// GmSSL 3.2.0 also requires out != NULL for zero-length ciphertext.
+	plainBuf := make([]byte, len(body)+1)
+	plain := plainBuf[:len(body)]
 	if C.ogre_sm4_gcm_decrypt((*C.uint8_t)(unsafe.Pointer(&c.key[0])), bytePtr(nonce), C.size_t(len(nonce)),
-		bytePtr(body), C.size_t(len(body)), bytePtr(tag), bytePtr(plain)) != 1 {
+		bytePtr(body), C.size_t(len(body)), bytePtr(tag), bytePtr(plainBuf)) != 1 {
 		return nil, ErrGmSSL
 	}
 	return append(dst, plain...), nil
