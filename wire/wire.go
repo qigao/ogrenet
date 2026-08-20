@@ -16,6 +16,7 @@ const (
 
 	FlagText      uint8 = 1 << 0
 	FlagEncrypted uint8 = 1 << 1
+	knownFlags          = FlagText | FlagEncrypted
 
 	DefaultMaxPayload uint32 = 16 << 20
 )
@@ -67,13 +68,19 @@ func (c *Codec) Encode(msg ogrenet.Message) ([]byte, error) {
 	algorithm := secure.AlgNone
 	payload := append([]byte(nil), msg.Data...)
 	if c.Cipher != nil {
+		algorithm = c.Cipher.Algorithm()
+		flags |= FlagEncrypted
+		aad := semanticAAD(flags, algorithm)
+
 		var err error
-		payload, err = c.Cipher.Seal(nil, msg.Data)
+		if authenticated, ok := c.Cipher.(secure.AuthenticatedCipher); ok {
+			payload, err = authenticated.SealAAD(nil, msg.Data, aad[:])
+		} else {
+			payload, err = c.Cipher.Seal(nil, msg.Data)
+		}
 		if err != nil {
 			return nil, fmt.Errorf("wire: encrypt payload: %w", err)
 		}
-		algorithm = c.Cipher.Algorithm()
-		flags |= FlagEncrypted
 		if msg.Type == ogrenet.PayloadText {
 			encoded := make([]byte, base64.RawStdEncoding.EncodedLen(len(payload)))
 			base64.RawStdEncoding.Encode(encoded, payload)
@@ -107,6 +114,9 @@ func (c *Codec) DecodeOne(src []byte) (ogrenet.Message, int, error) {
 	}
 
 	flags := src[3]
+	if flags&^knownFlags != 0 {
+		return ogrenet.Message{}, 0, ErrUnsupportedFlags
+	}
 	algorithm := secure.Algorithm(binary.BigEndian.Uint16(src[4:6]))
 	length := binary.BigEndian.Uint32(src[6:10])
 	if length > c.maxPayload() {
@@ -141,7 +151,15 @@ func (c *Codec) DecodeOne(src []byte) (ogrenet.Message, int, error) {
 			}
 			payload = decoded[:n]
 		}
-		plaintext, err := c.Cipher.Open(nil, payload)
+
+		aad := semanticAAD(flags, algorithm)
+		var plaintext []byte
+		var err error
+		if authenticated, ok := c.Cipher.(secure.AuthenticatedCipher); ok {
+			plaintext, err = authenticated.OpenAAD(nil, payload, aad[:])
+		} else {
+			plaintext, err = c.Cipher.Open(nil, payload)
+		}
 		if err != nil {
 			return ogrenet.Message{}, 0, fmt.Errorf("wire: decrypt payload: %w", err)
 		}
@@ -187,5 +205,17 @@ func ParseHeader(src []byte) (Header, error) {
 	if h.Version != Version {
 		return Header{}, ErrUnsupportedVersion
 	}
+	if h.Flags&^knownFlags != 0 {
+		return Header{}, ErrUnsupportedFlags
+	}
 	return h, nil
+}
+
+func semanticAAD(flags uint8, algorithm secure.Algorithm) [6]byte {
+	var aad [6]byte
+	binary.BigEndian.PutUint16(aad[0:2], Magic)
+	aad[2] = Version
+	aad[3] = flags
+	binary.BigEndian.PutUint16(aad[4:6], uint16(algorithm))
+	return aad
 }
