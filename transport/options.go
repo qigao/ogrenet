@@ -1,6 +1,8 @@
 package transport
 
 import (
+	"fmt"
+
 	"github.com/qigao/ogrenet/secure"
 	"github.com/qigao/ogrenet/wire"
 )
@@ -14,11 +16,17 @@ const (
 
 // FramerFactory creates per-connection framing state. A new framer is created
 // for every accepted or dialed connection so custom stateful framers do not
-// leak protocol state between peers.
+// leak protocol state between peers. The factory may be called concurrently.
 type FramerFactory func() wire.Framer
+
+// CipherFactory creates one cipher instance for each accepted or dialed
+// connection. Use this for ciphers that carry mutable per-session state. The
+// factory may be called concurrently.
+type CipherFactory func() (secure.Cipher, error)
 
 type config struct {
 	cipher          secure.Cipher
+	cipherFactory   CipherFactory
 	framerFactory   FramerFactory
 	writeQueue      int
 	maxQueuedBytes  int
@@ -38,11 +46,29 @@ func defaultConfig() config {
 // Option configures Engine.
 type Option func(*config) error
 
-// WithCipher configures the cipher used by the default wire.Codec. It has no
+// WithCipher configures one cipher instance shared by all default wire.Codecs.
+// The cipher must therefore be safe for concurrent use across connections. Use
+// WithCipherFactory for ciphers with mutable per-connection state. It has no
 // effect when WithFramerFactory supplies a custom framer.
 func WithCipher(cipher secure.Cipher) Option {
 	return func(c *config) error {
 		c.cipher = cipher
+		c.cipherFactory = nil
+		return nil
+	}
+}
+
+// WithCipherFactory configures a factory that creates one cipher per
+// connection for the default wire.Codec. The last WithCipher or
+// WithCipherFactory option wins. It has no effect when WithFramerFactory
+// supplies a custom framer.
+func WithCipherFactory(factory CipherFactory) Option {
+	return func(c *config) error {
+		if factory == nil {
+			return ErrNilCipherFactory
+		}
+		c.cipher = nil
+		c.cipherFactory = factory
 		return nil
 	}
 }
@@ -115,5 +141,17 @@ func (c config) newFramer() (wire.Framer, error) {
 		}
 		return framer, nil
 	}
-	return wire.New(c.cipher), nil
+
+	cipher := c.cipher
+	if c.cipherFactory != nil {
+		var err error
+		cipher, err = c.cipherFactory()
+		if err != nil {
+			return nil, fmt.Errorf("transport: create cipher: %w", err)
+		}
+		if cipher == nil {
+			return nil, ErrNilCipher
+		}
+	}
+	return wire.New(cipher), nil
 }
