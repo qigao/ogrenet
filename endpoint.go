@@ -9,24 +9,26 @@ import (
 	"strings"
 )
 
-// Scheme identifies the transport protocol selected by an Endpoint.
+// Scheme identifies the transport protocol selected by an Endpoint. Numeric
+// values are explicit because Scheme is observable through the public Session
+// API and may be persisted by telemetry/protocol tooling.
 type Scheme uint8
 
 const (
-	SchemeTCP Scheme = iota + 1
-	SchemeUDP
-	SchemeTLS
-	SchemeWS
-	SchemeWSS
+	SchemeTCP Scheme = 0x01
+	SchemeUDP Scheme = 0x02
+	SchemeTLS Scheme = 0x03
+	SchemeWS  Scheme = 0x04
+	SchemeWSS Scheme = 0x05
 )
 
 var (
-	ErrInvalidEndpoint  = errors.New("ogrenet: invalid endpoint")
+	ErrInvalidEndpoint   = errors.New("ogrenet: invalid endpoint")
 	ErrUnsupportedScheme = errors.New("ogrenet: unsupported endpoint scheme")
-	ErrMissingHost      = errors.New("ogrenet: dial endpoint requires a host")
-	ErrMissingPort      = errors.New("ogrenet: endpoint requires a port")
-	ErrUnexpectedPath   = errors.New("ogrenet: endpoint scheme does not support a path")
-	ErrUnexpectedQuery  = errors.New("ogrenet: endpoint scheme does not support a query")
+	ErrMissingHost       = errors.New("ogrenet: dial endpoint requires a host")
+	ErrMissingPort       = errors.New("ogrenet: endpoint requires a port")
+	ErrUnexpectedPath    = errors.New("ogrenet: endpoint scheme does not support a path")
+	ErrUnexpectedQuery   = errors.New("ogrenet: endpoint scheme does not support a query")
 )
 
 func (s Scheme) String() string {
@@ -46,7 +48,6 @@ func (s Scheme) String() string {
 	}
 }
 
-// IsSession reports whether the scheme has connection/session lifecycle.
 func (s Scheme) IsSession() bool {
 	switch s {
 	case SchemeTCP, SchemeTLS, SchemeWS, SchemeWSS:
@@ -56,7 +57,6 @@ func (s Scheme) IsSession() bool {
 	}
 }
 
-// IsPacket reports whether the scheme uses datagram semantics.
 func (s Scheme) IsPacket() bool { return s == SchemeUDP }
 
 // Endpoint is a parsed, strongly typed transport endpoint.
@@ -68,17 +68,15 @@ type Endpoint struct {
 	RawQuery string
 }
 
-// ParseEndpoint parses a transport endpoint such as tcp://127.0.0.1:9000,
-// tls://example.com:443, ws://example.com/chat, or udp://:9000.
+// ParseEndpoint parses endpoints such as tcp://127.0.0.1:9000,
+// udp://:9000, tls://example.com:443, ws://example.com/chat, and
+// wss://example.com/chat.
 func ParseEndpoint(raw string) (Endpoint, error) {
 	u, err := url.Parse(raw)
 	if err != nil {
 		return Endpoint{}, fmt.Errorf("%w: %v", ErrInvalidEndpoint, err)
 	}
-	if u.Scheme == "" || u.Host == "" {
-		return Endpoint{}, ErrInvalidEndpoint
-	}
-	if u.User != nil || u.Fragment != "" {
+	if u.Scheme == "" || u.Host == "" || u.User != nil || u.Fragment != "" {
 		return Endpoint{}, ErrInvalidEndpoint
 	}
 
@@ -86,18 +84,19 @@ func ParseEndpoint(raw string) (Endpoint, error) {
 	if err != nil {
 		return Endpoint{}, err
 	}
-
-	portText := u.Port()
-	port, err := endpointPort(scheme, portText)
+	port, err := endpointPort(scheme, u.Port())
 	if err != nil {
 		return Endpoint{}, err
 	}
-
+	path := u.Path
+	if (scheme == SchemeWS || scheme == SchemeWSS) && path == "" {
+		path = "/"
+	}
 	e := Endpoint{
 		Scheme:   scheme,
 		Host:     u.Hostname(),
 		Port:     port,
-		Path:     u.Path,
+		Path:     path,
 		RawQuery: u.RawQuery,
 	}
 	if err := e.Validate(); err != nil {
@@ -141,9 +140,8 @@ func endpointPort(scheme Scheme, raw string) (uint16, error) {
 	return uint16(v), nil
 }
 
-// Validate checks scheme-specific endpoint syntax. Host emptiness is allowed so
-// the same Endpoint can represent a wildcard listen address; ValidateDial adds
-// the host requirement for outbound connections.
+// Validate checks scheme-specific syntax. Port zero is valid for Listen and
+// requests OS-assigned ephemeral port allocation.
 func (e Endpoint) Validate() error {
 	switch e.Scheme {
 	case SchemeTCP, SchemeUDP, SchemeTLS:
@@ -155,7 +153,7 @@ func (e Endpoint) Validate() error {
 		}
 	case SchemeWS, SchemeWSS:
 		if e.Path == "" {
-			e.Path = "/"
+			return ErrInvalidEndpoint
 		}
 	default:
 		return ErrUnsupportedScheme
@@ -163,7 +161,6 @@ func (e Endpoint) Validate() error {
 	return nil
 }
 
-// ValidateDial validates an endpoint for an outbound connection.
 func (e Endpoint) ValidateDial() error {
 	if err := e.Validate(); err != nil {
 		return err
@@ -171,15 +168,16 @@ func (e Endpoint) ValidateDial() error {
 	if e.Host == "" {
 		return ErrMissingHost
 	}
+	if e.Port == 0 {
+		return ErrMissingPort
+	}
 	return nil
 }
 
-// Address returns the host:port address used by TCP/UDP/TLS sockets.
 func (e Endpoint) Address() string {
 	return net.JoinHostPort(e.Host, strconv.Itoa(int(e.Port)))
 }
 
-// URL returns the canonical endpoint URL.
 func (e Endpoint) URL() string {
 	path := e.Path
 	if (e.Scheme == SchemeWS || e.Scheme == SchemeWSS) && path == "" {
@@ -192,18 +190,11 @@ func (e Endpoint) URL() string {
 			host = "[" + e.Host + "]"
 		}
 	}
-	return (&url.URL{
-		Scheme:   e.Scheme.String(),
-		Host:     host,
-		Path:     path,
-		RawQuery: e.RawQuery,
-	}).String()
+	return (&url.URL{Scheme: e.Scheme.String(), Host: host, Path: path, RawQuery: e.RawQuery}).String()
 }
 
 func (e Endpoint) String() string { return e.URL() }
 
-// WithPort returns a copy with a different port. This is useful with listeners
-// bound to port zero, whose concrete Endpoint reports the assigned port.
 func (e Endpoint) WithPort(port uint16) Endpoint {
 	e.Port = port
 	return e
