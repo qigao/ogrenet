@@ -34,6 +34,7 @@ type conn struct {
 	framerMu  sync.Mutex
 	closeOnce sync.Once
 	finalOnce sync.Once
+	loops     sync.WaitGroup
 	closing   chan struct{}
 	done      chan struct{}
 
@@ -142,8 +143,19 @@ func (c *conn) Close() error {
 }
 
 func (c *conn) start() {
-	go c.writerLoop()
-	go c.readerLoop()
+	c.loops.Add(2)
+	go func() {
+		defer c.loops.Done()
+		c.writerLoop()
+	}()
+	go func() {
+		defer c.loops.Done()
+		c.readerLoop()
+	}()
+	go func() {
+		c.loops.Wait()
+		c.finalize()
+	}()
 }
 
 func (c *conn) encode(msg ogrenet.Message) ([]byte, error) {
@@ -200,7 +212,6 @@ func (c *conn) failPending(err error) {
 }
 
 func (c *conn) readerLoop() {
-	defer c.finalize()
 	c.handler.OnOpen(c)
 	if c.isClosing() {
 		return
