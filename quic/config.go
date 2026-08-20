@@ -4,8 +4,8 @@ import (
 	"crypto/tls"
 	"time"
 
-	quicgo "github.com/quic-go/quic-go"
 	"github.com/qigao/ogrenet/internal/quicpolicy"
+	quicgo "github.com/quic-go/quic-go"
 )
 
 var (
