@@ -14,9 +14,6 @@ const (
 	AlgLegacyAES128CFB Algorithm = 0x1001
 	AlgLegacyAES192CFB Algorithm = 0x1002
 	AlgLegacyAES256CFB Algorithm = 0x1003
-	AlgLegacySM2C1C2C3 Algorithm = 0x1004
-	AlgLegacySM3Method Algorithm = 0x1005
-	AlgLegacySM4CBC    Algorithm = 0x1006
 )
 
 // Cipher is a reversible message transform. Seal and Open append their output
