@@ -30,6 +30,8 @@ jobs:
         run: go mod tidy && git diff --exit-code -- go.mod go.sum
       - name: Vet
         run: go vet ./...
+      - name: HTTP protocol facade benchmark smoke
+        run: go test ./client -run '^$' -bench 'BenchmarkHTTPProtocolFacade' -benchtime=1x
       - name: Test with race detector
         run: go test -race -count=1 ./...
 
