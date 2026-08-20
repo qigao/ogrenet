@@ -185,8 +185,12 @@ func (c *conn) writerLoop() {
 		case req := <-c.queue:
 			err := writeAll(c.raw, req.frame)
 			c.quota.release(req.bytes)
+			sendErr := err
+			if err != nil && c.isClosing() {
+				sendErr = ErrClosed
+			}
 			if req.ack != nil {
-				req.ack <- err
+				req.ack <- sendErr
 			}
 			if err != nil {
 				c.initiateClose(fmt.Errorf("transport: write: %w", err))
