@@ -6,18 +6,30 @@ import (
 )
 
 // Conn is the platform-independent connection contract exposed to applications.
-// Implementations may be backed by epoll, kqueue, or IOCP.
+// Implementations may be backed by epoll, kqueue, IOCP, or another transport
+// implementation that preserves this lifecycle and message contract.
 type Conn interface {
 	ID() uint64
 	Send(ctx context.Context, msg Message) error
 	TrySend(msg Message) error
 	LocalAddr() net.Addr
 	RemoteAddr() net.Addr
+	Done() <-chan struct{}
+	Err() error
+	Close() error
+}
+
+// Listener represents one active listening endpoint.
+type Listener interface {
+	Addr() net.Addr
+	Done() <-chan struct{}
+	Err() error
 	Close() error
 }
 
 // Handler receives plaintext application messages after framing and security
-// processing have completed.
+// processing have completed. Callbacks for one connection are delivered in
+// lifecycle order: OnOpen, zero or more OnMessage calls, then OnClose.
 type Handler interface {
 	OnOpen(Conn)
 	OnMessage(Conn, Message)
@@ -50,10 +62,10 @@ func (h HandlerFuncs) OnClose(c Conn, err error) {
 }
 
 // Engine is the common high-level transport contract. Native poller packages
-// remain public and keep their native kernel semantics; Engine implementations
-// compose them rather than replacing them.
+// remain public and retain their kernel-specific semantics; Engine is the
+// application-facing message/lifecycle boundary above them.
 type Engine interface {
-	Listen(ctx context.Context, network, address string, h Handler) error
-	Dial(ctx context.Context, network, address string) (Conn, error)
+	Listen(ctx context.Context, network, address string, h Handler) (Listener, error)
+	Dial(ctx context.Context, network, address string, h Handler) (Conn, error)
 	Close() error
 }
