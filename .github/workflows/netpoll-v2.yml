@@ -1,7 +1,8 @@
-name: netpoll-v2
+name: ogrenet
 
 on:
   push:
+    branches: [master]
   pull_request:
 
 permissions:
@@ -76,13 +77,13 @@ jobs:
             -DCMAKE_INSTALL_LIBDIR=lib
           cmake --build _deps/gmssl-build --parallel 2
           cmake --install _deps/gmssl-build
-      - name: Test GmSSL backend and wire integration
+      - name: Test GmSSL security, wire, and transport
         env:
           CGO_ENABLED: "1"
           CGO_CFLAGS: -I${{ runner.temp }}/gmssl/include
           CGO_LDFLAGS: -L${{ runner.temp }}/gmssl/lib
           LD_LIBRARY_PATH: ${{ runner.temp }}/gmssl/lib
-        run: go test -tags gmssl -count=1 ./secure/gmssl ./wire
+        run: go test -tags gmssl -count=1 ./secure/gmssl ./wire ./transport
 
   cross-compile:
     runs-on: ubuntu-latest
