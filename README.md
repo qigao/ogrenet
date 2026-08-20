@@ -1,108 +1,193 @@
 # ogrenet
 
-`ogrenet` v2 is a small Go library for native OS network-event mechanisms. It deliberately does **not** provide the old connection-manager API: codecs, encryption, load balancing, protocol framing, timers, and application callback orchestration belong above this layer.
+`ogrenet` is a production-oriented Go networking library built in layers. Native
+OS polling mechanisms remain available directly, while the root package defines
+a platform-independent transport contract for applications that do not need to
+manage readiness/completion details themselves.
 
-## Packages
+## Layers
 
-| Package | Platform | Kernel model | Core API |
-| --- | --- | --- | --- |
-| `epoll` | Linux | readiness | `Open`, `Add`, `Mod`, `Del`, `Wait`, `Wake`, `Close` |
-| `iocp` | Windows | completion | `Open`, `Associate`, `Post`, `Get`, `Close` |
-| `kqueue` | macOS, 64-bit FreeBSD | readiness/filter | `Open`, `Apply`, `Del`, `Wait`, `Wake`, `Close` |
+| Package | Purpose |
+| --- | --- |
+| `epoll` | Linux native readiness backend |
+| `iocp` | Windows native completion backend |
+| `kqueue` | macOS / FreeBSD native readiness backend |
+| root `ogrenet` | `Engine`, `Conn`, `Handler`, `Message` contracts |
+| `wire` | default text/binary stream framing |
+| `secure` | security interfaces plus AES-GCM and RSA-OAEP |
+| `secure/legacy` | compatibility transforms such as AES-CFB |
+| `secure/gmssl` | optional GmSSL-backed SM2/SM3/SM4 and legacy GM transforms |
 
-There is intentionally no root-level networking framework. Applications compose these low-level packages with their own connection lifecycle, buffers, protocols, and scheduling policy.
+The high-level API does not replace the native packages. epoll, kqueue, and IOCP
+keep their native semantics; Engine implementations compose them above that
+boundary.
 
-## Design guarantees
+## Unified message API
 
-- Native semantics are preserved instead of forcing epoll, kqueue, and IOCP behind a misleading common interface.
-- User sockets/files remain caller-owned. Closing a poller never closes registered or associated application handles.
-- `Close` is idempotent and wakes blocked waits.
-- Native descriptor/handle lifetime is synchronized against concurrent control and wait operations, preventing close/reuse races inside the wrapper.
-- Internal wake notifications are consumed by the wrapper and never exposed as application events.
-- Hot-path wait buffers are reused by the poller after their first required allocation.
-- No hidden goroutine pool, logger, codec, encryption stack, or load-balancing policy is installed.
+Application messages are explicitly text or binary:
+
+```go
+msg := ogrenet.Text("hello 世界")
+raw := ogrenet.Bin([]byte{0x01, 0x02, 0xff})
+```
+
+`Text` payloads must be valid UTF-8. `Binary` payloads are opaque bytes.
+Handlers always receive plaintext messages after framing and security processing.
+
+```go
+type Handler interface {
+    OnOpen(ogrenet.Conn)
+    OnMessage(ogrenet.Conn, ogrenet.Message)
+    OnClose(ogrenet.Conn, error)
+}
+```
+
+`Conn` exposes `Send`, `TrySend`, addresses, a stable ID, and idempotent close.
+`Engine` exposes the common `Listen`/`Dial` lifecycle. Concrete platform engines
+are implemented above the native poller packages rather than by pretending that
+IOCP completion and epoll/kqueue readiness are the same kernel model.
+
+## Default wire format
+
+`wire.Codec` implements a small v1 envelope suitable for stream transports:
+
+```text
++--------+---------+-------+-----------+--------+
+| magic  | version | flags | algorithm | length |
+| uint16 | uint8   | uint8 | uint16    | uint32 |
++--------+---------+-------+-----------+--------+
+| payload ...                                  |
++----------------------------------------------+
+```
+
+The fixed header is 10 bytes. `DecodeOne` is incremental: incomplete TCP data
+returns `wire.ErrNeedMore` instead of treating a read as a message boundary.
+
+When encryption is enabled:
+
+- binary payloads carry raw ciphertext;
+- text payloads carry Base64-encoded ciphertext so the payload remains text-safe;
+- the algorithm identifier is encoded in the header and must match the configured
+  cipher during decoding.
+
+Applications with an existing protocol can implement their own `wire.Framer`.
+
+## Security model
+
+Security primitives have distinct contracts:
+
+```go
+type Cipher interface {
+    Algorithm() Algorithm
+    Seal(dst, plaintext []byte) ([]byte, error)
+    Open(dst, ciphertext []byte) ([]byte, error)
+}
+
+type Digest interface {
+    Algorithm() Algorithm
+    Sum(dst, data []byte) []byte
+    Verify(data, digest []byte) bool
+}
+
+type KeyWrapper interface {
+    Algorithm() Algorithm
+    Wrap(key []byte) ([]byte, error)
+    Unwrap(wrapped []byte) ([]byte, error)
+}
+```
+
+SM3 is therefore a digest, not a fake reversible cipher. RSA-OAEP and SM2 are
+intended to wrap session keys rather than bulk application messages.
+
+### Standard backend
+
+AES-GCM is available without CGO:
+
+```go
+cipher, err := secure.NewAESGCM(key)
+codec := wire.New(cipher)
+```
+
+RSA-OAEP uses SHA-512, preserving the primitive used by the pre-v2 code but
+assigning it the correct key-wrapping role.
+
+## GmSSL backend
+
+National cryptography support uses the upstream GmSSL C library directly. The
+adapter targets **GmSSL 3.2.0** and is compiled only when both CGO and the
+`gmssl` build tag are enabled.
+
+Build and install GmSSL first, then:
+
+```bash
+CGO_ENABLED=1 go test -tags gmssl ./secure/gmssl
+```
+
+If GmSSL is installed outside the compiler's default paths, set `CGO_CFLAGS`
+and `CGO_LDFLAGS` accordingly.
+
+The GmSSL backend provides:
+
+- SM4-GCM authenticated encryption;
+- SM3 digest;
+- SM2 session-key wrapping;
+- GmSSL cryptographic random generation for SM4-GCM nonces;
+- raw SM2 key generation/import helpers.
+
+GmSSL is optional: the native poller packages and the standard security/wire
+packages continue to build with `CGO_ENABLED=0`.
+
+## Legacy crypto compatibility
+
+The redesign does not restore the old connection-manager API, but it keeps the
+old cryptographic methods needed for protocol interoperability.
+
+| Old method | New location | Notes |
+| --- | --- | --- |
+| raw | `secure/legacy.Raw` | no-op transform |
+| AES-128-CFB | `secure/legacy.NewAES128CFB` | preserves old key/IV normalization |
+| AES-192-CFB | `secure/legacy.NewAES192CFB` | preserves old key/IV normalization |
+| AES-256-CFB | `secure/legacy.NewAES256CFB` | preserves old key/IV normalization |
+| SM2 C1C2C3 | `secure/gmssl.NewLegacySM2C1C2C3` | preserves raw C1/C2/C3 wire order |
+| SM3 method | `secure/gmssl.LegacySM3Method` | preserves old hash-on-Seal / identity-on-Open behavior |
+| SM4-CBC | `secure/gmssl.NewLegacySM4CBC` | preserves key/IV truncate-or-space-pad rules |
+
+The legacy algorithms are compatibility tools. New encrypted sessions should use
+an authenticated cipher such as AES-GCM or SM4-GCM.
+
+## Native pollers
+
+### Linux / epoll
+
+`epoll.Open`, `Add`, `Mod`, `Del`, `Wait`, `Wake`, and `Close` expose Linux
+readiness semantics with a 64-bit opaque registration value and an internal
+`eventfd` wake mechanism.
+
+### Windows / IOCP
+
+`iocp.Open`, `Associate`, `Post`, `Get`, and `Close` expose completion semantics.
+Multiple workers may block in `Get` concurrently.
+
+### macOS / FreeBSD / kqueue
+
+`kqueue.Open`, `Apply`, `Del`, `Wait`, `Wake`, and `Close` preserve native
+`(ident, filter)` event identity and use `EVFILT_USER` for internal wakeups.
+
+## Ownership and lifecycle guarantees
+
+- User sockets/files remain caller-owned by the native poller layer.
+- Poller close is idempotent and wakes blocked waits.
+- Descriptor/handle lifetime is synchronized against concurrent syscalls to
+  avoid close/reuse races inside the wrappers.
+- Internal wake events are never exposed as application messages.
+- There is no hidden global goroutine pool or logger.
 
 ## Requirements
 
-The module targets Go 1.25 or newer and currently depends only on `golang.org/x/sys`.
+- Go 1.25 or newer.
+- `golang.org/x/sys` for native OS calls.
+- Optional GmSSL 3.2.0 + a working C toolchain for `-tags gmssl`.
 
-## Linux / epoll
-
-```go
-p, err := epoll.Open()
-if err != nil {
-    return err
-}
-defer p.Close()
-
-if err := p.Add(fd, epoll.Readable|epoll.PeerClosed|epoll.EdgeTriggered, 1); err != nil {
-    return err
-}
-
-events := make([]epoll.Event, 256)
-for {
-    n, err := p.Wait(events, -1)
-    if err != nil {
-        return err
-    }
-    for _, event := range events[:n] {
-        _ = event // drain non-blocking I/O to EAGAIN when using edge triggering
-    }
-}
-```
-
-The `Data` field is an opaque 64-bit registration value. `math.MaxUint64` is reserved for the internal eventfd wake event.
-
-## Windows / IOCP
-
-```go
-port, err := iocp.Open(0)
-if err != nil {
-    return err
-}
-defer port.Close()
-
-if err := port.Associate(handle, 42); err != nil {
-    return err
-}
-
-completion, err := port.Get(30 * time.Second)
-if err != nil {
-    return err
-}
-_ = completion
-```
-
-IOCP remains a completion API. `Get` may be called by multiple worker goroutines concurrently. A failed overlapped operation can return both a populated `Completion` and a non-nil error.
-
-## macOS / FreeBSD / kqueue
-
-```go
-p, err := kqueue.Open()
-if err != nil {
-    return err
-}
-defer p.Close()
-
-err = p.Apply(kqueue.Change{
-    Ident:  uint64(fd),
-    Filter: kqueue.Read,
-    Flags:  kqueue.Add | kqueue.Clear,
-})
-if err != nil {
-    return err
-}
-
-events := make([]kqueue.Event, 256)
-n, err := p.Wait(events, -1)
-if err != nil {
-    return err
-}
-_ = events[:n]
-```
-
-kqueue uses `(Ident, Filter)` as the native event identity. The wrapper does not turn `udata` into an arbitrary Go pointer/token because that would introduce unsafe GC and lifetime semantics into the public API.
-
-## Validation
-
-GitHub Actions runs formatting, module-hygiene checks, `go vet`, Linux race tests, native Windows tests, native macOS tests, and a FreeBSD kqueue cross-compile. Linux is tested on both Go 1.25 and the current Go 1.26 release line.
+GitHub Actions validates formatting, module hygiene, vet/race tests, native
+Linux/Windows/macOS behavior, cross-architecture builds, and a dedicated GmSSL
+3.2.0 integration job.
