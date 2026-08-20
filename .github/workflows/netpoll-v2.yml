@@ -1,0 +1,33 @@
+name: netpoll-v2
+
+on:
+  push:
+    branches:
+      - refactor/netpoll-v2
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  linux-epoll:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.23.x'
+          cache: true
+      - run: go test -race ./epoll
+      - run: go vet ./epoll
+
+  windows-iocp:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.23.x'
+          cache: true
+      - run: go test ./iocp
+      - run: go vet ./iocp
