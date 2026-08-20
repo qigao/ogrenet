@@ -24,6 +24,15 @@ type Cipher interface {
 	Open(dst, ciphertext []byte) ([]byte, error)
 }
 
+// AuthenticatedCipher is implemented by ciphers that can authenticate
+// associated metadata in addition to the encrypted payload. The default wire
+// codec uses this to authenticate its semantic header fields.
+type AuthenticatedCipher interface {
+	Cipher
+	SealAAD(dst, plaintext, aad []byte) ([]byte, error)
+	OpenAAD(dst, ciphertext, aad []byte) ([]byte, error)
+}
+
 // Digest is a one-way integrity primitive and is intentionally separate from
 // Cipher so hashes such as SM3 cannot be mistaken for reversible encryption.
 type Digest interface {
