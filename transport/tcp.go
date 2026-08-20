@@ -71,6 +71,30 @@ func (e *Engine) configureTCP(conn *net.TCPConn) error {
 	return nil
 }
 
+type configuredTCPListener struct {
+	net.Listener
+	engine *Engine
+}
+
+func (l configuredTCPListener) Accept() (net.Conn, error) {
+	for {
+		conn, err := l.Listener.Accept()
+		if err != nil {
+			return nil, err
+		}
+		tcp, ok := conn.(*net.TCPConn)
+		if !ok {
+			_ = conn.Close()
+			continue
+		}
+		if err := l.engine.configureTCP(tcp); err != nil {
+			_ = tcp.Close()
+			continue
+		}
+		return tcp, nil
+	}
+}
+
 func boundEndpoint(endpoint ogrenet.Endpoint, addr net.Addr) ogrenet.Endpoint {
 	host, portText, err := net.SplitHostPort(addr.String())
 	if err != nil {
