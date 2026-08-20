@@ -31,6 +31,32 @@ func TestAESGCMRoundTripAndTamper(t *testing.T) {
 	}
 }
 
+func TestAESGCMAssociatedData(t *testing.T) {
+	base, err := NewAESGCM([]byte("0123456789abcdef0123456789abcdef"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	c, ok := base.(AuthenticatedCipher)
+	if !ok {
+		t.Fatal("AES-GCM does not implement AuthenticatedCipher")
+	}
+	plain := []byte("payload")
+	sealed, err := c.SealAAD(nil, plain, []byte("header-a"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	opened, err := c.OpenAAD(nil, sealed, []byte("header-a"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(opened, plain) {
+		t.Fatalf("got %q, want %q", opened, plain)
+	}
+	if _, err := c.OpenAAD(nil, sealed, []byte("header-b")); err == nil {
+		t.Fatal("ciphertext authenticated with different associated data")
+	}
+}
+
 func TestRSAOAEPWrapRoundTrip(t *testing.T) {
 	wrapper, err := GenerateRSAOAEP(2048)
 	if err != nil {
