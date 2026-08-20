@@ -24,17 +24,19 @@ static int ogre_sm3_sum(const uint8_t *in, size_t inlen, uint8_t out[32]) {
 }
 
 static int ogre_sm4_gcm_encrypt(const uint8_t key_bytes[16], const uint8_t *iv, size_t ivlen,
-	const uint8_t *in, size_t inlen, uint8_t *out, uint8_t tag[16]) {
+	const uint8_t *aad, size_t aadlen, const uint8_t *in, size_t inlen,
+	uint8_t *out, uint8_t tag[16]) {
 	SM4_KEY key;
 	sm4_set_encrypt_key(&key, key_bytes);
-	return sm4_gcm_encrypt(&key, iv, ivlen, NULL, 0, in, inlen, out, 16, tag);
+	return sm4_gcm_encrypt(&key, iv, ivlen, aad, aadlen, in, inlen, out, 16, tag);
 }
 
 static int ogre_sm4_gcm_decrypt(const uint8_t key_bytes[16], const uint8_t *iv, size_t ivlen,
-	const uint8_t *in, size_t inlen, const uint8_t tag[16], uint8_t *out) {
+	const uint8_t *aad, size_t aadlen, const uint8_t *in, size_t inlen,
+	const uint8_t tag[16], uint8_t *out) {
 	SM4_KEY key;
 	sm4_set_encrypt_key(&key, key_bytes);
-	return sm4_gcm_decrypt(&key, iv, ivlen, NULL, 0, in, inlen, tag, 16, out);
+	return sm4_gcm_decrypt(&key, iv, ivlen, aad, aadlen, in, inlen, tag, 16, out);
 }
 
 static int ogre_sm2_key_from_private(SM2_KEY *key, const uint8_t private_key[32]) {
@@ -144,6 +146,14 @@ func NewSM4GCM(key []byte) (*SM4GCM, error) {
 func (*SM4GCM) Algorithm() secure.Algorithm { return secure.AlgSM4GCM }
 
 func (c *SM4GCM) Seal(dst, plaintext []byte) ([]byte, error) {
+	return c.SealAAD(dst, plaintext, nil)
+}
+
+func (c *SM4GCM) Open(dst, ciphertext []byte) ([]byte, error) {
+	return c.OpenAAD(dst, ciphertext, nil)
+}
+
+func (c *SM4GCM) SealAAD(dst, plaintext, aad []byte) ([]byte, error) {
 	var nonce [sm4NonceSize]byte
 	if C.ogre_rand_bytes((*C.uint8_t)(unsafe.Pointer(&nonce[0])), C.size_t(len(nonce))) != 1 {
 		return nil, ErrGmSSL
@@ -157,6 +167,8 @@ func (c *SM4GCM) Seal(dst, plaintext []byte) ([]byte, error) {
 		(*C.uint8_t)(unsafe.Pointer(&c.key[0])),
 		(*C.uint8_t)(unsafe.Pointer(&nonce[0])),
 		C.size_t(len(nonce)),
+		bytePtr(aad),
+		C.size_t(len(aad)),
 		bytePtr(plaintext),
 		C.size_t(len(plaintext)),
 		bodyPtr,
@@ -169,7 +181,7 @@ func (c *SM4GCM) Seal(dst, plaintext []byte) ([]byte, error) {
 	return append(dst, body...), nil
 }
 
-func (c *SM4GCM) Open(dst, ciphertext []byte) ([]byte, error) {
+func (c *SM4GCM) OpenAAD(dst, ciphertext, aad []byte) ([]byte, error) {
 	if len(ciphertext) < sm4NonceSize+sm4TagSize {
 		return nil, ErrCiphertextTooShort
 	}
@@ -185,6 +197,8 @@ func (c *SM4GCM) Open(dst, ciphertext []byte) ([]byte, error) {
 		(*C.uint8_t)(unsafe.Pointer(&c.key[0])),
 		bytePtr(nonce),
 		C.size_t(len(nonce)),
+		bytePtr(aad),
+		C.size_t(len(aad)),
 		bytePtr(body),
 		C.size_t(len(body)),
 		bytePtr(tag),
@@ -276,3 +290,5 @@ func (w *SM2KeyWrapper) Unwrap(wrapped []byte) ([]byte, error) {
 	}
 	return out[:int(outlen)], nil
 }
+
+var _ secure.AuthenticatedCipher = (*SM4GCM)(nil)
