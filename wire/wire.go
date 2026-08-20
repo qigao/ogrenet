@@ -44,9 +44,12 @@ type Framer interface {
 	DecodeOne(src []byte) (msg ogrenet.Message, consumed int, err error)
 }
 
-// Codec implements the default v1 envelope. Encrypted text payloads are base64
-// encoded after encryption so their wire payload remains text-safe; encrypted
-// binary payloads remain raw ciphertext.
+// Codec implements the default v1 envelope. MaxPayload bounds both plaintext
+// application data and the encoded wire payload. Encryption/Base64 overhead
+// therefore counts toward the wire-side limit.
+//
+// Encrypted text payloads are base64 encoded after encryption so their wire
+// payload remains text-safe; encrypted binary payloads remain raw ciphertext.
 type Codec struct {
 	Cipher     secure.Cipher
 	MaxPayload uint32
@@ -66,6 +69,9 @@ func (c *Codec) maxPayload() uint32 {
 func (c *Codec) Encode(msg ogrenet.Message) ([]byte, error) {
 	if err := msg.Validate(); err != nil {
 		return nil, err
+	}
+	if uint64(len(msg.Data)) > uint64(c.maxPayload()) {
+		return nil, ErrFrameTooLarge
 	}
 
 	flags := uint8(0)
@@ -122,13 +128,21 @@ func (c *Codec) DecodeOne(src []byte) (ogrenet.Message, int, error) {
 	}
 
 	flags := src[3]
-	if flags&^knownFlags != 0 {
-		return ogrenet.Message{}, 0, ErrUnsupportedFlags
-	}
 	algorithm := secure.Algorithm(binary.BigEndian.Uint16(src[4:6]))
+	if err := validateSemanticHeader(flags, algorithm); err != nil {
+		return ogrenet.Message{}, 0, err
+	}
 	length := binary.BigEndian.Uint32(src[6:10])
 	if length > c.maxPayload() {
 		return ogrenet.Message{}, 0, ErrFrameTooLarge
+	}
+	if flags&FlagEncrypted != 0 {
+		if c.Cipher == nil {
+			return ogrenet.Message{}, 0, ErrMissingCipher
+		}
+		if c.Cipher.Algorithm() != algorithm {
+			return ogrenet.Message{}, 0, ErrAlgorithmMismatch
+		}
 	}
 	if uint64(length)+uint64(HeaderSize) > uint64(^uint(0)>>1) {
 		return ogrenet.Message{}, 0, ErrFrameTooLarge
@@ -145,12 +159,6 @@ func (c *Codec) DecodeOne(src []byte) (ogrenet.Message, int, error) {
 	}
 
 	if flags&FlagEncrypted != 0 {
-		if c.Cipher == nil {
-			return ogrenet.Message{}, 0, ErrMissingCipher
-		}
-		if c.Cipher.Algorithm() != algorithm {
-			return ogrenet.Message{}, 0, ErrAlgorithmMismatch
-		}
 		if kind == ogrenet.PayloadText {
 			decoded := make([]byte, base64.RawStdEncoding.DecodedLen(len(payload)))
 			n, err := base64.RawStdEncoding.Decode(decoded, payload)
@@ -172,8 +180,9 @@ func (c *Codec) DecodeOne(src []byte) (ogrenet.Message, int, error) {
 			return ogrenet.Message{}, 0, fmt.Errorf("wire: decrypt payload: %w", err)
 		}
 		payload = plaintext
-	} else if algorithm != secure.AlgNone {
-		return ogrenet.Message{}, 0, ErrAlgorithmMismatch
+	}
+	if uint64(len(payload)) > uint64(c.maxPayload()) {
+		return ogrenet.Message{}, 0, ErrFrameTooLarge
 	}
 
 	msg := ogrenet.Message{Type: kind, Data: payload}
@@ -213,10 +222,20 @@ func ParseHeader(src []byte) (Header, error) {
 	if h.Version != Version {
 		return Header{}, ErrUnsupportedVersion
 	}
-	if h.Flags&^knownFlags != 0 {
-		return Header{}, ErrUnsupportedFlags
+	if err := validateSemanticHeader(h.Flags, h.Algorithm); err != nil {
+		return Header{}, err
 	}
 	return h, nil
+}
+
+func validateSemanticHeader(flags uint8, algorithm secure.Algorithm) error {
+	if flags&^knownFlags != 0 {
+		return ErrUnsupportedFlags
+	}
+	if flags&FlagEncrypted == 0 && algorithm != secure.AlgNone {
+		return ErrAlgorithmMismatch
+	}
+	return nil
 }
 
 func semanticAAD(flags uint8, algorithm secure.Algorithm) [6]byte {
