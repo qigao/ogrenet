@@ -18,6 +18,7 @@ type Engine struct {
 
 	mu        sync.Mutex
 	closed    bool
+	activeOps int
 	listeners map[*listener]struct{}
 	conns     map[*conn]struct{}
 	done      chan struct{}
@@ -44,7 +45,9 @@ func New(opts ...Option) (*Engine, error) {
 	}, nil
 }
 
-// Listen starts accepting stream connections in the background.
+// Listen starts accepting stream connections in the background. A Listen that
+// began before Close is included in the Engine shutdown barrier even if it later
+// loses the race with Close and returns ErrClosed.
 func (e *Engine) Listen(ctx context.Context, network, address string, h ogrenet.Handler) (ogrenet.Listener, error) {
 	if ctx == nil {
 		return nil, ErrNilContext
@@ -52,9 +55,10 @@ func (e *Engine) Listen(ctx context.Context, network, address string, h ogrenet.
 	if !isStreamNetwork(network) {
 		return nil, ErrUnsupportedNet
 	}
-	if e.isClosed() {
-		return nil, ErrClosed
+	if err := e.beginOp(); err != nil {
+		return nil, err
 	}
+	defer e.endOp()
 
 	lc := net.ListenConfig{}
 	ln, err := lc.Listen(ctx, network, address)
@@ -85,6 +89,8 @@ func (e *Engine) Listen(ctx context.Context, network, address string, h ogrenet.
 
 // Dial establishes one outbound stream connection and starts its read/write
 // loops. The handler receives OnOpen/OnMessage/OnClose for the new connection.
+// A Dial that began before Close remains part of the Engine shutdown barrier
+// until its socket and per-connection setup have completed or been cleaned up.
 func (e *Engine) Dial(ctx context.Context, network, address string, h ogrenet.Handler) (ogrenet.Conn, error) {
 	if ctx == nil {
 		return nil, ErrNilContext
@@ -92,9 +98,10 @@ func (e *Engine) Dial(ctx context.Context, network, address string, h ogrenet.Ha
 	if !isStreamNetwork(network) {
 		return nil, ErrUnsupportedNet
 	}
-	if e.isClosed() {
-		return nil, ErrClosed
+	if err := e.beginOp(); err != nil {
+		return nil, err
 	}
+	defer e.endOp()
 
 	var d net.Dialer
 	raw, err := d.DialContext(ctx, network, address)
@@ -109,8 +116,9 @@ func (e *Engine) Dial(ctx context.Context, network, address string, h ogrenet.Ha
 	return c, nil
 }
 
-// Done closes after Close has been initiated and every listener and connection
-// has reached its own Done barrier.
+// Done closes after Close has been initiated, all in-flight Listen/Dial calls
+// have completed, and every tracked listener and connection has reached its own
+// Done barrier.
 func (e *Engine) Done() <-chan struct{} { return e.done }
 
 // Shutdown initiates shutdown and waits for the Engine Done barrier or ctx.
@@ -130,8 +138,8 @@ func (e *Engine) Shutdown(ctx context.Context) error {
 }
 
 // Close initiates shutdown of all listeners and connections and is idempotent.
-// It does not wait for user callbacks to return. Use Shutdown or wait on Done
-// when a global shutdown barrier is required.
+// It does not wait for in-flight operations or user callbacks to return. Use
+// Shutdown or wait on Done when a global shutdown barrier is required.
 func (e *Engine) Close() error {
 	e.mu.Lock()
 	if e.closed {
@@ -192,10 +200,24 @@ func (e *Engine) adopt(raw net.Conn, h ogrenet.Handler) (*conn, error) {
 	return c, nil
 }
 
-func (e *Engine) isClosed() bool {
+func (e *Engine) beginOp() error {
 	e.mu.Lock()
 	defer e.mu.Unlock()
-	return e.closed
+	if e.closed {
+		return ErrClosed
+	}
+	e.activeOps++
+	return nil
+}
+
+func (e *Engine) endOp() {
+	e.mu.Lock()
+	e.activeOps--
+	if e.activeOps < 0 {
+		e.activeOps = 0
+	}
+	e.maybeDoneLocked()
+	e.mu.Unlock()
 }
 
 func (e *Engine) addListener(l *listener) error {
@@ -233,7 +255,7 @@ func (e *Engine) removeConn(c *conn) {
 }
 
 func (e *Engine) maybeDoneLocked() {
-	if e.closed && len(e.listeners) == 0 && len(e.conns) == 0 {
+	if e.closed && e.activeOps == 0 && len(e.listeners) == 0 && len(e.conns) == 0 {
 		e.doneOnce.Do(func() { close(e.done) })
 	}
 }
