@@ -224,11 +224,16 @@ func classifyFallback(err error) fallbackClass {
 		if errors.As(err, &versionErr) || errors.As(err, &handshakeErr) {
 			return fallbackPreRequest
 		}
+		// QUIC TransportError denotes a QUIC transport protocol failure. It is
+		// not treated as generic connection loss and must not trigger downgrade.
+		var transportErr *quicgo.TransportError
+		if errors.As(err, &transportErr) {
+			return fallbackNever
+		}
 		var resetErr *quicgo.StatelessResetError
 		var idleErr *quicgo.IdleTimeoutError
-		var transportErr *quicgo.TransportError
 		var streamErr *quicgo.StreamError
-		if errors.As(err, &resetErr) || errors.As(err, &idleErr) || errors.As(err, &transportErr) || errors.As(err, &streamErr) {
+		if errors.As(err, &resetErr) || errors.As(err, &idleErr) || errors.As(err, &streamErr) {
 			return fallbackAmbiguousAfterSend
 		}
 		return fallbackNever
