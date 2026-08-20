@@ -21,6 +21,8 @@ type outbound struct {
 type conn struct {
 	engine     *Engine
 	id         uint64
+	protocol   ogrenet.Scheme
+	endpoint   ogrenet.Endpoint
 	raw        net.Conn
 	framer     wire.Framer
 	handler    ogrenet.Handler
@@ -44,13 +46,12 @@ type conn struct {
 	err   error
 }
 
-func (c *conn) ID() uint64 { return c.id }
-
-func (c *conn) LocalAddr() net.Addr { return c.raw.LocalAddr() }
-
-func (c *conn) RemoteAddr() net.Addr { return c.raw.RemoteAddr() }
-
-func (c *conn) Done() <-chan struct{} { return c.done }
+func (c *conn) ID() uint64                    { return c.id }
+func (c *conn) Protocol() ogrenet.Scheme       { return c.protocol }
+func (c *conn) Endpoint() ogrenet.Endpoint     { return c.endpoint }
+func (c *conn) LocalAddr() net.Addr            { return c.raw.LocalAddr() }
+func (c *conn) RemoteAddr() net.Addr           { return c.raw.RemoteAddr() }
+func (c *conn) Done() <-chan struct{}           { return c.done }
 
 func (c *conn) Err() error {
 	c.errMu.RLock()
@@ -108,11 +109,9 @@ func (c *conn) Send(ctx context.Context, msg ogrenet.Message) error {
 	}
 }
 
-// TrySend accepts a frame without blocking. It returns ErrWouldBlock when the
-// admitted-frame limit, encoder slot, frame-count queue, or queued-byte budget
-// is currently full. Once admitted to the writer queue, TrySend returns nil even
-// if Close races immediately afterward; accepted frames may still fail during
-// socket write.
+// TrySend never waits for queue or network I/O. Encoding/encryption still runs
+// synchronously after admission. It returns ErrWouldBlock when admission cannot
+// be obtained immediately.
 func (c *conn) TrySend(msg ogrenet.Message) error {
 	if !c.gate.enter() {
 		return ErrClosed
@@ -313,7 +312,7 @@ func (c *conn) finalize() {
 		c.initiateClose(nil)
 		defer func() {
 			close(c.done)
-			c.engine.removeConn(c)
+			c.engine.removeStream(c)
 		}()
 		c.handler.OnClose(c, c.Err())
 	})
@@ -351,4 +350,4 @@ func writeAll(w io.Writer, p []byte) error {
 	return nil
 }
 
-var _ ogrenet.Conn = (*conn)(nil)
+var _ ogrenet.Session = (*conn)(nil)
