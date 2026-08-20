@@ -4,7 +4,6 @@ import (
 	"encoding/base64"
 	"encoding/binary"
 	"fmt"
-	"math"
 
 	"github.com/qigao/ogrenet"
 	"github.com/qigao/ogrenet/secure"
@@ -82,7 +81,7 @@ func (c *Codec) Encode(msg ogrenet.Message) ([]byte, error) {
 		}
 	}
 
-	if uint64(len(payload)) > uint64(c.maxPayload()) || len(payload) > math.MaxUint32 {
+	if uint64(len(payload)) > uint64(c.maxPayload()) || uint64(len(payload)) > uint64(^uint32(0)) {
 		return nil, ErrFrameTooLarge
 	}
 
@@ -111,6 +110,9 @@ func (c *Codec) DecodeOne(src []byte) (ogrenet.Message, int, error) {
 	algorithm := secure.Algorithm(binary.BigEndian.Uint16(src[4:6]))
 	length := binary.BigEndian.Uint32(src[6:10])
 	if length > c.maxPayload() {
+		return ogrenet.Message{}, 0, ErrFrameTooLarge
+	}
+	if uint64(length)+uint64(HeaderSize) > uint64(^uint(0)>>1) {
 		return ogrenet.Message{}, 0, ErrFrameTooLarge
 	}
 	total := HeaderSize + int(length)
