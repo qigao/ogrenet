@@ -66,6 +66,7 @@ func (e *Engine) Listen(ctx context.Context, network, address string, h ogrenet.
 		handler: normalizeHandler(h),
 		ctx:     lctx,
 		cancel:  cancel,
+		closing: make(chan struct{}),
 		done:    make(chan struct{}),
 	}
 	if err := e.addListener(l); err != nil {
