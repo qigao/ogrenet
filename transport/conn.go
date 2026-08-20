@@ -15,6 +15,7 @@ import (
 type outbound struct {
 	frame []byte
 	ack   chan error
+	bytes int
 }
 
 type conn struct {
@@ -24,6 +25,7 @@ type conn struct {
 	framer  wire.Framer
 	handler ogrenet.Handler
 	queue   chan outbound
+	quota   *byteQuota
 
 	readSize int
 	maxRead  int
@@ -52,7 +54,7 @@ func (c *conn) Err() error {
 	return c.err
 }
 
-// Send waits for queue admission and then for the frame's socket write to
+// Send waits for byte/queue admission and then for the frame's socket write to
 // complete. If ctx is canceled after admission, the frame may still be written
 // by the writer goroutine even though Send returns ctx.Err().
 func (c *conn) Send(ctx context.Context, msg ogrenet.Message) error {
@@ -70,13 +72,18 @@ func (c *conn) Send(ctx context.Context, msg ogrenet.Message) error {
 	if err != nil {
 		return err
 	}
-	ack := make(chan error, 1)
-	req := outbound{frame: frame, ack: ack}
+	if err := c.quota.acquire(ctx, c.closing, len(frame)); err != nil {
+		return err
+	}
 
+	ack := make(chan error, 1)
+	req := outbound{frame: frame, ack: ack, bytes: len(frame)}
 	select {
 	case <-ctx.Done():
+		c.quota.release(req.bytes)
 		return ctx.Err()
 	case <-c.closing:
+		c.quota.release(req.bytes)
 		return ErrClosed
 	case c.queue <- req:
 	}
@@ -96,8 +103,8 @@ func (c *conn) Send(ctx context.Context, msg ogrenet.Message) error {
 	}
 }
 
-// TrySend queues a frame without blocking. It returns ErrWouldBlock if the
-// bounded writer queue is full.
+// TrySend queues a frame without blocking. It returns ErrWouldBlock if either
+// the frame-count queue or queued-byte budget is currently full.
 func (c *conn) TrySend(msg ogrenet.Message) error {
 	if c.isClosing() {
 		return ErrClosed
@@ -106,12 +113,21 @@ func (c *conn) TrySend(msg ogrenet.Message) error {
 	if err != nil {
 		return err
 	}
+	if err := c.quota.tryAcquire(len(frame)); err != nil {
+		return err
+	}
+	req := outbound{frame: frame, bytes: len(frame)}
 	select {
 	case <-c.closing:
+		c.quota.release(req.bytes)
 		return ErrClosed
-	case c.queue <- outbound{frame: frame}:
+	case c.queue <- req:
+		if c.isClosing() {
+			return ErrClosed
+		}
 		return nil
 	default:
+		c.quota.release(req.bytes)
 		return ErrWouldBlock
 	}
 }
@@ -137,6 +153,7 @@ func (c *conn) encode(msg ogrenet.Message) ([]byte, error) {
 }
 
 func (c *conn) writerLoop() {
+	defer c.failPending(ErrClosed)
 	for {
 		select {
 		case <-c.closing:
@@ -149,6 +166,7 @@ func (c *conn) writerLoop() {
 			return
 		case req := <-c.queue:
 			err := writeAll(c.raw, req.frame)
+			c.quota.release(req.bytes)
 			if req.ack != nil {
 				req.ack <- err
 			}
@@ -156,6 +174,20 @@ func (c *conn) writerLoop() {
 				c.initiateClose(fmt.Errorf("transport: write: %w", err))
 				return
 			}
+		}
+	}
+}
+
+func (c *conn) failPending(err error) {
+	for {
+		select {
+		case req := <-c.queue:
+			c.quota.release(req.bytes)
+			if req.ack != nil {
+				req.ack <- err
+			}
+		default:
+			return
 		}
 	}
 }
