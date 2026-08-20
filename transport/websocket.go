@@ -53,12 +53,12 @@ type wsSession struct {
 	err       error
 }
 
-func (s *wsSession) ID() uint64                { return s.id }
-func (s *wsSession) Protocol() ogrenet.Scheme   { return s.protocol }
-func (s *wsSession) Endpoint() ogrenet.Endpoint { return s.endpoint }
-func (s *wsSession) LocalAddr() net.Addr        { return s.local }
-func (s *wsSession) RemoteAddr() net.Addr       { return s.remote }
-func (s *wsSession) Done() <-chan struct{}       { return s.done }
+func (s *wsSession) ID() uint64                  { return s.id }
+func (s *wsSession) Protocol() ogrenet.Scheme    { return s.protocol }
+func (s *wsSession) Endpoint() ogrenet.Endpoint  { return s.endpoint }
+func (s *wsSession) LocalAddr() net.Addr         { return s.local }
+func (s *wsSession) RemoteAddr() net.Addr        { return s.remote }
+func (s *wsSession) Done() <-chan struct{}        { return s.done }
 
 func (s *wsSession) Err() error {
 	s.errMu.RLock()
@@ -517,14 +517,14 @@ func (e *Engine) listenWebSocket(ctx context.Context, endpoint ogrenet.Endpoint,
 		return nil, err
 	}
 	bound := boundEndpoint(endpoint, rawLn.Addr())
-	serveLn := net.Listener(rawLn)
+	serveLn := net.Listener(configuredTCPListener{Listener: rawLn, engine: e})
 	if endpoint.Scheme == ogrenet.SchemeWSS {
 		tlsCfg, err := e.cfg.serverTLSConfig()
 		if err != nil {
 			_ = rawLn.Close()
 			return nil, err
 		}
-		serveLn = tls.NewListener(rawLn, tlsCfg)
+		serveLn = tls.NewListener(serveLn, tlsCfg)
 	}
 
 	lctx, cancel := context.WithCancel(ctx)
@@ -548,8 +548,8 @@ func (e *Engine) listenWebSocket(ctx context.Context, endpoint ogrenet.Endpoint,
 			return
 		}
 		ws, err := websocket.Accept(w, r, &websocket.AcceptOptions{
-			Subprotocols:   e.cfg.ws.Subprotocols,
-			OriginPatterns: e.cfg.ws.OriginPatterns,
+			Subprotocols:    e.cfg.ws.Subprotocols,
+			OriginPatterns:  e.cfg.ws.OriginPatterns,
 			CompressionMode: websocket.CompressionDisabled,
 		})
 		if err != nil {
@@ -661,11 +661,11 @@ func (e *Engine) dialWebSocket(ctx context.Context, endpoint ogrenet.Endpoint, h
 		transport.CloseIdleConnections()
 		return nil, err
 	}
+	transport.CloseIdleConnections()
 	ws.SetReadLimit(int64(e.cfg.maxMessageBytes))
 	cipher, err := e.cfg.newCipher()
 	if err != nil {
 		_ = ws.CloseNow()
-		transport.CloseIdleConnections()
 		return nil, err
 	}
 	addrMu.Lock()
@@ -680,7 +680,6 @@ func (e *Engine) dialWebSocket(ctx context.Context, endpoint ogrenet.Endpoint, h
 	s := e.newWSSession(ws, endpoint, local, remote, h, cipher)
 	if err := e.addWebSocket(s); err != nil {
 		_ = ws.CloseNow()
-		transport.CloseIdleConnections()
 		return nil, err
 	}
 	s.start()
