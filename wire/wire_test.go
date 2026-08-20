@@ -167,7 +167,7 @@ func makeHeader(flags uint8, algorithm secure.Algorithm, length uint32) []byte {
 
 type expandingCipher struct{}
 
-func (expandingCipher) Algorithm() secure.Algorithm { return secure.AlgLegacyAES128CFB }
+func (expandingCipher) Algorithm() secure.Algorithm { return secure.AlgAESGCM }
 func (expandingCipher) Seal(dst, plaintext []byte) ([]byte, error) {
 	return append(dst, plaintext...), nil
 }
