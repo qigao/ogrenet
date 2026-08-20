@@ -29,6 +29,7 @@ type HTTPProtocol uint8
 const (
 	HTTP1 HTTPProtocol = iota + 1
 	HTTP2
+	HTTP3
 )
 
 func (p HTTPProtocol) String() string {
@@ -37,6 +38,8 @@ func (p HTTPProtocol) String() string {
 		return "http/1.1"
 	case HTTP2:
 		return "h2"
+	case HTTP3:
+		return "h3"
 	default:
 		return "unknown"
 	}
