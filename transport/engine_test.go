@@ -133,6 +133,48 @@ func TestTrySendBackpressure(t *testing.T) {
 	}
 }
 
+func TestQueuedByteBackpressure(t *testing.T) {
+	e, err := New(WithWriteQueue(8), WithMaxQueuedBytes(20))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = e.Close() }()
+
+	raw := newBlockingConn()
+	c, err := e.adopt(raw, ogrenet.HandlerFuncs{})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// The default frame for Text("one") is 10 header bytes + 3 payload bytes.
+	if err := c.TrySend(ogrenet.Text("one")); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-raw.writeStarted:
+	case <-time.After(time.Second):
+		t.Fatal("writer did not start")
+	}
+
+	if err := c.TrySend(ogrenet.Text("two")); !errors.Is(err, ErrWouldBlock) {
+		t.Fatalf("got %v, want ErrWouldBlock from byte budget", err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+	defer cancel()
+	if err := c.Send(ctx, ogrenet.Text("two")); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("got %v, want context.DeadlineExceeded", err)
+	}
+
+	if err := c.TrySend(ogrenet.Text("01234567890")); !errors.Is(err, ErrFrameExceedsQueueBudget) {
+		t.Fatalf("got %v, want ErrFrameExceedsQueueBudget", err)
+	}
+
+	if err := c.Close(); err != nil {
+		t.Fatal(err)
+	}
+}
+
 type blockingConn struct {
 	writeStarted chan struct{}
 	closed       chan struct{}
