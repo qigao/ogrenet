@@ -86,10 +86,12 @@ func WithFramerFactory(factory FramerFactory) Option {
 }
 
 // WithWriteQueue sets the maximum number of encoded frames waiting for the
-// connection writer. TrySend returns ErrWouldBlock when this queue is full.
+// connection writer. One additional slot is reserved for the in-flight write.
+// TrySend returns ErrWouldBlock when frame admission is full.
 func WithWriteQueue(size int) Option {
 	return func(c *config) error {
-		if size <= 0 {
+		maxInt := int(^uint(0) >> 1)
+		if size <= 0 || size == maxInt {
 			return ErrInvalidQueueSize
 		}
 		c.writeQueue = size
