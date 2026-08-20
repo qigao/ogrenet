@@ -8,6 +8,9 @@ import (
 // Conn is the platform-independent connection contract exposed to applications.
 // Implementations may be backed by epoll, kqueue, IOCP, or another transport
 // implementation that preserves this lifecycle and message contract.
+//
+// Done closes only after the connection's internal I/O work has stopped and its
+// OnClose callback has returned. Err is stable once Done is closed.
 type Conn interface {
 	ID() uint64
 	Send(ctx context.Context, msg Message) error
@@ -19,7 +22,8 @@ type Conn interface {
 	Close() error
 }
 
-// Listener represents one active listening endpoint.
+// Listener represents one active listening endpoint. Done closes after the
+// listener's accept loop has stopped and Err is then stable.
 type Listener interface {
 	Addr() net.Addr
 	Done() <-chan struct{}
