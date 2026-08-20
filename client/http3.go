@@ -11,9 +11,9 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/qigao/ogrenet/internal/quicpolicy"
 	quicgo "github.com/quic-go/quic-go"
 	"github.com/quic-go/quic-go/http3"
-	"github.com/qigao/ogrenet/internal/quicpolicy"
 )
 
 const (
