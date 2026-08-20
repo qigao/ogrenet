@@ -14,9 +14,10 @@ const (
 	AlgSM2       Algorithm = 0x0005
 
 	// 0x1000-0x10ff is reserved for pre-v2 non-GM compatibility transforms.
-	AlgLegacyAES128CFB Algorithm = 0x1001
-	AlgLegacyAES192CFB Algorithm = 0x1002
-	AlgLegacyAES256CFB Algorithm = 0x1003
+	AlgLegacyAES128CFB       Algorithm = 0x1001
+	AlgLegacyAES192CFB       Algorithm = 0x1002
+	AlgLegacyAES256CFB       Algorithm = 0x1003
+	AlgLegacyCipherKeyAESGCM Algorithm = 0x1004
 )
 
 // Cipher is a reversible message transform. Seal and Open append their output
