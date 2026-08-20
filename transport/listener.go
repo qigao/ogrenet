@@ -10,14 +10,18 @@ import (
 	"github.com/qigao/ogrenet"
 )
 
+type streamPrepare func(context.Context, net.Conn) (net.Conn, error)
+
 type listener struct {
-	engine  *Engine
-	ln      net.Listener
-	handler ogrenet.Handler
-	ctx     context.Context
-	cancel  context.CancelFunc
-	closing chan struct{}
-	done    chan struct{}
+	engine   *Engine
+	endpoint ogrenet.Endpoint
+	ln       net.Listener
+	handler  ogrenet.Handler
+	prepare  streamPrepare
+	ctx      context.Context
+	cancel   context.CancelFunc
+	closing  chan struct{}
+	done     chan struct{}
 
 	closeOnce sync.Once
 	finalOnce sync.Once
@@ -25,9 +29,9 @@ type listener struct {
 	err       error
 }
 
-func (l *listener) Addr() net.Addr { return l.ln.Addr() }
-
-func (l *listener) Done() <-chan struct{} { return l.done }
+func (l *listener) Endpoint() ogrenet.Endpoint { return l.endpoint }
+func (l *listener) Addr() net.Addr             { return l.ln.Addr() }
+func (l *listener) Done() <-chan struct{}       { return l.done }
 
 func (l *listener) Err() error {
 	l.errMu.RLock()
@@ -35,9 +39,7 @@ func (l *listener) Err() error {
 	return l.err
 }
 
-func (l *listener) Close() error {
-	return l.initiateClose(nil)
-}
+func (l *listener) Close() error { return l.initiateClose(nil) }
 
 func (l *listener) watchContext() {
 	select {
@@ -56,7 +58,6 @@ func (l *listener) acceptLoop() {
 			if l.isClosing() {
 				return
 			}
-
 			if ne, ok := err.(net.Error); ok && ne.Temporary() {
 				if delay == 0 {
 					delay = 5 * time.Millisecond
@@ -66,27 +67,35 @@ func (l *listener) acceptLoop() {
 						delay = time.Second
 					}
 				}
-				timer := time.NewTimer(delay)
-				select {
-				case <-timer.C:
-					continue
-				case <-l.closing:
-					if !timer.Stop() {
-						select {
-						case <-timer.C:
-						default:
-						}
-					}
+				if !waitOrClosed(delay, l.closing) {
 					return
 				}
+				continue
 			}
-
 			_ = l.initiateClose(normalizeListenerError(err))
 			return
 		}
 		delay = 0
 
-		if _, err := l.engine.adopt(raw, l.handler); err != nil {
+		if tcp, ok := raw.(*net.TCPConn); ok {
+			if err := l.engine.configureTCP(tcp); err != nil {
+				_ = raw.Close()
+				continue
+			}
+		}
+		if l.prepare != nil {
+			prepared, err := l.prepare(l.ctx, raw)
+			if err != nil {
+				_ = raw.Close()
+				if l.isClosing() {
+					return
+				}
+				continue
+			}
+			raw = prepared
+		}
+
+		if _, err := l.engine.adoptStream(raw, l.endpoint, l.handler); err != nil {
 			_ = raw.Close()
 			if errors.Is(err, ErrClosed) {
 				_ = l.initiateClose(nil)
@@ -95,6 +104,17 @@ func (l *listener) acceptLoop() {
 			}
 			return
 		}
+	}
+}
+
+func waitOrClosed(delay time.Duration, closing <-chan struct{}) bool {
+	timer := time.NewTimer(delay)
+	defer timer.Stop()
+	select {
+	case <-timer.C:
+		return true
+	case <-closing:
+		return false
 	}
 }
 
@@ -124,7 +144,7 @@ func (l *listener) finalize() {
 	l.finalOnce.Do(func() {
 		_ = l.initiateClose(nil)
 		close(l.done)
-		l.engine.removeListener(l)
+		l.engine.removeStreamListener(l)
 	})
 }
 
@@ -138,7 +158,7 @@ func (l *listener) isClosing() bool {
 }
 
 func normalizeListenerError(err error) error {
-	if errors.Is(err, net.ErrClosed) {
+	if err == nil || errors.Is(err, net.ErrClosed) {
 		return nil
 	}
 	return err
