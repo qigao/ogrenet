@@ -158,8 +158,14 @@ func peerKey(addr net.Addr) string {
 	}
 	switch a := addr.(type) {
 	case *net.TCPAddr:
+		if a == nil {
+			return ""
+		}
 		return canonicalIP(a.IP)
 	case *net.UDPAddr:
+		if a == nil {
+			return ""
+		}
 		return canonicalIP(a.IP)
 	}
 	host, _, err := net.SplitHostPort(addr.String())

@@ -48,6 +48,20 @@ func TestAdmissionConnectionAndPeerLimits(t *testing.T) {
 	}
 }
 
+func TestPeerKeyHandlesTypedNilNetAddrs(t *testing.T) {
+	var tcp *net.TCPAddr
+	var udp *net.UDPAddr
+
+	for name, addr := range map[string]net.Addr{
+		"tcp": tcp,
+		"udp": udp,
+	} {
+		if got := peerKey(addr); got != "" {
+			t.Fatalf("peerKey(%s typed nil) = %q, want empty key", name, got)
+		}
+	}
+}
+
 func TestGlobalQueuedByteQuotaAcrossConnections(t *testing.T) {
 	global := newGlobalByteQuota(8)
 	q1 := newByteQuota(8)
