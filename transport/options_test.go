@@ -116,3 +116,11 @@ func TestCipherOptionsLastOneWins(t *testing.T) {
 		t.Fatal("WithCipherFactory did not override WithCipher")
 	}
 }
+
+func TestWriteQueueRejectsOverflowingAdmissionCapacity(t *testing.T) {
+	cfg := defaultConfig()
+	maxInt := int(^uint(0) >> 1)
+	if err := WithWriteQueue(maxInt)(&cfg); !errors.Is(err, ErrInvalidQueueSize) {
+		t.Fatalf("WithWriteQueue(maxInt) = %v, want ErrInvalidQueueSize", err)
+	}
+}
