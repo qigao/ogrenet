@@ -288,8 +288,10 @@ func (c *conn) initiateClose(cause error) {
 func (c *conn) finalize() {
 	c.finalOnce.Do(func() {
 		c.initiateClose(nil)
-		c.engine.removeConn(c)
-		defer close(c.done)
+		defer func() {
+			close(c.done)
+			c.engine.removeConn(c)
+		}()
 		c.handler.OnClose(c, c.Err())
 	})
 }
