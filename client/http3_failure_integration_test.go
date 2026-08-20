@@ -87,14 +87,14 @@ func makeHTTP3MismatchTLS(t *testing.T, alpn string) (*tls.Config, *tls.Config) 
 	roots := x509.NewCertPool()
 	roots.AddCert(parsed)
 	return &tls.Config{
-		Certificates: []tls.Certificate{{Certificate: [][]byte{der}, PrivateKey: priv}},
-		MinVersion:   tls.VersionTLS13,
-		NextProtos:   []string{alpn},
-	}, &tls.Config{
-		RootCAs:    roots,
-		ServerName: "localhost",
-		MinVersion: tls.VersionTLS13,
-	}
+			Certificates: []tls.Certificate{{Certificate: [][]byte{der}, PrivateKey: priv}},
+			MinVersion:   tls.VersionTLS13,
+			NextProtos:   []string{alpn},
+		}, &tls.Config{
+			RootCAs:    roots,
+			ServerName: "localhost",
+			MinVersion: tls.VersionTLS13,
+		}
 }
 
 func TestHTTP3ALPNMismatchIsTransportError(t *testing.T) {
