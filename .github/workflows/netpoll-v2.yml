@@ -1,8 +1,8 @@
-name: netpoll-v2
+name: ogrenet
 
 on:
   push:
-    branches: [refactor/netpoll-v2]
+    branches: [master, feat/unified-transport-security]
   pull_request:
 
 permissions:
@@ -54,6 +54,36 @@ jobs:
           cache: true
       - run: go vet ./...
       - run: go test -count=1 ./...
+
+  gmssl:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version: "1.26.x"
+          cache: true
+      - uses: actions/checkout@v7
+        with:
+          repository: guanzhi/GmSSL
+          ref: v3.2.0
+          path: _deps/GmSSL
+      - name: Build GmSSL 3.2.0
+        run: |
+          cmake -S _deps/GmSSL -B _deps/gmssl-build \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_INSTALL_PREFIX=${{ runner.temp }}/gmssl \
+            -DCMAKE_INSTALL_LIBDIR=lib
+          cmake --build _deps/gmssl-build --parallel 2
+          cmake --install _deps/gmssl-build
+      - name: Test GmSSL security, wire, and transport
+        env:
+          CGO_ENABLED: "1"
+          CGO_CFLAGS: -I${{ runner.temp }}/gmssl/include
+          CGO_LDFLAGS: -L${{ runner.temp }}/gmssl/lib
+          LD_LIBRARY_PATH: ${{ runner.temp }}/gmssl/lib
+        run: go test -tags gmssl -count=1 ./secure/gmssl ./wire ./transport
 
   cross-compile:
     runs-on: ubuntu-latest

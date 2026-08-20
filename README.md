@@ -1,108 +1,301 @@
 # ogrenet
 
-`ogrenet` v2 is a small Go library for native OS network-event mechanisms. It deliberately does **not** provide the old connection-manager API: codecs, encryption, load balancing, protocol framing, timers, and application callback orchestration belong above this layer.
+`ogrenet` is a production-oriented Go networking library with explicit protocol
+semantics and native OS poller primitives. It is a new API: there is no legacy
+compatibility layer and no automatic protocol downgrade.
 
-## Packages
+## Architecture
 
-| Package | Platform | Kernel model | Core API |
-| --- | --- | --- | --- |
-| `epoll` | Linux | readiness | `Open`, `Add`, `Mod`, `Del`, `Wait`, `Wake`, `Close` |
-| `iocp` | Windows | completion | `Open`, `Associate`, `Post`, `Get`, `Close` |
-| `kqueue` | macOS, 64-bit FreeBSD | readiness/filter | `Open`, `Apply`, `Del`, `Wait`, `Wake`, `Close` |
+```text
+                         application
+                             |
+                 +-----------+-----------+
+                 |                       |
+              Session                 PacketConn
+        TCP / TLS / WS / WSS              UDP
+                 |                       |
+        +--------+--------+               |
+        |                 |               |
+   byte stream       WS messages       datagrams
+    TCP / TLS          WS / WSS            |
+        |                 |               |
+    wire.Codec       Text / Binary         |
+        |                 |               |
+        +-----------------+---------------+
+                          |
+              epoll / kqueue / IOCP
+```
 
-There is intentionally no root-level networking framework. Applications compose these low-level packages with their own connection lifecycle, buffers, protocols, and scheduling policy.
+Native packages remain directly available:
 
-## Design guarantees
+| Package | Platform | Kernel model |
+| --- | --- | --- |
+| `epoll` | Linux | readiness |
+| `iocp` | Windows | completion |
+| `kqueue` | macOS / FreeBSD | readiness/filter |
 
-- Native semantics are preserved instead of forcing epoll, kqueue, and IOCP behind a misleading common interface.
-- User sockets/files remain caller-owned. Closing a poller never closes registered or associated application handles.
-- `Close` is idempotent and wakes blocked waits.
-- Native descriptor/handle lifetime is synchronized against concurrent control and wait operations, preventing close/reuse races inside the wrapper.
-- Internal wake notifications are consumed by the wrapper and never exposed as application events.
-- Hot-path wait buffers are reused by the poller after their first required allocation.
-- No hidden goroutine pool, logger, codec, encryption stack, or load-balancing policy is installed.
+The portable `transport` Engine currently uses Go's `net` package above this
+boundary. Future native Engines can implement the same root contracts without
+changing application code.
 
-## Requirements
+## Protocols
 
-The module targets Go 1.25 or newer and currently depends only on `golang.org/x/sys`.
+| Scheme | API | Boundary | Channel security | Default application framing |
+| --- | --- | --- | --- | --- |
+| `tcp://` | `Session` | byte stream | none | `wire.Codec` |
+| `tls://` | `Session` | byte stream | TLS 1.3+ | `wire.Codec` |
+| `udp://` | `PacketConn` | datagram | none | native datagram |
+| `ws://` | `Session` | WebSocket message | none | native WS Text/Binary |
+| `wss://` | `Session` | WebSocket message | TLS 1.3+ | native WS Text/Binary |
 
-## Linux / epoll
+There is no fallback. A TLS failure does not become TCP, WSS does not become WS,
+and a failed WebSocket upgrade does not expose a raw stream.
+
+## Endpoints
+
+Endpoints are parsed once and strongly typed:
 
 ```go
-p, err := epoll.Open()
-if err != nil {
-    return err
-}
-defer p.Close()
+serverEP, err := ogrenet.ParseEndpoint("tls://127.0.0.1:9443")
+wsEP, err := ogrenet.ParseEndpoint("wss://api.example.com/realtime")
+udpEP, err := ogrenet.ParseEndpoint("udp://127.0.0.1:9000")
+```
 
-if err := p.Add(fd, epoll.Readable|epoll.PeerClosed|epoll.EdgeTriggered, 1); err != nil {
-    return err
-}
+Supported schemes are `tcp`, `udp`, `tls`, `ws`, and `wss`. TCP/UDP require an
+explicit port. WS defaults to port 80; TLS/WSS default to port 443. Port zero is
+allowed for listeners and requests an OS-assigned ephemeral port; outbound Dial
+requires a non-zero port and host.
 
-events := make([]epoll.Event, 256)
-for {
-    n, err := p.Wait(events, -1)
-    if err != nil {
-        return err
-    }
-    for _, event := range events[:n] {
-        _ = event // drain non-blocking I/O to EAGAIN when using edge triggering
-    }
+## Session API: TCP / TLS / WS / WSS
+
+```go
+type Session interface {
+    ID() uint64
+    Protocol() Scheme
+    Endpoint() Endpoint
+    Send(context.Context, Message) error
+    TrySend(Message) error
+    LocalAddr() net.Addr
+    RemoteAddr() net.Addr
+    Done() <-chan struct{}
+    Err() error
+    Close() error
 }
 ```
 
-The `Data` field is an opaque 64-bit registration value. `math.MaxUint64` is reserved for the internal eventfd wake event.
-
-## Windows / IOCP
+Messages are explicit Text or Binary values:
 
 ```go
-port, err := iocp.Open(0)
-if err != nil {
-    return err
-}
-defer port.Close()
-
-if err := port.Associate(handle, 42); err != nil {
-    return err
-}
-
-completion, err := port.Get(30 * time.Second)
-if err != nil {
-    return err
-}
-_ = completion
+ogrenet.Text("hello 世界")
+ogrenet.Bin([]byte{0x01, 0x02, 0xff})
 ```
 
-IOCP remains a completion API. `Get` may be called by multiple worker goroutines concurrently. A failed overlapped operation can return both a populated `Completion` and a non-nil error.
+Text is always valid UTF-8. Handler callbacks for one Session are serialized:
 
-## macOS / FreeBSD / kqueue
+```text
+OnOpen -> OnMessage* -> OnClose
+```
+
+`Done` is a shutdown barrier. It closes only after internal I/O loops have
+stopped and `OnClose` has returned; `Err` is stable after `Done` closes.
+
+### TCP example
 
 ```go
-p, err := kqueue.Open()
+engine, err := transport.New()
 if err != nil {
     return err
 }
-defer p.Close()
+defer engine.Close()
 
-err = p.Apply(kqueue.Change{
-    Ident:  uint64(fd),
-    Filter: kqueue.Read,
-    Flags:  kqueue.Add | kqueue.Clear,
+endpoint := ogrenet.Endpoint{
+    Scheme: ogrenet.SchemeTCP,
+    Host:   "127.0.0.1",
+    Port:   9000,
+}
+
+listener, err := engine.Listen(ctx, endpoint, ogrenet.HandlerFuncs{
+    Message: func(s ogrenet.Session, msg ogrenet.Message) {
+        _ = s.Send(context.Background(), msg)
+    },
 })
-if err != nil {
-    return err
-}
-
-events := make([]kqueue.Event, 256)
-n, err := p.Wait(events, -1)
-if err != nil {
-    return err
-}
-_ = events[:n]
 ```
 
-kqueue uses `(Ident, Filter)` as the native event identity. The wrapper does not turn `udata` into an arbitrary Go pointer/token because that would introduce unsafe GC and lifetime semantics into the public API.
+TCP and TLS are byte streams and therefore use a stream framer. The default is
+`wire.Codec`. Stateful custom stream protocols may use `WithFramerFactory`.
+Custom stream framing and the Engine's message-cipher option are deliberately
+mutually exclusive: a custom framer owns its entire wire format.
 
-## Validation
+## TLS
 
-GitHub Actions runs formatting, module-hygiene checks, `go vet`, Linux race tests, native Windows tests, native macOS tests, and a FreeBSD kqueue cross-compile. Linux is tested on both Go 1.25 and the current Go 1.26 release line.
+TLS is channel security and is independent of optional message encryption.
+TLS/TWSS enforce TLS 1.3 as the minimum version; there is no TLS 1.2 fallback.
+
+A TLS/WSS server must provide explicit certificate configuration:
+
+```go
+engine, err := transport.New(
+    transport.WithTLSServerConfig(&tls.Config{
+        Certificates: []tls.Certificate{certificate},
+        MinVersion:   tls.VersionTLS13,
+    }),
+)
+```
+
+Clients use normal certificate verification. If no client config is supplied,
+Go's system trust roots are used and `ServerName` is derived from the Endpoint.
+`WithTLSClientConfig` can provide private roots, mTLS certificates, or ALPN.
+
+TLS handshake time is bounded by `WithTLSHandshakeTimeout`.
+
+## WebSocket: WS / WSS
+
+WS/WSS use WebSocket's native message boundary. They do **not** add
+`wire.Codec` inside a WebSocket message:
+
+```text
+WebSocket text   -> ogrenet.Text
+WebSocket binary -> ogrenet.Bin
+```
+
+The implementation uses `github.com/coder/websocket` with compression disabled.
+Server origin verification remains enabled by default; cross-origin access must
+be explicitly authorized with `WebSocketConfig.OriginPatterns`. Redirects are
+not followed by the client.
+
+Production liveness and handshake controls are configured with:
+
+```go
+type WebSocketConfig struct {
+    OriginPatterns   []string
+    Subprotocols     []string
+    HandshakeTimeout time.Duration
+    WriteTimeout     time.Duration
+    PingInterval     time.Duration
+    PongTimeout      time.Duration
+}
+```
+
+TCP socket settings are applied before WS/WSS handshakes as well.
+
+## UDP
+
+UDP has separate datagram semantics and is intentionally not represented as a
+Session.
+
+```go
+type PacketConn interface {
+    Protocol() Scheme
+    Endpoint() Endpoint
+    LocalAddr() net.Addr
+    RemoteAddr() net.Addr
+    Send(context.Context, Packet) error
+    TrySend(Packet) error
+    SendTo(context.Context, net.Addr, Packet) error
+    TrySendTo(net.Addr, Packet) error
+    Done() <-chan struct{}
+    Err() error
+    Close() error
+}
+```
+
+`DialPacket` creates a connected UDP socket and uses `Send/TrySend`.
+`ListenPacket` creates an unconnected socket and uses `SendTo/TrySendTo` with the
+peer passed to `PacketHandler`.
+
+The maximum accepted datagram size defaults to 65507 bytes and is configurable
+with `WithMaxDatagramBytes`. Inbound datagrams larger than the configured limit
+are dropped as complete datagrams; truncated partial payloads are never passed
+to the application.
+
+## Backpressure and memory bounds
+
+Every Session and PacketConn has bounded send admission:
+
+- a frame/datagram count limit (`WithWriteQueue`, default 256 waiting items);
+- a byte budget (`WithMaxQueuedBytes`, default 64 MiB including in-flight I/O);
+- admission happens before expensive stream frame encoding;
+- only one stream frame per Session may exist encoded outside the byte quota
+  while waiting for quota admission.
+
+`Send` waits for admission and then the actual transport write result.
+`TrySend` does not wait for admission or network I/O; it returns
+`transport.ErrWouldBlock` immediately under backpressure. Encoding/encryption is
+still synchronous once non-blocking admission succeeds.
+
+`WithMaxMessageBytes` defaults to 16 MiB and bounds plaintext application
+messages plus transport wire payloads. `WithMaxBufferedRead` bounds incomplete
+TCP/TLS frame accumulation.
+
+## Message security
+
+Message security is optional and separate from TLS.
+
+```go
+type Cipher interface {
+    Algorithm() Algorithm
+    Seal(dst, plaintext []byte) ([]byte, error)
+    Open(dst, ciphertext []byte) ([]byte, error)
+}
+
+type AuthenticatedCipher interface {
+    Cipher
+    SealAAD(dst, plaintext, aad []byte) ([]byte, error)
+    OpenAAD(dst, ciphertext, aad []byte) ([]byte, error)
+}
+```
+
+Built-in AES-GCM implements `AuthenticatedCipher`. TCP/TLS `wire.Codec`
+authenticates semantic frame fields as AEAD associated data. WS/WSS authenticate
+protocol + Text/Binary type as associated data. `WithCipher` is for
+concurrency-safe implementations; mutable per-session ciphers use
+`WithCipherFactory`.
+
+RSA-OAEP/SHA-512 is exposed only as a `KeyWrapper` and requires at least a
+2048-bit RSA key.
+
+## GmSSL
+
+Current national-cryptography support is provided directly through GmSSL 3.2.0
+and is opt-in with CGO + the `gmssl` build tag:
+
+- SM4-GCM authenticated encryption;
+- SM3 digest;
+- SM2 session-key wrapping;
+- GmSSL cryptographic random generation;
+- raw SM2 key generation/import helpers.
+
+There are no legacy GM modes or compatibility shims.
+
+```bash
+CGO_ENABLED=1 go test -tags gmssl ./secure/gmssl ./wire ./transport
+```
+
+If GmSSL is installed outside standard compiler paths, provide `CGO_CFLAGS` and
+`CGO_LDFLAGS`.
+
+## Engine shutdown
+
+`Engine.Close()` initiates shutdown and is idempotent. `Engine.Done()` is the
+global barrier and closes after:
+
+- all in-flight Listen/Dial operations finish or clean up;
+- all listeners stop;
+- all Session reader/writer loops stop;
+- all UDP sockets stop;
+- all per-transport `OnClose` callbacks return.
+
+`Engine.Shutdown(ctx)` performs Close plus a context-bounded wait for that
+barrier. Do not call `Shutdown` synchronously inside an Engine callback because
+that callback is itself part of the barrier.
+
+## Requirements and validation
+
+- Go 1.25+
+- `golang.org/x/sys v0.47.0`
+- `github.com/coder/websocket v1.8.15`
+- optional GmSSL 3.2.0 + C toolchain for national cryptography
+
+CI validates formatting, module hygiene, vet/race tests, Linux/Windows/macOS
+behavior, native poller cross-compilation, TCP/TLS/UDP/WS/WSS loopback behavior,
+and a dedicated GmSSL 3.2.0 integration job.
