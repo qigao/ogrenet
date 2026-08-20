@@ -188,6 +188,9 @@ func classifyFallback(err error) fallbackClass {
 	if errors.Is(err, ErrHTTPClientTransportClosed) || errors.Is(err, ErrHTTP3TransportClosed) {
 		return fallbackNever
 	}
+	if errors.Is(err, errHTTPProtocolUnavailable) {
+		return fallbackPreRequest
+	}
 
 	var unknownAuthority x509.UnknownAuthorityError
 	var hostname x509.HostnameError
