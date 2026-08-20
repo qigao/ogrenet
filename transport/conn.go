@@ -19,14 +19,16 @@ type outbound struct {
 }
 
 type conn struct {
-	engine  *Engine
-	id      uint64
-	raw     net.Conn
-	framer  wire.Framer
-	handler ogrenet.Handler
-	queue   chan outbound
-	quota   *byteQuota
-	gate    *sendGate
+	engine     *Engine
+	id         uint64
+	raw        net.Conn
+	framer     wire.Framer
+	handler    ogrenet.Handler
+	queue      chan outbound
+	quota      *byteQuota
+	gate       *sendGate
+	frameSlots chan struct{}
+	encodeSlot chan struct{}
 
 	readSize int
 	maxRead  int
@@ -56,9 +58,10 @@ func (c *conn) Err() error {
 	return c.err
 }
 
-// Send waits for byte/queue admission and then for the frame's socket write to
-// complete. If ctx is canceled after admission, the frame may still be written
-// by the writer goroutine even though Send returns ctx.Err().
+// Send waits for frame-count and byte-budget admission, then waits for the
+// frame's socket write to complete. If ctx is canceled after queue admission,
+// the frame may still be written by the writer goroutine even though Send
+// returns ctx.Err().
 func (c *conn) Send(ctx context.Context, msg ogrenet.Message) error {
 	if ctx == nil {
 		return ErrNilContext
@@ -71,11 +74,8 @@ func (c *conn) Send(ctx context.Context, msg ogrenet.Message) error {
 	}
 	defer c.gate.leave()
 
-	frame, err := c.encode(msg)
+	frame, err := c.prepareSend(ctx, msg)
 	if err != nil {
-		return err
-	}
-	if err := c.quota.acquire(ctx, c.closing, len(frame)); err != nil {
 		return err
 	}
 
@@ -84,9 +84,11 @@ func (c *conn) Send(ctx context.Context, msg ogrenet.Message) error {
 	select {
 	case <-ctx.Done():
 		c.quota.release(req.bytes)
+		c.releaseFrameSlot()
 		return ctx.Err()
 	case <-c.closing:
 		c.quota.release(req.bytes)
+		c.releaseFrameSlot()
 		return ErrClosed
 	case c.queue <- req:
 	}
@@ -106,32 +108,32 @@ func (c *conn) Send(ctx context.Context, msg ogrenet.Message) error {
 	}
 }
 
-// TrySend accepts a frame without blocking. It returns ErrWouldBlock if either
-// the frame-count queue or queued-byte budget is currently full. Once the frame
-// has been admitted to the writer queue, TrySend returns nil even if Close races
-// immediately afterward; accepted frames may still fail during socket write.
+// TrySend accepts a frame without blocking. It returns ErrWouldBlock when the
+// admitted-frame limit, encoder slot, frame-count queue, or queued-byte budget
+// is currently full. Once admitted to the writer queue, TrySend returns nil even
+// if Close races immediately afterward; accepted frames may still fail during
+// socket write.
 func (c *conn) TrySend(msg ogrenet.Message) error {
 	if !c.gate.enter() {
 		return ErrClosed
 	}
 	defer c.gate.leave()
 
-	frame, err := c.encode(msg)
+	frame, err := c.prepareTrySend(msg)
 	if err != nil {
-		return err
-	}
-	if err := c.quota.tryAcquire(len(frame)); err != nil {
 		return err
 	}
 	req := outbound{frame: frame, bytes: len(frame)}
 	select {
 	case <-c.closing:
 		c.quota.release(req.bytes)
+		c.releaseFrameSlot()
 		return ErrClosed
 	case c.queue <- req:
 		return nil
 	default:
 		c.quota.release(req.bytes)
+		c.releaseFrameSlot()
 		return ErrWouldBlock
 	}
 }
@@ -185,6 +187,7 @@ func (c *conn) writerLoop() {
 		case req := <-c.queue:
 			err := writeAll(c.raw, req.frame)
 			c.quota.release(req.bytes)
+			c.releaseFrameSlot()
 			sendErr := err
 			if err != nil && c.isClosing() {
 				sendErr = ErrClosed
@@ -205,6 +208,7 @@ func (c *conn) failPending(err error) {
 		select {
 		case req := <-c.queue:
 			c.quota.release(req.bytes)
+			c.releaseFrameSlot()
 			if req.ack != nil {
 				req.ack <- err
 			}
