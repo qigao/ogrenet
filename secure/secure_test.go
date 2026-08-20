@@ -2,6 +2,9 @@ package secure
 
 import (
 	"bytes"
+	"crypto/rsa"
+	"errors"
+	"math/big"
 	"testing"
 )
 
@@ -92,5 +95,38 @@ func TestRSAOAEPWrapRoundTrip(t *testing.T) {
 	}
 	if !bytes.Equal(unwrapped, key) {
 		t.Fatalf("got %x, want %x", unwrapped, key)
+	}
+}
+
+func TestRSAOAEPRejectsWeakGeneratedKey(t *testing.T) {
+	if _, err := GenerateRSAOAEP(1024); !errors.Is(err, ErrRSAKeyTooSmall) {
+		t.Fatalf("GenerateRSAOAEP(1024) = %v, want ErrRSAKeyTooSmall", err)
+	}
+}
+
+func TestRSAOAEPRejectsWeakImportedKeys(t *testing.T) {
+	weakN := new(big.Int).Lsh(big.NewInt(1), 1023)
+	weakPublic := &rsa.PublicKey{N: weakN, E: 65537}
+	weakPrivate := &rsa.PrivateKey{
+		PublicKey: *weakPublic,
+		D:         big.NewInt(1),
+		Primes:    []*big.Int{big.NewInt(3), big.NewInt(5)},
+	}
+	wrapper := NewRSAOAEP(weakPublic, weakPrivate)
+	if _, err := wrapper.Wrap([]byte("key")); !errors.Is(err, ErrRSAKeyTooSmall) {
+		t.Fatalf("weak Wrap = %v, want ErrRSAKeyTooSmall", err)
+	}
+	if _, err := wrapper.Unwrap([]byte("ciphertext")); !errors.Is(err, ErrRSAKeyTooSmall) {
+		t.Fatalf("weak Unwrap = %v, want ErrRSAKeyTooSmall", err)
+	}
+}
+
+func TestRSAOAEPRejectsInvalidImportedKeys(t *testing.T) {
+	wrapper := NewRSAOAEP(&rsa.PublicKey{E: 65537}, &rsa.PrivateKey{})
+	if _, err := wrapper.Wrap([]byte("key")); !errors.Is(err, ErrInvalidRSAKey) {
+		t.Fatalf("invalid Wrap = %v, want ErrInvalidRSAKey", err)
+	}
+	if _, err := wrapper.Unwrap([]byte("ciphertext")); !errors.Is(err, ErrInvalidRSAKey) {
+		t.Fatalf("invalid Unwrap = %v, want ErrInvalidRSAKey", err)
 	}
 }
