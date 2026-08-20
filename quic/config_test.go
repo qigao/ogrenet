@@ -20,9 +20,9 @@ func TestConfigValidation(t *testing.T) {
 	}
 }
 
-func TestConfigBuildClonesTLSAndPinsALPN(t *testing.T) {
+func TestConfigBuildClonesTLSPinsALPNAndBoundsResources(t *testing.T) {
 	original := &tls.Config{NextProtos: []string{"caller-value"}}
-	tlsConfig, quicConfig, err := (Config{ALPN: "ogrenet-echo", TLSConfig: original}).build()
+	tlsConfig, quicConfig, err := (Config{ALPN: "ogrenet-echo", TLSConfig: original, EnableDatagrams: true}).build()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -35,14 +35,29 @@ func TestConfigBuildClonesTLSAndPinsALPN(t *testing.T) {
 	if tlsConfig.MinVersion != tls.VersionTLS13 {
 		t.Fatalf("MinVersion = %d", tlsConfig.MinVersion)
 	}
-	if quicConfig.EnableDatagrams {
-		t.Fatal("datagrams must be disabled in the first minimal API")
+	if !quicConfig.EnableDatagrams {
+		t.Fatal("datagrams must follow explicit Config opt-in")
+	}
+	if quicConfig.Allow0RTT {
+		t.Fatal("0-RTT must remain disabled")
 	}
 	if quicConfig.HandshakeIdleTimeout != defaultHandshakeTimeout {
 		t.Fatalf("HandshakeIdleTimeout = %v", quicConfig.HandshakeIdleTimeout)
 	}
 	if quicConfig.MaxIdleTimeout != defaultIdleTimeout {
 		t.Fatalf("MaxIdleTimeout = %v", quicConfig.MaxIdleTimeout)
+	}
+	if quicConfig.MaxIncomingStreams != defaultMaxIncomingStreams {
+		t.Fatalf("MaxIncomingStreams = %d", quicConfig.MaxIncomingStreams)
+	}
+	if quicConfig.MaxIncomingUniStreams != -1 {
+		t.Fatalf("MaxIncomingUniStreams = %d", quicConfig.MaxIncomingUniStreams)
+	}
+	if quicConfig.InitialStreamReceiveWindow != defaultInitialStreamReceiveWindow || quicConfig.MaxStreamReceiveWindow != defaultMaxStreamReceiveWindow {
+		t.Fatalf("stream receive windows = %d/%d", quicConfig.InitialStreamReceiveWindow, quicConfig.MaxStreamReceiveWindow)
+	}
+	if quicConfig.InitialConnectionReceiveWindow != defaultInitialConnectionReceiveWindow || quicConfig.MaxConnectionReceiveWindow != defaultMaxConnectionReceiveWindow {
+		t.Fatalf("connection receive windows = %d/%d", quicConfig.InitialConnectionReceiveWindow, quicConfig.MaxConnectionReceiveWindow)
 	}
 }
 
