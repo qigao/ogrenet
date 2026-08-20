@@ -58,7 +58,9 @@ waiting frames and 64 MiB including the in-flight write; use
 `Conn.Done()` is a shutdown barrier: it closes only after reader/writer work has
 stopped, pending sends have been released, and `OnClose` has returned. `Conn.Err()`
 is stable once `Done` is closed. `Listener.Done()` similarly waits for the
-accept loop to stop.
+accept loop to stop. `Engine.Close()` initiates shutdown but does not wait for
+user callbacks; wait on the returned connection/listener `Done` channels when a
+barrier is required.
 
 ## Portable stream Engine
 
@@ -91,6 +93,19 @@ defer listener.Close()
 
 A new framer is created per connection. Custom stateful protocols can use
 `transport.WithFramerFactory`; the default is `wire.Codec`.
+
+`transport.WithCipher` shares one cipher instance across connections and is
+appropriate for concurrency-safe ciphers such as the built-in AES-GCM and GmSSL
+SM4-GCM implementations. Stateful custom ciphers should use
+`transport.WithCipherFactory`, which creates one cipher per connection:
+
+```go
+engine, err := transport.New(transport.WithCipherFactory(func() (secure.Cipher, error) {
+    return newSessionCipher()
+}))
+```
+
+Both `CipherFactory` and `FramerFactory` may be invoked concurrently.
 
 ## Default wire format
 
