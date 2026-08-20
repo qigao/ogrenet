@@ -106,8 +106,10 @@ func (c *conn) Send(ctx context.Context, msg ogrenet.Message) error {
 	}
 }
 
-// TrySend queues a frame without blocking. It returns ErrWouldBlock if either
-// the frame-count queue or queued-byte budget is currently full.
+// TrySend accepts a frame without blocking. It returns ErrWouldBlock if either
+// the frame-count queue or queued-byte budget is currently full. Once the frame
+// has been admitted to the writer queue, TrySend returns nil even if Close races
+// immediately afterward; accepted frames may still fail during socket write.
 func (c *conn) TrySend(msg ogrenet.Message) error {
 	if !c.gate.enter() {
 		return ErrClosed
@@ -127,9 +129,6 @@ func (c *conn) TrySend(msg ogrenet.Message) error {
 		c.quota.release(req.bytes)
 		return ErrClosed
 	case c.queue <- req:
-		if c.isClosing() {
-			return ErrClosed
-		}
 		return nil
 	default:
 		c.quota.release(req.bytes)
