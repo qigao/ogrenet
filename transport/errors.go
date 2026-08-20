@@ -10,6 +10,7 @@ var (
 	ErrNilFramer               = errors.New("transport: framer factory returned nil")
 	ErrNilCipherFactory        = errors.New("transport: cipher factory is nil")
 	ErrNilCipher               = errors.New("transport: cipher factory returned nil")
+	ErrConflictingCodecOptions = errors.New("transport: custom stream framer and message cipher cannot be combined")
 	ErrFramerNotSupported      = errors.New("transport: custom stream framer is not supported by this protocol")
 	ErrInvalidFramer           = errors.New("transport: framer returned an invalid consumed length")
 	ErrReadBufferFull          = errors.New("transport: buffered unread data exceeded the configured limit")
