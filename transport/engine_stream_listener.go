@@ -31,7 +31,7 @@ func (e *Engine) listenStream(ctx context.Context, endpoint ogrenet.Endpoint, h 
 			handshake, err := e.acquireHandshake()
 			var duration time.Duration
 			if observing {
-				duration = time.Since(started)
+				duration = positiveElapsed(started)
 			}
 			if err != nil {
 				return nil, duration, err
@@ -43,7 +43,7 @@ func (e *Engine) listenStream(ctx context.Context, endpoint ogrenet.Endpoint, h 
 			}
 			err = e.cfg.handshakeServer(ctx, tlsConn)
 			if observing {
-				duration = time.Since(started)
+				duration = positiveElapsed(started)
 			}
 			if err != nil {
 				return nil, duration, err
