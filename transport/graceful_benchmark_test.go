@@ -204,7 +204,15 @@ func newGracefulBenchmarkConn(b *testing.B) (*Engine, *conn, net.Conn) {
 	}
 	left, right := net.Pipe()
 	wrapped := &gracefulBenchmarkConn{Conn: left}
-	c, err := e.adoptStream(wrapped, ogrenet.Endpoint{Scheme: ogrenet.SchemeTCP, Host: "pipe", Port: 1}, ogrenet.HandlerFuncs{})
+	readerReady := make(chan struct{}, 1)
+	c, err := e.adoptStream(wrapped, ogrenet.Endpoint{Scheme: ogrenet.SchemeTCP, Host: "pipe", Port: 1}, ogrenet.HandlerFuncs{
+		Message: func(ogrenet.Session, ogrenet.Message) {
+			select {
+			case readerReady <- struct{}{}:
+			default:
+			}
+		},
+	})
 	if err != nil {
 		_ = e.Close()
 		_ = right.Close()
@@ -235,5 +243,23 @@ func newGracefulBenchmarkConn(b *testing.B) (*Engine, *conn, net.Conn) {
 		b.Fatal(err)
 	}
 	<-drainReady
+
+	// Also force the connection reader loop through buffer allocation, one
+	// successful read/decode, and the application callback before the benchmark
+	// timer starts. Otherwise its two 64 KiB initial buffers can race with a
+	// one-iteration Send sample and appear as 64/128 KiB of false allocations.
+	warmFrame, err := c.encode(ogrenet.Bin([]byte{0}))
+	if err != nil {
+		_ = e.Close()
+		_ = right.Close()
+		b.Fatal(err)
+	}
+	if _, err := right.Write(warmFrame); err != nil {
+		_ = e.Close()
+		_ = right.Close()
+		b.Fatal(err)
+	}
+	<-readerReady
+
 	return e, c, right
 }
