@@ -5,6 +5,15 @@ import (
 	"sync/atomic"
 )
 
+type engineState uint8
+
+const (
+	engineRunning engineState = iota
+	engineDraining
+	engineAborting
+	engineDone
+)
+
 // Engine is the portable production implementation of ogrenet.Engine. Native
 // poller packages remain independently available below this layer.
 type Engine struct {
@@ -12,7 +21,9 @@ type Engine struct {
 	admission *admissionController
 
 	mu              sync.Mutex
-	closed          bool
+	state           engineState
+	shutdownReason  abortReason
+	shutdownErr     error
 	activeOps       int
 	streamListeners map[*listener]struct{}
 	wsListeners     map[*wsListener]struct{}
@@ -43,6 +54,7 @@ func New(opts ...Option) (*Engine, error) {
 	return &Engine{
 		cfg:             cfg,
 		admission:       newAdmissionController(cfg.limits),
+		state:           engineRunning,
 		streamListeners: make(map[*listener]struct{}),
 		wsListeners:     make(map[*wsListener]struct{}),
 		streams:         make(map[*conn]struct{}),
