@@ -67,7 +67,10 @@ func TestDialPacketMaxLifetimeCannotBeExtendedByTraffic(t *testing.T) {
 			err := p.Send(ctx, ogrenet.Packet{Data: []byte("keepalive")})
 			cancel()
 			if err != nil && !errors.Is(err, ErrClosed) {
-				t.Fatalf("Send = %v", err)
+				var te *TimeoutError
+				if !errors.As(err, &te) || te.Kind != TimeoutMaxLifetime {
+					t.Fatalf("Send = %v", err)
+				}
 			}
 		case <-deadline.C:
 			t.Fatal("UDP max lifetime was extended by traffic")
