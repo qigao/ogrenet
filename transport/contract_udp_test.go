@@ -2,6 +2,7 @@ package transport_test
 
 import (
 	"context"
+	"net"
 	"testing"
 
 	"github.com/qigao/ogrenet"
