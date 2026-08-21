@@ -14,9 +14,10 @@ import (
 )
 
 type outbound struct {
-	frame []byte
-	ack   chan error
-	bytes int
+	frame        []byte
+	ack          chan error
+	bytes        int
+	payloadBytes int
 }
 
 type conn struct {
@@ -35,6 +36,7 @@ type conn struct {
 	frameSlots chan struct{}
 	encodeSlot chan struct{}
 	life       *sessionLifecycle
+	stats      *sessionCounters
 
 	readSize int
 	maxRead  int
@@ -108,7 +110,7 @@ func (c *conn) Send(ctx context.Context, msg ogrenet.Message) error {
 	}
 
 	ack := make(chan error, 1)
-	req := outbound{frame: frame, ack: ack, bytes: len(frame)}
+	req := outbound{frame: frame, ack: ack, bytes: len(frame), payloadBytes: len(msg.Data)}
 	select {
 	case <-ctx.Done():
 		c.quota.release(req.bytes)
@@ -159,9 +161,12 @@ func (c *conn) TrySend(msg ogrenet.Message) error {
 
 	frame, err := c.prepareTrySend(msg)
 	if err != nil {
+		if c.stats != nil && errors.Is(err, ErrWouldBlock) {
+			c.stats.backpressure.Add(1)
+		}
 		return c.operationalError(OpSend, err, hintNone)
 	}
-	req := outbound{frame: frame, bytes: len(frame)}
+	req := outbound{frame: frame, bytes: len(frame), payloadBytes: len(msg.Data)}
 	select {
 	case <-c.closing:
 		c.quota.release(req.bytes)
@@ -172,6 +177,9 @@ func (c *conn) TrySend(msg ogrenet.Message) error {
 	default:
 		c.quota.release(req.bytes)
 		c.releaseFrameSlot()
+		if c.stats != nil {
+			c.stats.backpressure.Add(1)
+		}
 		return c.operationalError(OpSend, ErrWouldBlock, hintNone)
 	}
 }
@@ -281,6 +289,10 @@ func (c *conn) handleOutbound(req outbound) bool {
 	c.quota.release(req.bytes)
 	c.releaseFrameSlot()
 	if err == nil {
+		if c.stats != nil {
+			c.stats.bytesTX.Add(uint64(req.payloadBytes))
+			c.stats.messagesTX.Add(1)
+		}
 		if req.ack != nil {
 			req.ack <- nil
 		}
@@ -395,6 +407,10 @@ func (c *conn) readerLoop() {
 					return
 				}
 
+				if c.stats != nil {
+					c.stats.bytesRX.Add(uint64(len(msg.Data)))
+					c.stats.messagesRX.Add(1)
+				}
 				c.handler.OnMessage(c, msg)
 				consumedTotal += consumed
 				if c.isClosing() {
