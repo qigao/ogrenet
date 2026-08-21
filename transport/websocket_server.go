@@ -171,6 +171,20 @@ func (e *Engine) listenWebSocket(ctx context.Context, endpoint ogrenet.Endpoint,
 			return
 		}
 		transferred = true
+		if l.stats != nil {
+			l.stats.accepted.Add(1)
+		}
+		if e.observer != nil {
+			e.observer.emit(ogrenet.Event{
+				Kind:       ogrenet.EventAccept,
+				Resource:   ogrenet.ResourceSession,
+				ResourceID: s.ID(),
+				ParentID:   l.id,
+				Protocol:   s.Protocol(),
+				Local:      s.LocalAddr(),
+				Remote:     s.RemoteAddr(),
+			})
+		}
 		s.start()
 	})
 	wsHandshakeTimeout := e.cfg.effectiveWSHandshakeTimeout()
@@ -205,6 +219,19 @@ func (e *Engine) listenWebSocket(ctx context.Context, endpoint ogrenet.Endpoint,
 		l.err = err
 		l.errMu.Unlock()
 		_ = l.Close()
+		if l.stats != nil {
+			l.stats.age.freeze()
+		}
+		if e.observer != nil {
+			e.observer.emit(ogrenet.Event{
+				Kind:       ogrenet.EventClose,
+				Resource:   ogrenet.ResourceListener,
+				ResourceID: l.id,
+				Protocol:   l.endpoint.Scheme,
+				Local:      l.Addr(),
+				Err:        l.Err(),
+			})
+		}
 		close(l.done)
 		e.removeWSListener(l)
 	}()
