@@ -25,7 +25,9 @@ func TestTCPWriteTimeoutClosesSession(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	err = c.Send(context.Background(), ogrenet.Bin([]byte("blocked")))
+	ctx, cancel := context.WithTimeout(context.Background(), 250*time.Millisecond)
+	defer cancel()
+	err = c.Send(ctx, ogrenet.Bin([]byte("blocked")))
 	var te *TimeoutError
 	if !errors.As(err, &te) || te.Kind != TimeoutWrite {
 		t.Fatalf("Send error = %#v, want TimeoutWrite", err)
