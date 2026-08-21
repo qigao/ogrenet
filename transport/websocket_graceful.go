@@ -3,7 +3,6 @@ package transport
 import (
 	"context"
 	"errors"
-	"sync/atomic"
 	"time"
 
 	"github.com/coder/websocket"
@@ -13,6 +12,7 @@ func (s *wsSession) requestShutdown() bool {
 	owner, _ := s.life.requestWithPrevious(closeGoalFull)
 	if owner {
 		s.gate.close()
+		go s.watchCloseTimeout()
 	}
 	return owner
 }
@@ -37,6 +37,25 @@ func (s *wsSession) Shutdown(ctx context.Context) error {
 			}
 			return context.Cause(ctx)
 		}
+	}
+}
+
+func (s *wsSession) watchCloseTimeout() {
+	select {
+	case <-s.writerDrained:
+	case <-s.life.aborted():
+		return
+	case <-s.done:
+		return
+	}
+
+	timer := time.NewTimer(s.engine.cfg.ws.CloseTimeout)
+	defer timer.Stop()
+	select {
+	case <-timer.C:
+		s.abort(abortFailure, &TimeoutError{Kind: TimeoutClose, Cause: context.DeadlineExceeded})
+	case <-s.life.aborted():
+	case <-s.done:
 	}
 }
 
@@ -70,22 +89,6 @@ func (s *wsSession) lifecycleResult() error {
 	default:
 		return nil
 	}
-}
-
-func (s *wsSession) runLocalCloseHandshake() {
-	var decided atomic.Bool
-	timer := time.AfterFunc(s.closeTO, func() {
-		if decided.CompareAndSwap(false, true) {
-			s.abort(abortFailure, &TimeoutError{Kind: TimeoutClose, Cause: context.DeadlineExceeded})
-		}
-	})
-	err := s.ws.Close(websocket.StatusNormalClosure, "")
-	if decided.CompareAndSwap(false, true) {
-		timer.Stop()
-		s.finishLocalGraceful(err)
-		return
-	}
-	timer.Stop()
 }
 
 func (s *wsSession) finishLocalGraceful(err error) {
