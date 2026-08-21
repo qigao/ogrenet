@@ -7,16 +7,38 @@ import (
 	"net"
 	"net/http"
 	"sync"
+	"time"
 
 	"github.com/qigao/ogrenet"
 )
 
 type wsDialAdmission struct {
-	mu       sync.Mutex
-	lease    *connectionLease
-	local    net.Addr
-	remote   net.Addr
-	physical net.Conn
+	mu              sync.Mutex
+	lease           *connectionLease
+	local           net.Addr
+	remote          net.Addr
+	physical        net.Conn
+	connectDone     bool
+	connectDuration time.Duration
+	connectErr      error
+}
+
+func (s *wsDialAdmission) recordConnect(local, remote net.Addr, duration time.Duration, err error) {
+	s.mu.Lock()
+	if !s.connectDone {
+		s.connectDone = true
+		s.local = local
+		s.remote = remote
+		s.connectDuration = duration
+		s.connectErr = err
+	}
+	s.mu.Unlock()
+}
+
+func (s *wsDialAdmission) connectInfo() (net.Addr, net.Addr, time.Duration, error, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.local, s.remote, s.connectDuration, s.connectErr, s.connectDone
 }
 
 func (s *wsDialAdmission) set(lease *connectionLease, local, remote net.Addr, physical net.Conn) error {
@@ -65,11 +87,27 @@ func (e *Engine) newWebSocketHTTPTransport(endpoint ogrenet.Endpoint) (*http.Tra
 	}
 
 	dialRaw := func(ctx context.Context, network, address string) (net.Conn, *connectionLease, error) {
+		observing := e.observer != nil
+		var started time.Time
+		if observing {
+			started = time.Now()
+		}
 		dctx, cancel := boundedOperationContext(ctx, e.cfg.timeouts.Connect)
 		defer cancel()
 		raw, err := dialer.DialContext(dctx, network, address)
+		var duration time.Duration
+		if observing {
+			duration = positiveElapsed(started)
+		}
 		if err != nil {
-			return nil, nil, mapOperationTimeout(ctx, dctx, TimeoutConnect, err)
+			mapped := mapOperationTimeout(ctx, dctx, TimeoutConnect, err)
+			if observing {
+				state.recordConnect(nil, nil, duration, mapped)
+			}
+			return nil, nil, mapped
+		}
+		if observing {
+			state.recordConnect(raw.LocalAddr(), raw.RemoteAddr(), duration, nil)
 		}
 		if tcp, ok := raw.(*net.TCPConn); ok {
 			if err := e.configureTCP(tcp); err != nil {
