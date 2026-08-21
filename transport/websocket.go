@@ -16,10 +16,11 @@ import (
 )
 
 type wsOutbound struct {
-	typ     websocket.MessageType
-	payload []byte
-	ack     chan error
-	bytes   int
+	typ          websocket.MessageType
+	payload      []byte
+	ack          chan error
+	bytes        int
+	payloadBytes int
 }
 
 type wsSession struct {
@@ -46,6 +47,7 @@ type wsSession struct {
 	frameSlots    chan struct{}
 	encodeSlot    chan struct{}
 	life          *sessionLifecycle
+	stats         *sessionCounters
 	closing       chan struct{}
 	writerDrained chan struct{}
 	done          chan struct{}
@@ -69,6 +71,33 @@ func (s *wsSession) Err() error {
 	s.errMu.RLock()
 	defer s.errMu.RUnlock()
 	return s.err
+}
+
+func (s *wsSession) observe(kind ogrenet.EventKind, bytes uint64, err error) {
+	if s == nil || s.engine == nil || s.engine.observer == nil {
+		return
+	}
+	s.engine.observer.emit(ogrenet.Event{
+		Kind:       kind,
+		Resource:   ogrenet.ResourceSession,
+		ResourceID: s.id,
+		Protocol:   s.protocol,
+		Local:      s.LocalAddr(),
+		Remote:     s.RemoteAddr(),
+		Bytes:      bytes,
+		Err:        err,
+	})
+}
+
+func (s *wsSession) trySendError(err error) error {
+	opErr := s.operationalError(OpSend, err, hintNone)
+	if errors.Is(err, ErrWouldBlock) {
+		if s.stats != nil {
+			s.stats.backpressure.Add(1)
+		}
+		s.observe(ogrenet.EventBackpressure, 0, opErr)
+	}
+	return opErr
 }
 
 func (s *wsSession) Send(ctx context.Context, msg ogrenet.Message) error {
@@ -109,7 +138,7 @@ func (s *wsSession) Send(ctx context.Context, msg ogrenet.Message) error {
 	held = false
 
 	ack := make(chan error, 1)
-	req := wsOutbound{typ: typ, payload: payload, ack: ack, bytes: len(payload)}
+	req := wsOutbound{typ: typ, payload: payload, ack: ack, bytes: len(payload), payloadBytes: len(msg.Data)}
 	select {
 	case <-ctx.Done():
 		s.quota.release(req.bytes)
@@ -158,7 +187,7 @@ func (s *wsSession) TrySend(msg ogrenet.Message) error {
 		return err
 	}
 	if err := s.tryAcquireFrameSlot(); err != nil {
-		return s.operationalError(OpSend, err, hintNone)
+		return s.trySendError(err)
 	}
 	held := true
 	defer func() {
@@ -167,7 +196,7 @@ func (s *wsSession) TrySend(msg ogrenet.Message) error {
 		}
 	}()
 	if err := s.tryAcquireEncoder(); err != nil {
-		return s.operationalError(OpSend, err, hintNone)
+		return s.trySendError(err)
 	}
 	typ, payload, err := s.encode(msg)
 	s.releaseEncoder()
@@ -175,10 +204,10 @@ func (s *wsSession) TrySend(msg ogrenet.Message) error {
 		return s.operationalError(OpSend, err, hintNone)
 	}
 	if err := s.quota.tryAcquire(len(payload)); err != nil {
-		return s.operationalError(OpSend, err, hintNone)
+		return s.trySendError(err)
 	}
 	held = false
-	req := wsOutbound{typ: typ, payload: payload, bytes: len(payload)}
+	req := wsOutbound{typ: typ, payload: payload, bytes: len(payload), payloadBytes: len(msg.Data)}
 	select {
 	case <-s.closing:
 		s.quota.release(req.bytes)
@@ -192,7 +221,7 @@ func (s *wsSession) TrySend(msg ogrenet.Message) error {
 	default:
 		s.quota.release(req.bytes)
 		s.releaseFrameSlot()
-		return s.operationalError(OpSend, ErrWouldBlock, hintNone)
+		return s.trySendError(ErrWouldBlock)
 	}
 }
 
@@ -305,6 +334,11 @@ func (s *wsSession) handleOutbound(req wsOutbound) bool {
 		}
 		s.quota.release(req.bytes)
 		s.releaseFrameSlot()
+		if s.stats != nil {
+			s.stats.bytesTX.Add(uint64(req.payloadBytes))
+			s.stats.messagesTX.Add(1)
+		}
+		s.observe(ogrenet.EventWrite, uint64(req.payloadBytes), nil)
 		if req.ack != nil {
 			req.ack <- nil
 		}
@@ -417,9 +451,17 @@ func (s *wsSession) readerLoop() {
 		}
 		msg, err := s.decode(typ, payload)
 		if err != nil {
+			if s.stats != nil {
+				s.stats.decodeErrors.Add(1)
+			}
 			s.initiateClose(s.operationalError(OpRead, err, hintMessageDecode))
 			return
 		}
+		if s.stats != nil {
+			s.stats.bytesRX.Add(uint64(len(msg.Data)))
+			s.stats.messagesRX.Add(1)
+		}
+		s.observe(ogrenet.EventRead, uint64(len(msg.Data)), nil)
 		s.handler.OnMessage(s, msg)
 		if s.isClosing() {
 			return
@@ -543,6 +585,10 @@ func (s *wsSession) finalize() {
 		if !s.isClosing() {
 			s.initiateClose(nil)
 		}
+		if s.stats != nil {
+			s.stats.age.freeze()
+		}
+		s.observe(ogrenet.EventClose, 0, s.Err())
 		defer func() {
 			close(s.done)
 			s.engine.removeWebSocket(s)
