@@ -116,7 +116,7 @@ func TestStreamReadWriteCloseEventsAndFinalAge(t *testing.T) {
 			serverOpts := []Option{WithObserver(ogrenet.ObserverFunc(func(event ogrenet.Event) { serverEvents <- event }))}
 			clientOpts := []Option{WithObserver(ogrenet.ObserverFunc(func(event ogrenet.Event) { clientEvents <- event }))}
 			if scheme == ogrenet.SchemeTLS {
-				serverTLS, clientTLS := newTestTLSConfigs(t)
+				serverTLS, clientTLS := testTLSConfigs(t)
 				serverOpts = append(serverOpts, WithTLSServerConfig(serverTLS))
 				clientOpts = append(clientOpts, WithTLSClientConfig(clientTLS))
 			}
