@@ -1,6 +1,6 @@
 package transport
 
-import "sync"
+import "github.com/qigao/ogrenet/internal/runtimecore"
 
 type closeGoal uint8
 
@@ -21,65 +21,24 @@ const (
 )
 
 type sessionLifecycle struct {
-	mu       sync.Mutex
-	goal     closeGoal
-	why      abortReason
-	terminal bool
-
-	writeReq chan struct{}
-	fullReq  chan struct{}
-	abortCh  chan struct{}
-	readCh   chan struct{}
-	writeCh  chan struct{}
-	termCh   chan struct{}
-
-	writeReqOnce sync.Once
-	fullReqOnce  sync.Once
-	abortOnce    sync.Once
-	readOnce     sync.Once
-	writeOnce    sync.Once
-	termOnce     sync.Once
+	core *runtimecore.Lifecycle
 }
 
 func newSessionLifecycle() *sessionLifecycle {
-	return &sessionLifecycle{
-		writeReq: make(chan struct{}),
-		fullReq:  make(chan struct{}),
-		abortCh:  make(chan struct{}),
-		readCh:   make(chan struct{}),
-		writeCh:  make(chan struct{}),
-		termCh:   make(chan struct{}),
-	}
+	return &sessionLifecycle{core: runtimecore.NewLifecycle()}
 }
 
 func (l *sessionLifecycle) request(goal closeGoal) bool {
-	owner, _ := l.requestWithPrevious(goal)
-	return owner
+	return l.core.Request(toCoreCloseGoal(goal))
 }
 
 func (l *sessionLifecycle) requestWithPrevious(goal closeGoal) (bool, closeGoal) {
-	if goal <= closeGoalRunning || goal >= closeGoalAbort {
-		return false, closeGoalRunning
-	}
-
-	l.mu.Lock()
-	previous := l.goal
-	if l.terminal || l.goal >= goal {
-		l.mu.Unlock()
-		return false, previous
-	}
-	l.goal = goal
-	l.mu.Unlock()
-
-	l.writeReqOnce.Do(func() { close(l.writeReq) })
-	if goal >= closeGoalFull {
-		l.fullReqOnce.Do(func() { close(l.fullReq) })
-	}
-	return true, previous
+	owner, previous := l.core.RequestWithPrevious(toCoreCloseGoal(goal))
+	return owner, fromCoreCloseGoal(previous)
 }
 
 func (l *sessionLifecycle) abort(reason abortReason) bool {
-	return l.abortWith(reason, nil)
+	return l.core.Abort(toCoreAbortReason(reason))
 }
 
 // abortWith lets the winning abort publish resource terminal state while
@@ -87,70 +46,75 @@ func (l *sessionLifecycle) abort(reason abortReason) bool {
 // becomes observable. Losing aborts cannot return until that publication has
 // completed.
 func (l *sessionLifecycle) abortWith(reason abortReason, publish func()) bool {
-	l.mu.Lock()
-	if l.terminal || l.goal == closeGoalAbort {
-		l.mu.Unlock()
-		return false
-	}
-	l.goal = closeGoalAbort
-	l.why = reason
-	if publish != nil {
-		publish()
-	}
-	l.mu.Unlock()
-
-	l.writeReqOnce.Do(func() { close(l.writeReq) })
-	l.fullReqOnce.Do(func() { close(l.fullReq) })
-	l.abortOnce.Do(func() { close(l.abortCh) })
-	l.markReadClosed()
-	l.markWriteClosed()
-	return true
+	return l.core.AbortWith(toCoreAbortReason(reason), publish)
 }
 
 func (l *sessionLifecycle) reason() abortReason {
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	return l.why
+	return fromCoreAbortReason(l.core.Reason())
 }
 
-func (l *sessionLifecycle) writeRequested() <-chan struct{} { return l.writeReq }
-func (l *sessionLifecycle) fullRequested() <-chan struct{}  { return l.fullReq }
-func (l *sessionLifecycle) aborted() <-chan struct{}        { return l.abortCh }
-func (l *sessionLifecycle) readDone() <-chan struct{}       { return l.readCh }
-func (l *sessionLifecycle) writeDone() <-chan struct{}      { return l.writeCh }
-func (l *sessionLifecycle) terminalDone() <-chan struct{}   { return l.termCh }
+func (l *sessionLifecycle) writeRequested() <-chan struct{} { return l.core.WriteRequested() }
+func (l *sessionLifecycle) fullRequested() <-chan struct{}  { return l.core.FullRequested() }
+func (l *sessionLifecycle) aborted() <-chan struct{}        { return l.core.Aborted() }
+func (l *sessionLifecycle) readDone() <-chan struct{}       { return l.core.ReadDone() }
+func (l *sessionLifecycle) writeDone() <-chan struct{}      { return l.core.WriteDone() }
+func (l *sessionLifecycle) terminalDone() <-chan struct{}   { return l.core.TerminalDone() }
 
-func (l *sessionLifecycle) markReadClosed() {
-	l.readOnce.Do(func() { close(l.readCh) })
-}
-
-func (l *sessionLifecycle) markWriteClosed() {
-	l.writeOnce.Do(func() { close(l.writeCh) })
-}
-
+func (l *sessionLifecycle) markReadClosed()  { l.core.MarkReadClosed() }
+func (l *sessionLifecycle) markWriteClosed() { l.core.MarkWriteClosed() }
 func (l *sessionLifecycle) tryMarkTerminal() bool {
-	l.mu.Lock()
-	if l.terminal || l.goal == closeGoalAbort {
-		l.mu.Unlock()
-		return false
+	return l.core.TryMarkTerminal()
+}
+func (l *sessionLifecycle) markTerminal() { l.core.MarkTerminal() }
+
+func toCoreCloseGoal(goal closeGoal) runtimecore.CloseGoal {
+	switch goal {
+	case closeGoalWrite:
+		return runtimecore.GoalWrite
+	case closeGoalFull:
+		return runtimecore.GoalFull
+	case closeGoalAbort:
+		return runtimecore.GoalAbort
+	default:
+		return runtimecore.GoalRunning
 	}
-	l.terminal = true
-	l.mu.Unlock()
-	l.markTerminalChannels()
-	return true
 }
 
-func (l *sessionLifecycle) markTerminal() {
-	l.mu.Lock()
-	if !l.terminal {
-		l.terminal = true
+func fromCoreCloseGoal(goal runtimecore.CloseGoal) closeGoal {
+	switch goal {
+	case runtimecore.GoalWrite:
+		return closeGoalWrite
+	case runtimecore.GoalFull:
+		return closeGoalFull
+	case runtimecore.GoalAbort:
+		return closeGoalAbort
+	default:
+		return closeGoalRunning
 	}
-	l.mu.Unlock()
-	l.markTerminalChannels()
 }
 
-func (l *sessionLifecycle) markTerminalChannels() {
-	l.markReadClosed()
-	l.markWriteClosed()
-	l.termOnce.Do(func() { close(l.termCh) })
+func toCoreAbortReason(reason abortReason) runtimecore.AbortReason {
+	switch reason {
+	case abortExplicit:
+		return runtimecore.AbortExplicit
+	case abortCaller:
+		return runtimecore.AbortCaller
+	case abortFailure:
+		return runtimecore.AbortFailure
+	default:
+		return runtimecore.AbortNone
+	}
+}
+
+func fromCoreAbortReason(reason runtimecore.AbortReason) abortReason {
+	switch reason {
+	case runtimecore.AbortExplicit:
+		return abortExplicit
+	case runtimecore.AbortCaller:
+		return abortCaller
+	case runtimecore.AbortFailure:
+		return abortFailure
+	default:
+		return abortNone
+	}
 }
