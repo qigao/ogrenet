@@ -45,7 +45,10 @@ func removeTracked[T comparable](e *Engine, m map[T]struct{}, v T) {
 func (e *Engine) maybeDoneLocked() {
 	if e.state != engineRunning && e.activeOps == 0 && len(e.streamListeners) == 0 && len(e.wsListeners) == 0 && len(e.streams) == 0 && len(e.websockets) == 0 && len(e.packets) == 0 && e.admission.idle() {
 		e.state = engineDone
-		e.doneOnce.Do(func() { close(e.done) })
+		e.doneOnce.Do(func() {
+			e.observer.stop()
+			close(e.done)
+		})
 	}
 }
 

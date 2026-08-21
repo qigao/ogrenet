@@ -79,9 +79,32 @@ jobs:
           go test ./transport -run '^$'
           -bench 'BenchmarkError(WrapKnown|WrapUnknown|ClassifyReset|ClassifyTimeout)'
           -benchmem -benchtime=1x
+      - name: Observability allocation gate
+        run: |
+          output="$(go test ./transport -run '^$' -bench 'BenchmarkObserver|Benchmark(Session|Packet|Engine)StatsSnapshot' -benchmem -benchtime=100x -count=3)"
+          printf '%s\n' "$output"
+          printf '%s\n' "$output" | awk '
+            /BenchmarkObserverDisabledEmitPath|BenchmarkSessionStatsSnapshot|BenchmarkPacketStatsSnapshot|BenchmarkEngineStatsSnapshot/ {
+              alloc = $(NF-1) + 0
+              seen++
+              if (alloc != 0) {
+                printf "%s allocation regression: %d allocs/op, want 0\n", $1, alloc > "/dev/stderr"
+                bad = 1
+              }
+            }
+            END {
+              if (seen != 12) {
+                printf "expected 12 deterministic observability allocation samples, got %d\n", seen > "/dev/stderr"
+                bad = 1
+              }
+              exit bad
+            }'
       - name: Typed error ownership race loop
         if: matrix.go == '1.26.x'
         run: go test -race ./transport -run '^TestTransportErrorRace' -count=20
+      - name: Observability race loop
+        if: matrix.go == '1.26.x'
+        run: go test -race ./transport -run '^TestObservabilityRace' -count=20
       - name: Test with race detector
         run: go test -race -count=1 ./...
 

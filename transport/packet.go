@@ -20,6 +20,7 @@ type packetOutbound struct {
 
 type packetConn struct {
 	engine    *Engine
+	id        uint64
 	endpoint  ogrenet.Endpoint
 	conn      *net.UDPConn
 	remote    *net.UDPAddr
@@ -31,6 +32,7 @@ type packetConn struct {
 	quota     *byteQuota
 	gate      *sendGate
 	slots     chan struct{}
+	stats     *packetCounters
 	drainReq  chan struct{}
 	closing   chan struct{}
 	done      chan struct{}
@@ -58,6 +60,36 @@ func (p *packetConn) Err() error {
 	p.errMu.RLock()
 	defer p.errMu.RUnlock()
 	return p.err
+}
+
+func (p *packetConn) observe(kind ogrenet.EventKind, bytes uint64, peer net.Addr, err error) {
+	if p == nil || p.engine == nil || p.engine.observer == nil {
+		return
+	}
+	if peer == nil {
+		peer = p.RemoteAddr()
+	}
+	p.engine.observer.emit(ogrenet.Event{
+		Kind:       kind,
+		Resource:   ogrenet.ResourcePacketConn,
+		ResourceID: p.id,
+		Protocol:   ogrenet.SchemeUDP,
+		Local:      p.LocalAddr(),
+		Remote:     peer,
+		Bytes:      bytes,
+		Err:        err,
+	})
+}
+
+func (p *packetConn) trySendError(err error, peer net.Addr) error {
+	opErr := p.operationalError(OpSend, err, peer)
+	if errors.Is(err, ErrWouldBlock) {
+		if p.stats != nil {
+			p.stats.backpressure.Add(1)
+		}
+		p.observe(ogrenet.EventBackpressure, 0, peer, opErr)
+	}
+	return opErr
 }
 
 func (p *packetConn) Send(ctx context.Context, packet ogrenet.Packet) error {
@@ -193,7 +225,7 @@ func (p *packetConn) trySend(peer *net.UDPAddr, packet ogrenet.Packet) error {
 		return p.operationalError(OpSend, err, peer)
 	}
 	if err := p.tryAcquireSlot(); err != nil {
-		return p.operationalError(OpSend, err, peer)
+		return p.trySendError(err, peer)
 	}
 	held := true
 	defer func() {
@@ -202,7 +234,7 @@ func (p *packetConn) trySend(peer *net.UDPAddr, packet ogrenet.Packet) error {
 		}
 	}()
 	if err := p.quota.tryAcquire(len(packet.Data)); err != nil {
-		return p.operationalError(OpSend, err, peer)
+		return p.trySendError(err, peer)
 	}
 	data := append([]byte(nil), packet.Data...)
 	held = false
@@ -220,7 +252,7 @@ func (p *packetConn) trySend(peer *net.UDPAddr, packet ogrenet.Packet) error {
 	default:
 		p.quota.release(req.bytes)
 		p.releaseSlot()
-		return p.operationalError(OpSend, ErrWouldBlock, peer)
+		return p.trySendError(ErrWouldBlock, peer)
 	}
 }
 
@@ -314,6 +346,11 @@ func (p *packetConn) handleOutbound(req packetOutbound) bool {
 	p.quota.release(req.bytes)
 	p.releaseSlot()
 	if err == nil {
+		if p.stats != nil {
+			p.stats.bytesTX.Add(uint64(req.bytes))
+			p.stats.packetsTX.Add(1)
+		}
+		p.observe(ogrenet.EventWrite, uint64(req.bytes), req.peer, nil)
 		if req.ack != nil {
 			req.ack <- nil
 		}
@@ -424,9 +461,18 @@ func (p *packetConn) readerLoop() {
 			return
 		}
 		if n > p.maxPacket {
+			if p.stats != nil {
+				p.stats.droppedDatagrams.Add(1)
+			}
+			p.observe(ogrenet.EventDrop, uint64(n), peer, nil)
 			continue
 		}
 		data := append([]byte(nil), buf[:n]...)
+		if p.stats != nil {
+			p.stats.bytesRX.Add(uint64(n))
+			p.stats.packetsRX.Add(1)
+		}
+		p.observe(ogrenet.EventRead, uint64(n), peer, nil)
 		p.handler.OnPacket(p, peer, ogrenet.Packet{Data: data})
 		if p.isClosing() {
 			return
@@ -480,6 +526,10 @@ func (p *packetConn) initiateClose(cause error) {
 func (p *packetConn) finalize() {
 	p.finalOnce.Do(func() {
 		p.initiateClose(nil)
+		if p.stats != nil {
+			p.stats.age.freeze()
+		}
+		p.observe(ogrenet.EventClose, 0, nil, p.Err())
 		defer func() {
 			close(p.done)
 			p.engine.removePacket(p)
@@ -573,6 +623,7 @@ func (e *Engine) dialPacket(ctx context.Context, endpoint ogrenet.Endpoint, h og
 func (e *Engine) newPacketConn(conn *net.UDPConn, endpoint ogrenet.Endpoint, remote *net.UDPAddr, h ogrenet.PacketHandler) *packetConn {
 	return &packetConn{
 		engine:    e,
+		id:        e.nextID.Add(1),
 		endpoint:  endpoint,
 		conn:      conn,
 		remote:    remote,
@@ -583,6 +634,7 @@ func (e *Engine) newPacketConn(conn *net.UDPConn, endpoint ogrenet.Endpoint, rem
 		quota:     newByteQuota(e.cfg.maxQueuedBytes),
 		gate:      newSendGate(),
 		slots:     make(chan struct{}, e.cfg.writeQueue+1),
+		stats:     newPacketCounters(),
 		drainReq:  make(chan struct{}),
 		closing:   make(chan struct{}),
 		done:      make(chan struct{}),

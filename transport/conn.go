@@ -14,9 +14,10 @@ import (
 )
 
 type outbound struct {
-	frame []byte
-	ack   chan error
-	bytes int
+	frame        []byte
+	ack          chan error
+	bytes        int
+	payloadBytes int
 }
 
 type conn struct {
@@ -35,6 +36,7 @@ type conn struct {
 	frameSlots chan struct{}
 	encodeSlot chan struct{}
 	life       *sessionLifecycle
+	stats      *sessionCounters
 
 	readSize int
 	maxRead  int
@@ -65,6 +67,22 @@ func (c *conn) Err() error {
 	c.errMu.RLock()
 	defer c.errMu.RUnlock()
 	return c.err
+}
+
+func (c *conn) observe(kind ogrenet.EventKind, bytes uint64, err error) {
+	if c == nil || c.engine == nil || c.engine.observer == nil {
+		return
+	}
+	c.engine.observer.emit(ogrenet.Event{
+		Kind:       kind,
+		Resource:   ogrenet.ResourceSession,
+		ResourceID: c.id,
+		Protocol:   c.protocol,
+		Local:      c.LocalAddr(),
+		Remote:     c.RemoteAddr(),
+		Bytes:      bytes,
+		Err:        err,
+	})
 }
 
 func (c *conn) operationalError(op Op, cause error, hint classifyHint) error {
@@ -108,7 +126,7 @@ func (c *conn) Send(ctx context.Context, msg ogrenet.Message) error {
 	}
 
 	ack := make(chan error, 1)
-	req := outbound{frame: frame, ack: ack, bytes: len(frame)}
+	req := outbound{frame: frame, ack: ack, bytes: len(frame), payloadBytes: len(msg.Data)}
 	select {
 	case <-ctx.Done():
 		c.quota.release(req.bytes)
@@ -159,9 +177,16 @@ func (c *conn) TrySend(msg ogrenet.Message) error {
 
 	frame, err := c.prepareTrySend(msg)
 	if err != nil {
-		return c.operationalError(OpSend, err, hintNone)
+		opErr := c.operationalError(OpSend, err, hintNone)
+		if errors.Is(err, ErrWouldBlock) {
+			if c.stats != nil {
+				c.stats.backpressure.Add(1)
+			}
+			c.observe(ogrenet.EventBackpressure, 0, opErr)
+		}
+		return opErr
 	}
-	req := outbound{frame: frame, bytes: len(frame)}
+	req := outbound{frame: frame, bytes: len(frame), payloadBytes: len(msg.Data)}
 	select {
 	case <-c.closing:
 		c.quota.release(req.bytes)
@@ -172,7 +197,12 @@ func (c *conn) TrySend(msg ogrenet.Message) error {
 	default:
 		c.quota.release(req.bytes)
 		c.releaseFrameSlot()
-		return c.operationalError(OpSend, ErrWouldBlock, hintNone)
+		opErr := c.operationalError(OpSend, ErrWouldBlock, hintNone)
+		if c.stats != nil {
+			c.stats.backpressure.Add(1)
+		}
+		c.observe(ogrenet.EventBackpressure, 0, opErr)
+		return opErr
 	}
 }
 
@@ -281,6 +311,11 @@ func (c *conn) handleOutbound(req outbound) bool {
 	c.quota.release(req.bytes)
 	c.releaseFrameSlot()
 	if err == nil {
+		if c.stats != nil {
+			c.stats.bytesTX.Add(uint64(req.payloadBytes))
+			c.stats.messagesTX.Add(1)
+		}
+		c.observe(ogrenet.EventWrite, uint64(req.payloadBytes), nil)
 		if req.ack != nil {
 			req.ack <- nil
 		}
@@ -383,18 +418,32 @@ func (c *conn) readerLoop() {
 					if c.wireFramer {
 						hint = hintWireDecode
 					}
+					if c.stats != nil {
+						c.stats.decodeErrors.Add(1)
+					}
 					c.initiateClose(c.operationalError(OpRead, fmt.Errorf("transport: decode frame: %w", err), hint))
 					return
 				}
 				if consumed <= 0 || consumed > len(remaining) {
+					if c.stats != nil {
+						c.stats.decodeErrors.Add(1)
+					}
 					c.initiateClose(c.operationalError(OpRead, ErrInvalidFramer, hintNone))
 					return
 				}
 				if err := msg.Validate(); err != nil {
+					if c.stats != nil {
+						c.stats.decodeErrors.Add(1)
+					}
 					c.initiateClose(c.operationalError(OpRead, fmt.Errorf("transport: invalid message: %w", err), hintMessageDecode))
 					return
 				}
 
+				if c.stats != nil {
+					c.stats.bytesRX.Add(uint64(len(msg.Data)))
+					c.stats.messagesRX.Add(1)
+				}
+				c.observe(ogrenet.EventRead, uint64(len(msg.Data)), nil)
 				c.handler.OnMessage(c, msg)
 				consumedTotal += consumed
 				if c.isClosing() {
@@ -412,6 +461,9 @@ func (c *conn) readerLoop() {
 			}
 
 			if len(pending) > c.maxRead {
+				if c.stats != nil {
+					c.stats.decodeErrors.Add(1)
+				}
 				c.initiateClose(c.operationalError(OpRead, ErrReadBufferFull, hintNone))
 				return
 			}
@@ -456,6 +508,10 @@ func (c *conn) finalize() {
 			}
 			c.life.markTerminal()
 		}
+		if c.stats != nil {
+			c.stats.age.freeze()
+		}
+		c.observe(ogrenet.EventClose, 0, c.Err())
 		defer func() {
 			close(c.done)
 			c.engine.removeStream(c)

@@ -10,10 +10,11 @@ import (
 	"github.com/qigao/ogrenet"
 )
 
-type streamPrepare func(context.Context, net.Conn) (net.Conn, error)
+type streamPrepare func(context.Context, net.Conn) (net.Conn, time.Duration, error)
 
 type listener struct {
 	engine   *Engine
+	id       uint64
 	endpoint ogrenet.Endpoint
 	ln       net.Listener
 	handler  ogrenet.Handler
@@ -21,6 +22,7 @@ type listener struct {
 	ctx      context.Context
 	cancel   context.CancelFunc
 	capacity *listenerCapacity
+	stats    *listenerCounters
 	closing  chan struct{}
 	done     chan struct{}
 
@@ -107,15 +109,23 @@ func (l *listener) handleAccepted(raw net.Conn) {
 			lease.release()
 		}
 	}()
+
+	var handshakeDuration time.Duration
 	if l.prepare != nil {
-		prepared, err := l.prepare(l.ctx, raw)
-		if err != nil {
+		prepared, duration, prepareErr := l.prepare(l.ctx, raw)
+		handshakeDuration = duration
+		if prepareErr != nil {
+			if l.engine.observer != nil {
+				opErr := classifyOperational(OpHandshake, l.endpoint.Scheme, raw.LocalAddr(), raw.RemoteAddr(), prepareErr, hintTLSHandshake)
+				l.engine.observeSetup(ogrenet.EventHandshake, 0, l.id, l.endpoint.Scheme, raw.LocalAddr(), raw.RemoteAddr(), handshakeDuration, opErr)
+			}
 			_ = raw.Close()
 			return
 		}
 		raw = prepared
 	}
-	if _, err := l.engine.adoptStreamWithLease(raw, l.endpoint, l.handler, lease); err != nil {
+	session, err := l.engine.adoptStreamWithLease(raw, l.endpoint, l.handler, lease)
+	if err != nil {
 		_ = raw.Close()
 		if !errors.Is(err, ErrClosed) && !errors.Is(err, ErrResourceExhausted) {
 			_ = l.initiateClose(err)
@@ -123,6 +133,23 @@ func (l *listener) handleAccepted(raw net.Conn) {
 		return
 	}
 	transferred = true
+	if l.stats != nil {
+		l.stats.accepted.Add(1)
+	}
+	if l.engine.observer != nil {
+		if l.prepare != nil {
+			l.engine.observeSetup(ogrenet.EventHandshake, session.ID(), l.id, session.Protocol(), session.LocalAddr(), session.RemoteAddr(), handshakeDuration, nil)
+		}
+		l.engine.observer.emit(ogrenet.Event{
+			Kind:       ogrenet.EventAccept,
+			Resource:   ogrenet.ResourceSession,
+			ResourceID: session.ID(),
+			ParentID:   l.id,
+			Protocol:   session.Protocol(),
+			Local:      session.LocalAddr(),
+			Remote:     session.RemoteAddr(),
+		})
+	}
 }
 
 func waitOrClosed(delay time.Duration, closing <-chan struct{}) bool {
@@ -161,7 +188,24 @@ func (l *listener) initiateClose(cause error) error {
 }
 
 func (l *listener) finalize() {
-	l.finalOnce.Do(func() { _ = l.initiateClose(nil); close(l.done); l.engine.removeStreamListener(l) })
+	l.finalOnce.Do(func() {
+		_ = l.initiateClose(nil)
+		if l.stats != nil {
+			l.stats.age.freeze()
+		}
+		if l.engine.observer != nil {
+			l.engine.observer.emit(ogrenet.Event{
+				Kind:       ogrenet.EventClose,
+				Resource:   ogrenet.ResourceListener,
+				ResourceID: l.id,
+				Protocol:   l.endpoint.Scheme,
+				Local:      l.Addr(),
+				Err:        l.Err(),
+			})
+		}
+		close(l.done)
+		l.engine.removeStreamListener(l)
+	})
 }
 
 func (l *listener) isClosing() bool {

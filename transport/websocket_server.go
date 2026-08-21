@@ -6,6 +6,7 @@ import (
 	"net"
 	"net/http"
 	"sync"
+	"time"
 
 	"github.com/coder/websocket"
 	"github.com/qigao/ogrenet"
@@ -13,11 +14,13 @@ import (
 
 type wsListener struct {
 	engine   *Engine
+	id       uint64
 	endpoint ogrenet.Endpoint
 	ln       net.Listener
 	server   *http.Server
 	tracker  *httpConnTracker
 	capacity *listenerCapacity
+	stats    *listenerCounters
 	closing  chan struct{}
 	done     chan struct{}
 	cancel   context.CancelFunc
@@ -83,10 +86,12 @@ func (e *Engine) listenWebSocket(ctx context.Context, endpoint ogrenet.Endpoint,
 
 	l := &wsListener{
 		engine:   e,
+		id:       e.nextID.Add(1),
 		endpoint: bound,
 		ln:       serveLn,
 		tracker:  tracker,
 		capacity: capacity,
+		stats:    newListenerCounters(),
 		closing:  make(chan struct{}),
 		done:     make(chan struct{}),
 		cancel:   cancel,
@@ -115,8 +120,18 @@ func (e *Engine) listenWebSocket(ctx context.Context, endpoint ogrenet.Endpoint,
 			http.Error(w, "service unavailable", http.StatusServiceUnavailable)
 			return
 		}
+
+		observing := e.observer != nil
+		var handshakeStart time.Time
+		if observing {
+			handshakeStart = time.Now()
+		}
 		upgrade, err := e.acquireUpgrade()
 		if err != nil {
+			if observing {
+				opErr := classifyOperational(OpUpgrade, endpoint.Scheme, serveLn.Addr(), parseRemoteAddr(r.RemoteAddr), err, hintNone)
+				e.observeSetup(ogrenet.EventHandshake, 0, l.id, endpoint.Scheme, serveLn.Addr(), parseRemoteAddr(r.RemoteAddr), positiveElapsed(handshakeStart), opErr)
+			}
 			w.Header().Set("Connection", "close")
 			http.Error(w, "service unavailable", http.StatusServiceUnavailable)
 			return
@@ -126,8 +141,16 @@ func (e *Engine) listenWebSocket(ctx context.Context, endpoint ogrenet.Endpoint,
 			OriginPatterns:  e.cfg.ws.OriginPatterns,
 			CompressionMode: websocket.CompressionDisabled,
 		})
+		handshakeDuration := time.Duration(0)
+		if observing {
+			handshakeDuration = positiveElapsed(handshakeStart)
+		}
 		upgrade.release()
 		if err != nil {
+			if observing {
+				opErr := classifyOperational(OpUpgrade, endpoint.Scheme, serveLn.Addr(), parseRemoteAddr(r.RemoteAddr), err, hintWSUpgrade)
+				e.observeSetup(ogrenet.EventHandshake, 0, l.id, endpoint.Scheme, serveLn.Addr(), parseRemoteAddr(r.RemoteAddr), handshakeDuration, opErr)
+			}
 			return
 		}
 		connLease, physical := holder.takeWithPhysical()
@@ -167,6 +190,21 @@ func (e *Engine) listenWebSocket(ctx context.Context, endpoint ogrenet.Endpoint,
 			return
 		}
 		transferred = true
+		if l.stats != nil {
+			l.stats.accepted.Add(1)
+		}
+		if observing {
+			e.observeSetup(ogrenet.EventHandshake, s.ID(), l.id, s.Protocol(), s.LocalAddr(), s.RemoteAddr(), handshakeDuration, nil)
+			e.observer.emit(ogrenet.Event{
+				Kind:       ogrenet.EventAccept,
+				Resource:   ogrenet.ResourceSession,
+				ResourceID: s.ID(),
+				ParentID:   l.id,
+				Protocol:   s.Protocol(),
+				Local:      s.LocalAddr(),
+				Remote:     s.RemoteAddr(),
+			})
+		}
 		s.start()
 	})
 	wsHandshakeTimeout := e.cfg.effectiveWSHandshakeTimeout()
@@ -201,6 +239,19 @@ func (e *Engine) listenWebSocket(ctx context.Context, endpoint ogrenet.Endpoint,
 		l.err = err
 		l.errMu.Unlock()
 		_ = l.Close()
+		if l.stats != nil {
+			l.stats.age.freeze()
+		}
+		if e.observer != nil {
+			e.observer.emit(ogrenet.Event{
+				Kind:       ogrenet.EventClose,
+				Resource:   ogrenet.ResourceListener,
+				ResourceID: l.id,
+				Protocol:   l.endpoint.Scheme,
+				Local:      l.Addr(),
+				Err:        l.Err(),
+			})
+		}
 		close(l.done)
 		e.removeWSListener(l)
 	}()

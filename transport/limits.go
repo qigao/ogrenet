@@ -101,9 +101,6 @@ type listenerCapacity struct {
 }
 
 func newListenerCapacity(limit int) *listenerCapacity {
-	if limit <= 0 {
-		return nil
-	}
 	return &listenerCapacity{limit: int64(limit)}
 }
 func (c *listenerCapacity) acquire() bool {
@@ -112,7 +109,7 @@ func (c *listenerCapacity) acquire() bool {
 	}
 	for {
 		n := c.used.Load()
-		if n >= c.limit {
+		if c.limit > 0 && n >= c.limit {
 			c.rejected.Add(1)
 			return false
 		}

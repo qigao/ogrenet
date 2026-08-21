@@ -3,8 +3,10 @@ package transport
 import (
 	"context"
 	"crypto/tls"
-	"github.com/qigao/ogrenet"
 	"net"
+	"time"
+
+	"github.com/qigao/ogrenet"
 )
 
 func (e *Engine) listenStream(ctx context.Context, endpoint ogrenet.Endpoint, h ogrenet.Handler) (ogrenet.Listener, error) {
@@ -20,21 +22,50 @@ func (e *Engine) listenStream(ctx context.Context, endpoint ogrenet.Endpoint, h 
 			_ = ln.Close()
 			return nil, err
 		}
-		prepare = func(ctx context.Context, raw net.Conn) (net.Conn, error) {
+		prepare = func(ctx context.Context, raw net.Conn) (net.Conn, time.Duration, error) {
+			observing := e.observer != nil
+			var started time.Time
+			if observing {
+				started = time.Now()
+			}
 			handshake, err := e.acquireHandshake()
+			var duration time.Duration
+			if observing {
+				duration = positiveElapsed(started)
+			}
 			if err != nil {
-				return nil, err
+				return nil, duration, err
 			}
 			defer handshake.release()
 			tlsConn := tls.Server(raw, cfg.Clone())
-			if err := e.cfg.handshakeServer(ctx, tlsConn); err != nil {
-				return nil, err
+			if observing {
+				started = time.Now()
 			}
-			return tlsConn, nil
+			err = e.cfg.handshakeServer(ctx, tlsConn)
+			if observing {
+				duration = positiveElapsed(started)
+			}
+			if err != nil {
+				return nil, duration, err
+			}
+			return tlsConn, duration, nil
 		}
 	}
 	lctx, cancel := context.WithCancel(ctx)
-	l := &listener{engine: e, endpoint: bound, ln: ln, handler: h, prepare: prepare, ctx: lctx, cancel: cancel, capacity: newListenerCapacity(e.cfg.limits.MaxConnectionsPerListener), closing: make(chan struct{}), done: make(chan struct{})}
+	l := &listener{
+		engine:   e,
+		id:       e.nextID.Add(1),
+		endpoint: bound,
+		ln:       ln,
+		handler:  h,
+		prepare:  prepare,
+		ctx:      lctx,
+		cancel:   cancel,
+		capacity: newListenerCapacity(e.cfg.limits.MaxConnectionsPerListener),
+		stats:    newListenerCounters(),
+		closing:  make(chan struct{}),
+		done:     make(chan struct{}),
+	}
 	if err := e.addStreamListener(l); err != nil {
 		cancel()
 		_ = ln.Close()

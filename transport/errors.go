@@ -21,6 +21,7 @@ var (
 	ErrInvalidQueuedBytes      = errors.New("transport: queued-byte limit must be positive")
 	ErrInvalidMessageSize      = errors.New("transport: message size limit must be positive")
 	ErrInvalidDatagramSize     = errors.New("transport: datagram size limit must be between 1 and 65507 bytes")
+	ErrInvalidObserverBuffer   = errors.New("transport: observer buffer size must be positive")
 	ErrProtocolMismatch        = errors.New("transport: endpoint protocol does not match operation")
 	ErrNotConnected            = errors.New("transport: UDP socket is not connected")
 	ErrPeerRequired            = errors.New("transport: UDP peer address is required")
