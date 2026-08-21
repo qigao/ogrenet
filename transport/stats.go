@@ -87,25 +87,25 @@ func (e *Engine) Stats() ogrenet.EngineStats {
 	return out
 }
 
+func sessionStatsSnapshot(id uint64, protocol ogrenet.Scheme, local, remote interface{ Network() string; String() string }, counters *sessionCounters) ogrenet.SessionStats {
+	out := ogrenet.SessionStats{ResourceID: id, Protocol: protocol, Local: local, Remote: remote}
+	if counters != nil {
+		out.Age = counters.age.current()
+		out.BytesRX = counters.bytesRX.Load()
+		out.BytesTX = counters.bytesTX.Load()
+		out.MessagesRX = counters.messagesRX.Load()
+		out.MessagesTX = counters.messagesTX.Load()
+		out.Backpressure = counters.backpressure.Load()
+		out.DecodeErrors = counters.decodeErrors.Load()
+	}
+	return out
+}
+
 func (c *conn) Stats() ogrenet.SessionStats {
 	if c == nil {
 		return ogrenet.SessionStats{}
 	}
-	out := ogrenet.SessionStats{
-		ResourceID: c.id,
-		Protocol:   c.protocol,
-		Local:      c.LocalAddr(),
-		Remote:     c.RemoteAddr(),
-	}
-	if c.stats != nil {
-		out.Age = c.stats.age.current()
-		out.BytesRX = c.stats.bytesRX.Load()
-		out.BytesTX = c.stats.bytesTX.Load()
-		out.MessagesRX = c.stats.messagesRX.Load()
-		out.MessagesTX = c.stats.messagesTX.Load()
-		out.Backpressure = c.stats.backpressure.Load()
-		out.DecodeErrors = c.stats.decodeErrors.Load()
-	}
+	out := sessionStatsSnapshot(c.id, c.protocol, c.LocalAddr(), c.RemoteAddr(), c.stats)
 	if c.frameSlots != nil {
 		out.QueuedFrames = uint64(len(c.frameSlots))
 	}
@@ -119,12 +119,14 @@ func (s *wsSession) Stats() ogrenet.SessionStats {
 	if s == nil {
 		return ogrenet.SessionStats{}
 	}
-	return ogrenet.SessionStats{
-		ResourceID: s.id,
-		Protocol:   s.protocol,
-		Local:      s.LocalAddr(),
-		Remote:     s.RemoteAddr(),
+	out := sessionStatsSnapshot(s.id, s.protocol, s.LocalAddr(), s.RemoteAddr(), s.stats)
+	if s.frameSlots != nil {
+		out.QueuedFrames = uint64(len(s.frameSlots))
 	}
+	if s.quota != nil {
+		out.QueuedBytes = nonNegativeUint64(s.quota.current())
+	}
+	return out
 }
 
 func (p *packetConn) Stats() ogrenet.PacketConnStats {
