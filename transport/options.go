@@ -58,6 +58,8 @@ type config struct {
 	tcp                 TCPConfig
 	ws                  WebSocketConfig
 	limits              Limits
+	observer            configuredObserver
+	observerBuffer      int
 	writeQueue          int
 	maxQueuedBytes      int
 	readBuffer          int
@@ -86,6 +88,7 @@ func defaultConfig() config {
 			PingInterval:     defaultWSPingInterval,
 			PongTimeout:      defaultWSPongTimeout,
 		},
+		observerBuffer:   defaultObserverBuffer,
 		writeQueue:       defaultWriteQueue,
 		maxQueuedBytes:   defaultMaxQueuedBytes,
 		readBuffer:       defaultReadBuffer,
