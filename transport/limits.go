@@ -361,7 +361,7 @@ type admissionSnapshot struct {
 	RejectedQueuedBytes uint64
 }
 
-func (a *admissionController) snapshot() (admissionSnapshot) {
+func (a *admissionController) snapshot() (out admissionSnapshot) {
 	a.mu.Lock()
 	opening, active, draining, handshakes, upgrades := a.opening, a.active, a.draining, a.handshakes, a.upgrades
 	a.mu.Unlock()
