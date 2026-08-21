@@ -139,7 +139,12 @@ func waitOrClosed(delay time.Duration, closing <-chan struct{}) bool {
 func (l *listener) initiateClose(cause error) error {
 	var closeErr error
 	l.closeOnce.Do(func() {
-		cause = normalizeListenerError(cause)
+		if cause != nil {
+			var typed *Error
+			if !errors.As(cause, &typed) {
+				cause = normalizeListenerError(cause)
+			}
+		}
 		if cause != nil {
 			l.errMu.Lock()
 			l.err = cause

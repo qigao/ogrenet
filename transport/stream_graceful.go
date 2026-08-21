@@ -127,7 +127,12 @@ func (c *conn) closeTLSWrite(tc *tls.Conn) error {
 }
 
 func (c *conn) abort(reason abortReason, cause error) bool {
-	cause = normalizeConnError(cause)
+	if cause != nil {
+		var typed *Error
+		if !errors.As(cause, &typed) {
+			cause = normalizeConnError(cause)
+		}
+	}
 	won := c.life.abortWith(reason, func() {
 		c.errMu.Lock()
 		c.err = cause
