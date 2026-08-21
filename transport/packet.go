@@ -102,7 +102,7 @@ func (p *packetConn) resolvePeer(peer net.Addr) (*net.UDPAddr, error) {
 	} else {
 		resolved, err := net.ResolveUDPAddr("udp", peer.String())
 		if err != nil {
-			return nil, fmt.Errorf("transport: resolve UDP peer: %w", err)
+			return nil, p.operationalError(OpSend, fmt.Errorf("transport: resolve UDP peer: %w", err), nil)
 		}
 		target = resolved
 	}
@@ -119,18 +119,18 @@ func (p *packetConn) send(ctx context.Context, peer *net.UDPAddr, packet ogrenet
 	if ctx == nil {
 		return ErrNilContext
 	}
-	if err := ctx.Err(); err != nil {
-		return err
+	if cause := context.Cause(ctx); cause != nil {
+		return cause
 	}
 	if !p.gate.enter() {
-		return ErrClosed
+		return p.operationalError(OpSend, ErrClosed, peer)
 	}
 	defer p.gate.leave()
 	if err := p.validatePacket(packet); err != nil {
-		return err
+		return p.operationalError(OpSend, err, peer)
 	}
 	if err := p.acquireSlot(ctx); err != nil {
-		return err
+		return p.sendError(ctx, err, peer)
 	}
 	held := true
 	defer func() {
@@ -139,7 +139,7 @@ func (p *packetConn) send(ctx context.Context, peer *net.UDPAddr, packet ogrenet
 		}
 	}()
 	if err := p.quota.acquire(ctx, p.closing, len(packet.Data)); err != nil {
-		return err
+		return p.sendError(ctx, err, peer)
 	}
 	data := append([]byte(nil), packet.Data...)
 	held = false
@@ -150,38 +150,50 @@ func (p *packetConn) send(ctx context.Context, peer *net.UDPAddr, packet ogrenet
 	case <-ctx.Done():
 		p.quota.release(req.bytes)
 		p.releaseSlot()
-		return ctx.Err()
+		return context.Cause(ctx)
 	case <-p.closing:
 		p.quota.release(req.bytes)
 		p.releaseSlot()
-		return ErrClosed
+		if cause := context.Cause(ctx); cause != nil {
+			return cause
+		}
+		if terminal := p.Err(); terminal != nil {
+			return terminal
+		}
+		return p.operationalError(OpSend, ErrClosed, peer)
 	case p.queue <- req:
 	}
 	select {
 	case err := <-ack:
 		return err
 	case <-ctx.Done():
-		return ctx.Err()
+		return context.Cause(ctx)
 	case <-p.closing:
 		select {
 		case err := <-ack:
 			return err
 		default:
-			return ErrClosed
+			if cause := context.Cause(ctx); cause != nil {
+				return cause
+			}
+			if terminal := p.Err(); terminal != nil {
+				return terminal
+			}
+			return p.operationalError(OpSend, ErrClosed, peer)
 		}
 	}
 }
 
 func (p *packetConn) trySend(peer *net.UDPAddr, packet ogrenet.Packet) error {
 	if !p.gate.enter() {
-		return ErrClosed
+		return p.operationalError(OpSend, ErrClosed, peer)
 	}
 	defer p.gate.leave()
 	if err := p.validatePacket(packet); err != nil {
-		return err
+		return p.operationalError(OpSend, err, peer)
 	}
 	if err := p.tryAcquireSlot(); err != nil {
-		return err
+		return p.operationalError(OpSend, err, peer)
 	}
 	held := true
 	defer func() {
@@ -190,7 +202,7 @@ func (p *packetConn) trySend(peer *net.UDPAddr, packet ogrenet.Packet) error {
 		}
 	}()
 	if err := p.quota.tryAcquire(len(packet.Data)); err != nil {
-		return err
+		return p.operationalError(OpSend, err, peer)
 	}
 	data := append([]byte(nil), packet.Data...)
 	held = false
@@ -199,13 +211,16 @@ func (p *packetConn) trySend(peer *net.UDPAddr, packet ogrenet.Packet) error {
 	case <-p.closing:
 		p.quota.release(req.bytes)
 		p.releaseSlot()
-		return ErrClosed
+		if terminal := p.Err(); terminal != nil {
+			return terminal
+		}
+		return p.operationalError(OpSend, ErrClosed, peer)
 	case p.queue <- req:
 		return nil
 	default:
 		p.quota.release(req.bytes)
 		p.releaseSlot()
-		return ErrWouldBlock
+		return p.operationalError(OpSend, ErrWouldBlock, peer)
 	}
 }
 
@@ -239,7 +254,7 @@ func (p *packetConn) start() {
 		go func() {
 			defer p.loops.Done()
 			p.activity.run(p.closing, func(kind TimeoutKind) {
-				p.initiateClose(&TimeoutError{Kind: kind})
+				p.initiateClose(p.operationalError(OpReceive, &TimeoutError{Kind: kind}, p.remote))
 			})
 		}()
 	}
@@ -298,18 +313,23 @@ func (p *packetConn) handleOutbound(req packetOutbound) bool {
 	err := p.writeDatagram(req)
 	p.quota.release(req.bytes)
 	p.releaseSlot()
-	sendErr := err
-	if err != nil && p.isClosing() {
-		sendErr = ErrClosed
+	if err == nil {
+		if req.ack != nil {
+			req.ack <- nil
+		}
+		return true
+	}
+
+	opErr := p.operationalError(OpWrite, err, req.peer)
+	p.initiateClose(opErr)
+	sendErr := p.Err()
+	if sendErr == nil {
+		sendErr = p.operationalError(OpSend, ErrClosed, req.peer)
 	}
 	if req.ack != nil {
 		req.ack <- sendErr
 	}
-	if err != nil {
-		p.initiateClose(err)
-		return false
-	}
-	return true
+	return false
 }
 
 func (p *packetConn) writeDatagram(req packetOutbound) error {
@@ -349,7 +369,11 @@ func (p *packetConn) failPending(err error) {
 			p.quota.release(req.bytes)
 			p.releaseSlot()
 			if req.ack != nil {
-				req.ack <- err
+				pendingErr := p.Err()
+				if pendingErr == nil {
+					pendingErr = p.operationalError(OpSend, err, req.peer)
+				}
+				req.ack <- pendingErr
 			}
 		default:
 			return
@@ -362,7 +386,7 @@ func (p *packetConn) readerLoop() {
 	for {
 		if p.remote != nil && p.timeouts.ReadIdle > 0 {
 			if err := p.conn.SetReadDeadline(time.Now().Add(p.timeouts.ReadIdle)); err != nil {
-				p.initiateClose(fmt.Errorf("transport: set UDP read deadline: %w", err))
+				p.initiateClose(p.operationalError(OpReceive, fmt.Errorf("transport: set UDP read deadline: %w", err), p.remote))
 				return
 			}
 		}
@@ -379,7 +403,7 @@ func (p *packetConn) readerLoop() {
 		}
 		if p.remote != nil && p.timeouts.ReadIdle > 0 {
 			if clearErr := p.conn.SetReadDeadline(time.Time{}); clearErr != nil && err == nil {
-				p.initiateClose(fmt.Errorf("transport: clear UDP read deadline: %w", clearErr))
+				p.initiateClose(p.operationalError(OpReceive, fmt.Errorf("transport: clear UDP read deadline: %w", clearErr), peer))
 				return
 			}
 		}
@@ -387,10 +411,15 @@ func (p *packetConn) readerLoop() {
 			p.activity.touch()
 		}
 		if err != nil {
-			if p.remote != nil && p.timeouts.ReadIdle > 0 && isTimeoutFailure(err) && !p.isClosing() {
-				p.initiateClose(&TimeoutError{Kind: TimeoutReadIdle, Cause: err})
+			if p.isClosing() {
+				return
+			}
+			if p.remote != nil && p.timeouts.ReadIdle > 0 && isTimeoutFailure(err) {
+				p.initiateClose(p.operationalError(OpReceive, &TimeoutError{Kind: TimeoutReadIdle, Cause: err}, peer))
+			} else if normalized := normalizePacketError(err); normalized != nil {
+				p.initiateClose(p.operationalError(OpReceive, normalized, peer))
 			} else {
-				p.initiateClose(normalizePacketError(err))
+				p.initiateClose(nil)
 			}
 			return
 		}
@@ -431,10 +460,17 @@ func (p *packetConn) releaseSlot() { <-p.slots }
 
 func (p *packetConn) initiateClose(cause error) {
 	p.closeOnce.Do(func() {
-		cause = normalizePacketError(cause)
-		p.errMu.Lock()
-		p.err = cause
-		p.errMu.Unlock()
+		if cause != nil {
+			var typed *Error
+			if !errors.As(cause, &typed) {
+				cause = normalizePacketError(cause)
+			}
+		}
+		if cause != nil {
+			p.errMu.Lock()
+			p.err = cause
+			p.errMu.Unlock()
+		}
 		p.gate.close()
 		close(p.closing)
 		_ = p.conn.Close()
@@ -472,23 +508,27 @@ func (e *Engine) listenPacket(ctx context.Context, endpoint ogrenet.Endpoint, h 
 	lc := net.ListenConfig{}
 	raw, err := lc.ListenPacket(ctx, "udp", endpoint.Address())
 	if err != nil {
-		return nil, err
+		if cause := context.Cause(ctx); cause != nil {
+			return nil, cause
+		}
+		return nil, classifyOperational(OpListen, ogrenet.SchemeUDP, nil, nil, err, hintNone)
 	}
 	conn, ok := raw.(*net.UDPConn)
 	if !ok {
+		local := raw.LocalAddr()
 		_ = raw.Close()
-		return nil, fmt.Errorf("transport: UDP listen returned %T", raw)
+		return nil, classifyOperational(OpListen, ogrenet.SchemeUDP, local, nil, fmt.Errorf("transport: UDP listen returned %T", raw), hintNone)
 	}
 	p := e.newPacketConn(conn, boundEndpoint(endpoint, conn.LocalAddr()), nil, h)
 	if err := e.addPacket(p); err != nil {
 		_ = conn.Close()
-		return nil, err
+		return nil, classifyOperational(OpListen, ogrenet.SchemeUDP, conn.LocalAddr(), nil, err, hintNone)
 	}
 	p.start()
 	go func() {
 		select {
 		case <-ctx.Done():
-			p.initiateClose(ctx.Err())
+			p.initiateClose(nil)
 		case <-p.done:
 		}
 	}()
@@ -501,22 +541,29 @@ func (e *Engine) dialPacket(ctx context.Context, endpoint ogrenet.Endpoint, h og
 	defer cancel()
 	raw, err := dialer.DialContext(dctx, "udp", endpoint.Address())
 	if err != nil {
-		return nil, mapOperationTimeout(ctx, dctx, TimeoutConnect, err)
+		mapped := mapOperationTimeout(ctx, dctx, TimeoutConnect, err)
+		if cause := context.Cause(ctx); cause != nil {
+			return nil, cause
+		}
+		return nil, classifyOperational(OpDial, ogrenet.SchemeUDP, nil, nil, mapped, hintNone)
 	}
 	conn, ok := raw.(*net.UDPConn)
 	if !ok {
+		local, remote := raw.LocalAddr(), raw.RemoteAddr()
 		_ = raw.Close()
-		return nil, fmt.Errorf("transport: UDP dial returned %T", raw)
+		return nil, classifyOperational(OpDial, ogrenet.SchemeUDP, local, remote, fmt.Errorf("transport: UDP dial returned %T", raw), hintNone)
 	}
 	remote, ok := conn.RemoteAddr().(*net.UDPAddr)
 	if !ok {
+		local, rawRemote := conn.LocalAddr(), conn.RemoteAddr()
 		_ = conn.Close()
-		return nil, fmt.Errorf("transport: UDP remote returned %T", conn.RemoteAddr())
+		return nil, classifyOperational(OpDial, ogrenet.SchemeUDP, local, rawRemote, fmt.Errorf("transport: UDP remote returned %T", rawRemote), hintNone)
 	}
 	p := e.newPacketConn(conn, endpoint, remote, h)
 	if err := e.addPacket(p); err != nil {
+		local := conn.LocalAddr()
 		_ = conn.Close()
-		return nil, err
+		return nil, classifyOperational(OpDial, ogrenet.SchemeUDP, local, remote, err, hintNone)
 	}
 	p.activity = newActivityClock(e.cfg.timeouts.ConnectionIdle, e.cfg.timeouts.MaxLifetime)
 	p.start()
