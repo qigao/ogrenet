@@ -6,6 +6,7 @@ import (
 	"net"
 	"net/http"
 	"sync"
+	"time"
 
 	"github.com/coder/websocket"
 	"github.com/qigao/ogrenet"
@@ -119,8 +120,18 @@ func (e *Engine) listenWebSocket(ctx context.Context, endpoint ogrenet.Endpoint,
 			http.Error(w, "service unavailable", http.StatusServiceUnavailable)
 			return
 		}
+
+		observing := e.observer != nil
+		var handshakeStart time.Time
+		if observing {
+			handshakeStart = time.Now()
+		}
 		upgrade, err := e.acquireUpgrade()
 		if err != nil {
+			if observing {
+				opErr := classifyOperational(OpUpgrade, endpoint.Scheme, serveLn.Addr(), parseRemoteAddr(r.RemoteAddr), err, hintNone)
+				e.observeSetup(ogrenet.EventHandshake, 0, l.id, endpoint.Scheme, serveLn.Addr(), parseRemoteAddr(r.RemoteAddr), positiveElapsed(handshakeStart), opErr)
+			}
 			w.Header().Set("Connection", "close")
 			http.Error(w, "service unavailable", http.StatusServiceUnavailable)
 			return
@@ -130,8 +141,16 @@ func (e *Engine) listenWebSocket(ctx context.Context, endpoint ogrenet.Endpoint,
 			OriginPatterns:  e.cfg.ws.OriginPatterns,
 			CompressionMode: websocket.CompressionDisabled,
 		})
+		handshakeDuration := time.Duration(0)
+		if observing {
+			handshakeDuration = positiveElapsed(handshakeStart)
+		}
 		upgrade.release()
 		if err != nil {
+			if observing {
+				opErr := classifyOperational(OpUpgrade, endpoint.Scheme, serveLn.Addr(), parseRemoteAddr(r.RemoteAddr), err, hintWSUpgrade)
+				e.observeSetup(ogrenet.EventHandshake, 0, l.id, endpoint.Scheme, serveLn.Addr(), parseRemoteAddr(r.RemoteAddr), handshakeDuration, opErr)
+			}
 			return
 		}
 		connLease, physical := holder.takeWithPhysical()
@@ -174,7 +193,8 @@ func (e *Engine) listenWebSocket(ctx context.Context, endpoint ogrenet.Endpoint,
 		if l.stats != nil {
 			l.stats.accepted.Add(1)
 		}
-		if e.observer != nil {
+		if observing {
+			e.observeSetup(ogrenet.EventHandshake, s.ID(), l.id, s.Protocol(), s.LocalAddr(), s.RemoteAddr(), handshakeDuration, nil)
 			e.observer.emit(ogrenet.Event{
 				Kind:       ogrenet.EventAccept,
 				Resource:   ogrenet.ResourceSession,
