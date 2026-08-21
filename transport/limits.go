@@ -16,16 +16,16 @@ import (
 // bound. Outbound operations return a typed LimitError that unwraps to
 // ErrResourceExhausted.
 type Limits struct {
-	// MaxConnections bounds opening plus active Sessions and PacketConns owned
-	// by the Engine.
+	// MaxConnections bounds opening plus active and draining Sessions and
+	// PacketConns owned by the Engine.
 	MaxConnections int
 
-	// MaxConnectionsPerPeer bounds opening plus active connections for one
-	// canonical remote IP when a peer address is available.
+	// MaxConnectionsPerPeer bounds opening plus active and draining connections
+	// for one canonical remote IP when a peer address is available.
 	MaxConnectionsPerPeer int
 
-	// MaxConnectionsPerListener bounds opening plus active inbound Sessions for
-	// each TCP/TLS/WS/WSS Listener independently.
+	// MaxConnectionsPerListener bounds opening plus active and draining inbound
+	// Sessions for each TCP/TLS/WS/WSS Listener independently.
 	MaxConnectionsPerListener int
 
 	// MaxConcurrentHandshakes bounds TLS and WSS handshakes across the Engine.
@@ -147,6 +147,7 @@ type admissionController struct {
 	mu                  sync.Mutex
 	opening             int
 	active              int
+	draining            int
 	handshakes          int
 	upgrades            int
 	perPeer             map[string]int
@@ -171,7 +172,7 @@ func (a *admissionController) acquireOpeningWithListener(peer string, listener *
 		return nil, &LimitError{Kind: LimitConnectionsPerListener, Limit: listener.limit}
 	}
 	a.mu.Lock()
-	if a.limits.MaxConnections > 0 && a.opening+a.active >= a.limits.MaxConnections {
+	if a.limits.MaxConnections > 0 && a.opening+a.active+a.draining >= a.limits.MaxConnections {
 		a.rejectedConnections.Add(1)
 		a.mu.Unlock()
 		listener.release()
@@ -204,6 +205,7 @@ type connectionLeaseState uint8
 const (
 	connectionOpening connectionLeaseState = iota + 1
 	connectionActive
+	connectionDraining
 	connectionReleased
 )
 
@@ -224,7 +226,7 @@ func (l *connectionLease) activate() bool {
 	switch l.state {
 	case connectionActive:
 		return true
-	case connectionReleased:
+	case connectionDraining, connectionReleased:
 		return false
 	case connectionOpening:
 		a := l.owner
@@ -239,6 +241,27 @@ func (l *connectionLease) activate() bool {
 	}
 	return false
 }
+
+func (l *connectionLease) beginDrain() bool {
+	if l == nil || l.owner == nil {
+		return false
+	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if l.state != connectionActive {
+		return false
+	}
+	a := l.owner
+	a.mu.Lock()
+	if a.active > 0 {
+		a.active--
+	}
+	a.draining++
+	a.mu.Unlock()
+	l.state = connectionDraining
+	return true
+}
+
 func (l *connectionLease) release() {
 	if l == nil || l.owner == nil {
 		return
@@ -261,6 +284,10 @@ func (l *connectionLease) release() {
 	case connectionActive:
 		if a.active > 0 {
 			a.active--
+		}
+	case connectionDraining:
+		if a.draining > 0 {
+			a.draining--
 		}
 	}
 	if l.peer != "" {
@@ -314,36 +341,49 @@ func (l *activityLease) release() bool {
 	case LimitUpgrades:
 		if a.upgrades > 0 {
 			a.upgrades--
-		}
 	}
 	a.mu.Unlock()
 	return true
 }
 
 type admissionSnapshot struct {
-	OpeningConnections  int
-	ActiveConnections   int
-	ActiveHandshakes    int
-	PendingUpgrades     int
-	GlobalQueuedBytes   int64
-	RejectedConnections uint64
-	RejectedPeers       uint64
-	RejectedListeners   uint64
-	RejectedHandshakes  uint64
-	RejectedUpgrades    uint64
-	RejectedQueuedBytes uint64
+	OpeningConnections   int
+	ActiveConnections    int
+	DrainingConnections  int
+	ActiveHandshakes     int
+	PendingUpgrades      int
+	GlobalQueuedBytes    int64
+	RejectedConnections  uint64
+	RejectedPeers        uint64
+	RejectedListeners    uint64
+	RejectedHandshakes   uint64
+	RejectedUpgrades     uint64
+	RejectedQueuedBytes  uint64
 }
 
 func (a *admissionController) snapshot() admissionSnapshot {
 	a.mu.Lock()
-	opening, active, handshakes, upgrades := a.opening, a.active, a.handshakes, a.upgrades
+	opening, active, draining, handshakes, upgrades := a.opening, a.active, a.draining, a.handshakes, a.upgrades
 	a.mu.Unlock()
-	return admissionSnapshot{opening, active, handshakes, upgrades, a.bytes.current(), a.rejectedConnections.Load(), a.rejectedPeers.Load(), a.rejectedListeners.Load(), a.rejectedHandshakes.Load(), a.rejectedUpgrades.Load(), a.bytes.rejected.Load()}
+	return admissionSnapshot{
+		OpeningConnections:  opening,
+		ActiveConnections:   active,
+		DrainingConnections: draining,
+		ActiveHandshakes:    handshakes,
+		PendingUpgrades:     upgrades,
+		GlobalQueuedBytes:   a.bytes.current(),
+		RejectedConnections: a.rejectedConnections.Load(),
+		RejectedPeers:       a.rejectedPeers.Load(),
+		RejectedListeners:   a.rejectedListeners.Load(),
+		RejectedHandshakes:  a.rejectedHandshakes.Load(),
+		RejectedUpgrades:    a.rejectedUpgrades.Load(),
+		RejectedQueuedBytes: a.bytes.rejected.Load(),
+	}
 }
 func (a *admissionController) idle() bool {
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	return a.opening == 0 && a.active == 0 && a.handshakes == 0 && a.upgrades == 0
+	return a.opening == 0 && a.active == 0 && a.draining == 0 && a.handshakes == 0 && a.upgrades == 0
 }
 
 func peerKey(addr net.Addr) string {
