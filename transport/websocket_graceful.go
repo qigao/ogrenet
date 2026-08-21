@@ -62,9 +62,6 @@ func (s *wsSession) watchCloseTimeout() {
 
 func (s *wsSession) abort(reason abortReason, cause error) bool {
 	cause = normalizeWSError(cause)
-	if reason == abortFailure && cause == nil && s.writeState.active() {
-		return false
-	}
 	if !s.life.abort(reason) {
 		return false
 	}
