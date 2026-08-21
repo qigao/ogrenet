@@ -31,9 +31,11 @@ type packetConn struct {
 	quota     *byteQuota
 	gate      *sendGate
 	slots     chan struct{}
+	drainReq  chan struct{}
 	closing   chan struct{}
 	done      chan struct{}
 
+	drainOnce sync.Once
 	closeOnce sync.Once
 	finalOnce sync.Once
 	loops     sync.WaitGroup
@@ -252,27 +254,62 @@ func (p *packetConn) writerLoop() {
 		<-p.gate.done()
 		p.failPending(ErrClosed)
 	}()
+
+	draining := false
 	for {
+		if draining {
+			select {
+			case <-p.closing:
+				return
+			case req := <-p.queue:
+				if !p.handleOutbound(req) {
+					return
+				}
+			case <-p.gate.done():
+				for {
+					select {
+					case req := <-p.queue:
+						if !p.handleOutbound(req) {
+							return
+						}
+					default:
+						p.initiateClose(nil)
+						return
+					}
+				}
+			}
+			continue
+		}
+
 		select {
 		case <-p.closing:
 			return
+		case <-p.drainReq:
+			draining = true
 		case req := <-p.queue:
-			err := p.writeDatagram(req)
-			p.quota.release(req.bytes)
-			p.releaseSlot()
-			sendErr := err
-			if err != nil && p.isClosing() {
-				sendErr = ErrClosed
-			}
-			if req.ack != nil {
-				req.ack <- sendErr
-			}
-			if err != nil {
-				p.initiateClose(err)
+			if !p.handleOutbound(req) {
 				return
 			}
 		}
 	}
+}
+
+func (p *packetConn) handleOutbound(req packetOutbound) bool {
+	err := p.writeDatagram(req)
+	p.quota.release(req.bytes)
+	p.releaseSlot()
+	sendErr := err
+	if err != nil && p.isClosing() {
+		sendErr = ErrClosed
+	}
+	if req.ack != nil {
+		req.ack <- sendErr
+	}
+	if err != nil {
+		p.initiateClose(err)
+		return false
+	}
+	return true
 }
 
 func (p *packetConn) writeDatagram(req packetOutbound) error {
@@ -499,6 +536,7 @@ func (e *Engine) newPacketConn(conn *net.UDPConn, endpoint ogrenet.Endpoint, rem
 		quota:     newByteQuota(e.cfg.maxQueuedBytes),
 		gate:      newSendGate(),
 		slots:     make(chan struct{}, e.cfg.writeQueue+1),
+		drainReq:  make(chan struct{}),
 		closing:   make(chan struct{}),
 		done:      make(chan struct{}),
 	}

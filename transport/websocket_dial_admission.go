@@ -12,13 +12,14 @@ import (
 )
 
 type wsDialAdmission struct {
-	mu     sync.Mutex
-	lease  *connectionLease
-	local  net.Addr
-	remote net.Addr
+	mu       sync.Mutex
+	lease    *connectionLease
+	local    net.Addr
+	remote   net.Addr
+	physical net.Conn
 }
 
-func (s *wsDialAdmission) set(lease *connectionLease, local, remote net.Addr) error {
+func (s *wsDialAdmission) set(lease *connectionLease, local, remote net.Addr, physical net.Conn) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.lease != nil {
@@ -27,19 +28,24 @@ func (s *wsDialAdmission) set(lease *connectionLease, local, remote net.Addr) er
 	s.lease = lease
 	s.local = local
 	s.remote = remote
+	s.physical = physical
 	return nil
 }
 
-func (s *wsDialAdmission) take() (*connectionLease, net.Addr, net.Addr) {
+func (s *wsDialAdmission) take() (*connectionLease, net.Addr, net.Addr, net.Conn) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	lease, local, remote := s.lease, s.local, s.remote
+	lease, local, remote, physical := s.lease, s.local, s.remote, s.physical
 	s.lease = nil
-	return lease, local, remote
+	s.physical = nil
+	return lease, local, remote, physical
 }
 
 func (s *wsDialAdmission) release() {
-	lease, _, _ := s.take()
+	lease, _, _, physical := s.take()
+	if physical != nil {
+		_ = physical.Close()
+	}
 	lease.release()
 }
 
@@ -84,7 +90,7 @@ func (e *Engine) newWebSocketHTTPTransport(endpoint ogrenet.Endpoint) (*http.Tra
 		if err != nil {
 			return nil, err
 		}
-		if err := state.set(lease, raw.LocalAddr(), raw.RemoteAddr()); err != nil {
+		if err := state.set(lease, raw.LocalAddr(), raw.RemoteAddr(), raw); err != nil {
 			lease.release()
 			_ = raw.Close()
 			return nil, err
@@ -113,12 +119,12 @@ func (e *Engine) newWebSocketHTTPTransport(endpoint ogrenet.Endpoint) (*http.Tra
 			handshake.release()
 			if err != nil {
 				lease.release()
-				_ = tlsConn.Close()
+				_ = raw.Close()
 				return nil, err
 			}
-			if err := state.set(lease, raw.LocalAddr(), raw.RemoteAddr()); err != nil {
+			if err := state.set(lease, raw.LocalAddr(), raw.RemoteAddr(), raw); err != nil {
 				lease.release()
-				_ = tlsConn.Close()
+				_ = raw.Close()
 				return nil, err
 			}
 			return tlsConn, nil

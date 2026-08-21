@@ -17,7 +17,7 @@ type engineActivityLease struct {
 
 func (e *Engine) acquireHandshake() (*engineActivityLease, error) {
 	e.mu.Lock()
-	if e.closed {
+	if e.state != engineRunning {
 		e.mu.Unlock()
 		return nil, ErrClosed
 	}
@@ -30,7 +30,7 @@ func (e *Engine) acquireHandshake() (*engineActivityLease, error) {
 }
 func (e *Engine) acquireUpgrade() (*engineActivityLease, error) {
 	e.mu.Lock()
-	if e.closed {
+	if e.state != engineRunning {
 		e.mu.Unlock()
 		return nil, ErrClosed
 	}

@@ -3,7 +3,7 @@ package transport
 func (e *Engine) beginOp() error {
 	e.mu.Lock()
 	defer e.mu.Unlock()
-	if e.closed {
+	if e.state != engineRunning {
 		return ErrClosed
 	}
 	e.activeOps++
@@ -28,7 +28,7 @@ func (e *Engine) addStream(v *conn) error { return e.addStreamWithLease(v, nil) 
 func (e *Engine) addStreamWithLease(v *conn, lease *connectionLease) error {
 	e.mu.Lock()
 	defer e.mu.Unlock()
-	if e.closed {
+	if e.state != engineRunning {
 		return ErrClosed
 	}
 	if lease == nil {
@@ -51,7 +51,7 @@ func (e *Engine) addWebSocket(v *wsSession) error { return e.addWebSocketWithLea
 func (e *Engine) addWebSocketWithLease(v *wsSession, lease *connectionLease) error {
 	e.mu.Lock()
 	defer e.mu.Unlock()
-	if e.closed {
+	if e.state != engineRunning {
 		return ErrClosed
 	}
 	if lease == nil {
@@ -72,7 +72,7 @@ func (e *Engine) addWebSocketWithLease(v *wsSession, lease *connectionLease) err
 func (e *Engine) addPacket(v *packetConn) error {
 	e.mu.Lock()
 	defer e.mu.Unlock()
-	if e.closed {
+	if e.state != engineRunning {
 		return ErrClosed
 	}
 	lease, err := e.admission.acquireConnection(peerKey(v.remote))
@@ -88,7 +88,7 @@ func (e *Engine) addPacket(v *packetConn) error {
 func addTracked[T comparable](e *Engine, m map[T]struct{}, v T) error {
 	e.mu.Lock()
 	defer e.mu.Unlock()
-	if e.closed {
+	if e.state != engineRunning {
 		return ErrClosed
 	}
 	m[v] = struct{}{}

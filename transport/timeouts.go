@@ -67,6 +67,7 @@ const (
 	TimeoutReadIdle
 	TimeoutConnectionIdle
 	TimeoutMaxLifetime
+	TimeoutClose
 )
 
 func (k TimeoutKind) String() string {
@@ -83,6 +84,8 @@ func (k TimeoutKind) String() string {
 		return "connection-idle"
 	case TimeoutMaxLifetime:
 		return "max-lifetime"
+	case TimeoutClose:
+		return "close"
 	default:
 		return "unknown"
 	}

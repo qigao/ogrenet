@@ -118,9 +118,9 @@ func TestTCPPerListenerCapacity(t *testing.T) {
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	opens := make(chan struct{}, 2)
+	opens := make(chan ogrenet.Session, 2)
 	ln, err := e.Listen(ctx, ogrenet.Endpoint{Scheme: ogrenet.SchemeTCP, Host: "127.0.0.1", Port: 0}, ogrenet.HandlerFuncs{
-		Open: func(ogrenet.Session) { opens <- struct{}{} },
+		Open: func(s ogrenet.Session) { opens <- s },
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -132,8 +132,9 @@ func TestTCPPerListenerCapacity(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	var firstSession ogrenet.Session
 	select {
-	case <-opens:
+	case firstSession = <-opens:
 	case <-time.After(2 * time.Second):
 		t.Fatal("first TCP session did not open")
 	}
@@ -154,12 +155,30 @@ func TestTCPPerListenerCapacity(t *testing.T) {
 	}
 
 	_ = first.Close()
+	// Peer close is observed as a read-half close. The server Session still owns
+	// its write side, so it must keep consuming listener capacity until the
+	// Session itself terminates.
+	half, ok := firstSession.(halfCloseProbe)
+	if !ok {
+		t.Fatalf("%T does not expose read-half state", firstSession)
+	}
+	select {
+	case <-half.ReadClosed():
+	case <-time.After(2 * time.Second):
+		t.Fatal("server read half did not close after peer close")
+	}
+	if got := internal.capacity.current(); got != 1 {
+		t.Fatalf("listener capacity released on read half-close: %d", got)
+	}
+	if err := firstSession.Close(); err != nil {
+		t.Fatal(err)
+	}
 	deadline := time.Now().Add(2 * time.Second)
 	for time.Now().Before(deadline) && internal.capacity.current() != 0 {
 		time.Sleep(time.Millisecond)
 	}
 	if got := internal.capacity.current(); got != 0 {
-		t.Fatalf("listener capacity did not return after close: %d", got)
+		t.Fatalf("listener capacity did not return after Session close: %d", got)
 	}
 
 	third, err := net.Dial("tcp", ln.Addr().String())
