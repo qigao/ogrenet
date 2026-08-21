@@ -34,6 +34,8 @@ type wsSession struct {
 	cipher     secure.Cipher
 	maxMessage int
 	writeTO    time.Duration
+	readIdle   time.Duration
+	activity   *activityClock
 	pingEvery  time.Duration
 	pongTO     time.Duration
 	queue      chan wsOutbound
@@ -178,6 +180,9 @@ func (s *wsSession) start() {
 	if s.pingEvery > 0 {
 		loopCount++
 	}
+	if s.activity != nil {
+		loopCount++
+	}
 	s.loops.Add(loopCount)
 	go func() {
 		defer s.loops.Done()
@@ -191,6 +196,14 @@ func (s *wsSession) start() {
 		go func() {
 			defer s.loops.Done()
 			s.pingLoop()
+		}()
+	}
+	if s.activity != nil {
+		go func() {
+			defer s.loops.Done()
+			s.activity.run(s.closing, func(kind TimeoutKind) {
+				s.initiateClose(&TimeoutError{Kind: kind})
+			})
 		}()
 	}
 	go func() {
@@ -212,6 +225,14 @@ func (s *wsSession) writerLoop() {
 			ctx, cancel := context.WithTimeout(context.Background(), s.writeTO)
 			err := s.ws.Write(ctx, req.typ, req.payload)
 			cancel()
+			if err == nil && s.activity != nil {
+				s.activity.touch()
+			}
+			if err != nil && isTimeoutFailure(err) && !s.isClosing() {
+				err = &TimeoutError{Kind: TimeoutWrite, Cause: err}
+			} else if err != nil {
+				err = fmt.Errorf("transport: websocket write: %w", err)
+			}
 			s.quota.release(req.bytes)
 			s.releaseFrameSlot()
 			sendErr := err
@@ -222,7 +243,7 @@ func (s *wsSession) writerLoop() {
 				req.ack <- sendErr
 			}
 			if err != nil {
-				s.initiateClose(fmt.Errorf("transport: websocket write: %w", err))
+				s.initiateClose(err)
 				return
 			}
 		}
@@ -250,10 +271,23 @@ func (s *wsSession) readerLoop() {
 		return
 	}
 	for {
-		typ, payload, err := s.ws.Read(context.Background())
+		readCtx := context.Background()
+		cancel := func() {}
+		if s.readIdle > 0 {
+			readCtx, cancel = context.WithTimeout(context.Background(), s.readIdle)
+		}
+		typ, payload, err := s.ws.Read(readCtx)
+		cancel()
 		if err != nil {
-			s.initiateClose(normalizeWSError(err))
+			if s.readIdle > 0 && isTimeoutFailure(err) && !s.isClosing() {
+				s.initiateClose(&TimeoutError{Kind: TimeoutReadIdle, Cause: err})
+			} else {
+				s.initiateClose(normalizeWSError(err))
+			}
 			return
+		}
+		if s.activity != nil {
+			s.activity.touch()
 		}
 		msg, err := s.decode(typ, payload)
 		if err != nil {
