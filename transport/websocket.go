@@ -28,6 +28,7 @@ type wsSession struct {
 	protocol      ogrenet.Scheme
 	endpoint      ogrenet.Endpoint
 	ws            *websocket.Conn
+	physical      io.Closer
 	local         net.Addr
 	remote        net.Addr
 	handler       ogrenet.Handler
