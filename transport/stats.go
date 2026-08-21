@@ -1,6 +1,44 @@
 package transport
 
-import "github.com/qigao/ogrenet"
+import (
+	"sync/atomic"
+	"time"
+
+	"github.com/qigao/ogrenet"
+)
+
+type resourceAge struct {
+	started time.Time
+	finalNS atomic.Int64
+}
+
+func newResourceAge() resourceAge { return resourceAge{started: time.Now()} }
+
+func (a *resourceAge) current() time.Duration {
+	if a == nil || a.started.IsZero() {
+		return 0
+	}
+	if v := a.finalNS.Load(); v > 0 {
+		return time.Duration(v - 1)
+	}
+	return time.Since(a.started)
+}
+
+func (a *resourceAge) freeze() {
+	if a == nil || a.started.IsZero() {
+		return
+	}
+	a.finalNS.CompareAndSwap(0, int64(time.Since(a.started))+1)
+}
+
+type listenerCounters struct {
+	accepted atomic.Uint64
+	age      resourceAge
+}
+
+func newListenerCounters() *listenerCounters {
+	return &listenerCounters{age: newResourceAge()}
+}
 
 func nonNegativeUint64[T ~int | ~int64](v T) uint64 {
 	if v <= 0 {
@@ -74,18 +112,38 @@ func (l *listener) Stats() ogrenet.ListenerStats {
 	if l == nil {
 		return ogrenet.ListenerStats{}
 	}
-	return ogrenet.ListenerStats{
-		Protocol: l.endpoint.Scheme,
-		Local:    l.Addr(),
+	out := ogrenet.ListenerStats{
+		ResourceID: l.id,
+		Protocol:   l.endpoint.Scheme,
+		Local:      l.Addr(),
 	}
+	if l.stats != nil {
+		out.Age = l.stats.age.current()
+		out.AcceptedConnections = l.stats.accepted.Load()
+	}
+	if l.capacity != nil {
+		out.RejectedConnections = l.capacity.rejected.Load()
+		out.CurrentConnections = nonNegativeUint64(l.capacity.current())
+	}
+	return out
 }
 
 func (l *wsListener) Stats() ogrenet.ListenerStats {
 	if l == nil {
 		return ogrenet.ListenerStats{}
 	}
-	return ogrenet.ListenerStats{
-		Protocol: l.endpoint.Scheme,
-		Local:    l.Addr(),
+	out := ogrenet.ListenerStats{
+		ResourceID: l.id,
+		Protocol:   l.endpoint.Scheme,
+		Local:      l.Addr(),
 	}
+	if l.stats != nil {
+		out.Age = l.stats.age.current()
+		out.AcceptedConnections = l.stats.accepted.Load()
+	}
+	if l.capacity != nil {
+		out.RejectedConnections = l.capacity.rejected.Load()
+		out.CurrentConnections = nonNegativeUint64(l.capacity.current())
+	}
+	return out
 }
