@@ -368,13 +368,8 @@ func (s *wsSession) readerLoop() {
 		typ, payload, err := s.ws.Read(readCtx)
 		cancel()
 		if err != nil {
-			normalClose := isNormalWSClose(err)
-			if normalClose {
-				if isClosedSignal(s.life.fullRequested()) && !isClosedSignal(s.life.aborted()) {
-					s.life.markReadClosed()
-				} else {
-					s.initiateClose(nil)
-				}
+			if isNormalWSClose(err) && isClosedSignal(s.life.fullRequested()) && !isClosedSignal(s.life.aborted()) {
+				s.life.markReadClosed()
 				return
 			}
 			if s.readIdle > 0 && isTimeoutFailure(err) && !s.isClosing() {
