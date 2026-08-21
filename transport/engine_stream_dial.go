@@ -81,10 +81,12 @@ func (e *Engine) adoptStreamWithLease(raw net.Conn, endpoint ogrenet.Endpoint, h
 		done:       make(chan struct{}),
 		readSize:   e.cfg.readBuffer,
 		maxRead:    e.cfg.maxBufferedRead,
+		timeouts:   e.cfg.timeouts,
 	}
 	if err := e.addStreamWithLease(c, lease); err != nil {
 		return nil, err
 	}
+	c.activity = newActivityClock(c.timeouts.ConnectionIdle, c.timeouts.MaxLifetime)
 	c.start()
 	return c, nil
 }
