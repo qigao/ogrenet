@@ -22,7 +22,7 @@ func TestEpollRejectsTLSWSWSSWithoutFallback(t *testing.T) {
 	t.Cleanup(func() { _ = e.Close() })
 
 	for _, scheme := range []ogrenet.Scheme{ogrenet.SchemeTLS, ogrenet.SchemeWS, ogrenet.SchemeWSS} {
-		ep := ogrenet.Endpoint{Scheme: scheme, Host: "127.0.0.1", Port: 1}
+		ep := ogrenet.Endpoint{Scheme: scheme, Host: "127.0.0.1", Port: 1, Path: "/"}
 		if _, err := e.Dial(context.Background(), ep, nil); !errors.Is(err, ErrProtocolUnsupported) {
 			t.Fatalf("scheme=%s err=%v", scheme, err)
 		}
