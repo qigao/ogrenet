@@ -9,7 +9,7 @@ Base: `master` at `13c6c4878fad6512d00a4c1e17168f8352546f19`
 
 P0-4 adds a stable typed taxonomy for **operational/runtime transport failures** across TCP, TLS, WS, WSS, and UDP. Callers must be able to classify failures with `errors.Is` / `errors.As` without parsing strings, while retaining the original OS, TLS, WebSocket, timeout, or resource-limit cause.
 
-The model must also become the canonical terminal-failure representation used by `Session.Err()`, `PacketConn.Err()`, and `Listener.Err()` so that P0-5 observability can consume one deterministic failure source.
+The model also becomes the canonical terminal-failure representation used by `Session.Err()`, `PacketConn.Err()`, and `Listener.Err()` so P0-5 observability can consume one deterministic failure source.
 
 ## 2. Scope
 
@@ -27,8 +27,9 @@ This phase covers operational failures that occur while the runtime is performin
 - resource admission failures
 - runtime timeouts
 - protocol/wire violations
+- internal runtime/plugin failures that terminate an otherwise valid operation
 
-Configuration, validation, and programmer errors remain direct sentinel errors and are deliberately outside the typed operational envelope.
+Configuration, validation, and programmer errors detected before an operational resource boundary remain direct sentinel errors and are deliberately outside the typed operational envelope.
 
 Examples that remain direct sentinels include:
 
@@ -47,9 +48,17 @@ Examples that remain direct sentinels include:
 - `ErrTLSCertificateRequired`
 - `ErrPeerRequired`
 - `ErrPeerMismatch`
+- `ErrNotConnected`
+- `ErrFramerNotSupported`
+- `ErrConflictingCodecOptions`
+- `ErrNilFramer`
+- `ErrNilCipherFactory`
+- `ErrNilCipher`
 - other option/configuration validation failures
 
 Caller context cancellation/deadline is also outside the typed operational envelope. It remains a control-plane result and is returned unchanged.
+
+A programmer/plugin invariant that fails **after** a resource has entered an operational path is different: if it terminates the resource or fails a public runtime operation, it still receives the `*Error` envelope, normally with `ErrorUnknown`, while preserving its original sentinel/cause. This rule applies, for example, if a custom framer violates its consumed-length contract at runtime.
 
 ## 3. Public error envelope
 
@@ -112,7 +121,9 @@ This distinction is intentional and mandatory.
 - closed send admission
 - queue/frame-slot backpressure
 - global/per-session queued-byte admission
-- message/datagram size validation
+- message/datagram size limits
+- operational target resolution for `SendTo`
+- local encode/encrypt plugin failure after valid application input has entered the runtime
 
 `OpWrite` is the actual physical stream/datagram write boundary after the request has been admitted.
 
@@ -196,6 +207,8 @@ Existing specific contracts remain authoritative:
 - `ErrTimeout`
 - `ErrResourceExhausted`
 - `ErrWouldBlock`
+- `ErrFrameExceedsQueueBudget`
+- `ErrReadBufferFull`
 - `ErrMessageTooLarge`
 - `ErrDatagramTooLarge`
 - `TimeoutError`
@@ -245,7 +258,7 @@ Error{Kind: ErrorResourceExhausted}
 
 ### 7.2 Internal categorized cause
 
-For categories that need both a new stable sentinel and the raw root cause, use an unexported wrapper:
+For categories that need both a stable sentinel and the raw root cause, use an unexported wrapper:
 
 ```go
 type categorizedCause struct {
@@ -273,10 +286,21 @@ Error{Op: OpRead, Kind: ErrorReset}
 This must satisfy all three levels simultaneously:
 
 ```go
-errors.As(err, new(*transport.Error))
+var te *transport.Error
+errors.As(err, &te)
 errors.Is(err, transport.ErrConnectionReset)
 errors.Is(err, syscall.ECONNRESET) // on the platform where that cause applies
 ```
+
+A categorized cause may also preserve an existing specific sentinel below a broader category. Example:
+
+```text
+Error{Op: OpRead, Kind: ErrorResourceExhausted}
+  -> categorizedCause{category: ErrResourceExhausted}
+     -> ErrReadBufferFull
+```
+
+Both `ErrResourceExhausted` and `ErrReadBufferFull` must remain matchable.
 
 ## 8. Classification architecture
 
@@ -329,7 +353,7 @@ Order is fixed because one error chain may satisfy multiple classifiers:
 2. existing *Error -> do not double-wrap
 3. TimeoutError / runtime timeout -> ErrorTimeout
 4. LimitError / ErrResourceExhausted -> ErrorResourceExhausted
-5. known runtime sentinel (ErrClosed / ErrWouldBlock / too-large)
+5. known runtime sentinel
 6. *net.DNSError -> ErrorDNS
 7. OS connection errno -> Refused / Reset / PeerClosed
 8. TLS/x509 classification
@@ -349,6 +373,36 @@ TLS handshake + ECONNRESET
 TLS handshake + x509.UnknownAuthorityError
 => OpHandshake / ErrorTLS
 ```
+
+### 9.1 Existing operational sentinel mapping
+
+Existing sentinels that occur on operational paths map explicitly:
+
+```text
+ErrClosed
+  -> ErrorClosed
+
+ErrWouldBlock
+  -> OpSend / ErrorBackpressure
+
+ErrMessageTooLarge
+  -> OpSend or OpRead / ErrorTooLarge
+
+ErrDatagramTooLarge
+  -> OpSend / ErrorTooLarge
+
+ErrFrameExceedsQueueBudget
+  -> OpSend / ErrorResourceExhausted
+     category ErrResourceExhausted
+     preserve ErrFrameExceedsQueueBudget below it
+
+ErrReadBufferFull
+  -> OpRead / ErrorResourceExhausted
+     category ErrResourceExhausted
+     preserve ErrReadBufferFull below it
+```
+
+`ErrInvalidFramer` requires context. If it is encountered as a runtime framer-contract invariant after a resource has started, it is `ErrorUnknown` with the sentinel preserved. A concrete remote decode error from the default wire protocol is `ErrorProtocol` instead.
 
 ## 10. Platform errno mapping
 
@@ -379,13 +433,17 @@ WSAESHUTDOWN    -> ErrorPeerClosed
 WSAENOTCONN     -> ErrorPeerClosed for established I/O boundaries
 ```
 
-The exact constants live in Windows-only code. Protocol code must consume only the normalized result.
+The exact constants live in Windows-only code. Protocol code consumes only the normalized result.
 
 ## 11. DNS mapping
 
-A `*net.DNSError` is `ErrorDNS` at the operation that triggered resolution, normally `OpDial`, `OpListen`, or UDP peer resolution when that resolution is operational.
+A `*net.DNSError` is `ErrorDNS` at the operation that triggered resolution:
 
-The cause chain must retain `*net.DNSError` so callers can inspect fields such as name, timeout, and temporary metadata when meaningful.
+- `OpDial` for dial/connect resolution
+- `OpListen` for listener bind resolution when applicable
+- `OpSend` for operational UDP `SendTo` target resolution
+
+The cause chain retains `*net.DNSError` so callers can inspect its typed metadata.
 
 Caller context cancellation that manifests through resolver work still bypasses the typed envelope if the caller context is the winning cause.
 
@@ -442,8 +500,7 @@ WebSocket HTTP upgrade rejection is `OpUpgrade / ErrorProtocol` after lower-leve
 
 Remote malformed bytes are operational protocol failures:
 
-- invalid stream frame decode
-- invalid consumed length from a remote frame
+- concrete stream frame decode failure caused by remote bytes
 - unsupported remote WebSocket message type
 - malformed remote text/base64 payload
 - inbound message-security authentication/decryption failure
@@ -452,8 +509,9 @@ These become `OpRead / ErrorProtocol / ErrProtocolViolation` (or `OpReceive` if 
 
 Do not misclassify local application mistakes as remote protocol violations:
 
-- local `Message.Validate()` failure remains validation behavior
-- local cipher `Seal` failure remains its original local failure unless a separate stable operational category is justified later
+- local `Message.Validate()` failure remains direct validation behavior
+- a local cipher/framer plugin failing on otherwise valid input is an operational `OpSend / ErrorUnknown` unless a more precise stable category exists
+- a runtime custom-framer invariant violation such as invalid consumed length is `OpRead / ErrorUnknown`, not automatically a remote protocol violation
 
 Inbound message-cipher authentication failure is `ErrorProtocol`, not `ErrorTLS`. TLS/WSS channel security and ogrenet message security are separate layers.
 
@@ -493,13 +551,17 @@ Do not wrap it in `*Error`.
 
 ### 16.2 Configuration/programmer/validation failures
 
-Return existing validation/configuration sentinels unchanged.
+Return existing pre-operation validation/configuration sentinels unchanged.
 
 ### 16.3 Lifecycle arbitration
 
 P0-3 control-plane arbitration remains direct. For example, a graceful `Shutdown()` interrupted by explicit local `Close()` may return `ErrClosed` directly. This is not presented as a network failure.
 
 All other runtime failures crossing public API boundaries receive the typed envelope.
+
+### 16.4 Inbound admission rejection
+
+An inbound connection/upgrade rejected by resource policy does not become a terminal `Listener.Err()`. The listener remains healthy; the rejected child is closed and admission counters retain the rejection. P0-5 will expose this through observation/counters. Outbound admission failures returned to `Dial`/other public operations are wrapped with the appropriate operation and `ErrorResourceExhausted`.
 
 ## 17. Resource Err() contract
 
@@ -575,7 +637,7 @@ Rules:
 - DNS/refused before a socket exists: local may be nil; remote remains nil if there is no actual `net.Addr`
 - do not fabricate an address merely from endpoint text to fill the field
 
-Copy standard `*net.TCPAddr` / `*net.UDPAddr` values and their IP slices when storing them.
+Copy standard `*net.TCPAddr` / `*net.UDPAddr` values and their IP slices when storing them. Immutable internal/static address values may be copied by value.
 
 ## 20. Unknown operational errors
 
@@ -614,6 +676,7 @@ Cover:
 - duplicate-wrap prevention
 - address snapshot isolation
 - unknown cause preservation
+- explicit mapping for `ErrFrameExceedsQueueBudget`, `ErrReadBufferFull`, and runtime `ErrInvalidFramer`
 
 Each category test proves three levels when applicable:
 
@@ -640,8 +703,12 @@ UDP receive/read-idle timeout for connected socket
 UDP datagram too large
 resource/admission exhaustion
 TrySend queue saturation
+frame exceeds queue budget
+read-buffer exhaustion
 caller context cancellation bypass
 explicit Close leaves Err nil
+listener owner context cancellation leaves Listener.Err nil
+packet-listener owner context cancellation leaves PacketConn.Err nil
 ```
 
 ### 21.3 First-owner race tests
@@ -777,9 +844,11 @@ Existing checks such as:
 ```go
 errors.Is(err, transport.ErrWouldBlock)
 errors.Is(err, transport.ErrTimeout)
-errors.As(err, &transport.TimeoutError{})
+var timeout *transport.TimeoutError
+errors.As(err, &timeout)
 errors.Is(err, transport.ErrResourceExhausted)
-errors.As(err, &transport.LimitError{})
+var limit *transport.LimitError
+errors.As(err, &limit)
 ```
 
 must continue to work when the error is now wrapped by `*transport.Error`.
@@ -811,15 +880,18 @@ The portable transport runtime guarantees stable `ErrorKind`, category sentinel 
 P0-4 is complete when all of the following are true:
 
 - operational runtime failures use the typed envelope consistently
-- caller context and configuration/programmer failures follow the bypass rules
+- caller context and pre-operation configuration/programmer failures follow the bypass rules
+- runtime plugin/invariant failures are enveloped conservatively rather than misclassified
 - `OpSend` vs `OpWrite` semantics are covered and documented
 - clean FIN/TLS EOF/normal WS close do not create terminal errors
 - `ErrorPeerClosed` is only used for failing operations, not clean lifecycle EOF
 - TimeoutError and LimitError continue to work through `errors.As`
 - category sentinels and raw causes remain reachable through `errors.Is/As`
 - refused/reset/DNS/TLS/protocol/resource/backpressure/too-large/unknown are covered
+- `ErrFrameExceedsQueueBudget`, `ErrReadBufferFull`, and runtime `ErrInvalidFramer` have unambiguous mappings
 - resource `Err()` stores only the first terminal operational failure
 - context-owned listener/packet shutdown no longer pollutes resource `Err()`
+- inbound admission rejection does not poison Listener.Err
 - Linux/Windows/macOS/FreeBSD runtime classifier evidence exists
 - GmSSL and existing cross-compiles remain green
 - no classification logic parses strings
