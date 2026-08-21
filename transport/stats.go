@@ -66,6 +66,20 @@ func newSessionCounters() *sessionCounters {
 	return &sessionCounters{age: newResourceAge()}
 }
 
+type packetCounters struct {
+	bytesRX          atomic.Uint64
+	bytesTX          atomic.Uint64
+	packetsRX        atomic.Uint64
+	packetsTX        atomic.Uint64
+	backpressure     atomic.Uint64
+	droppedDatagrams atomic.Uint64
+	age              resourceAge
+}
+
+func newPacketCounters() *packetCounters {
+	return &packetCounters{age: newResourceAge()}
+}
+
 func nonNegativeUint64[T ~int | ~int64](v T) uint64 {
 	if v <= 0 {
 		return 0
@@ -145,11 +159,28 @@ func (p *packetConn) Stats() ogrenet.PacketConnStats {
 	if p == nil {
 		return ogrenet.PacketConnStats{}
 	}
-	return ogrenet.PacketConnStats{
-		Protocol: ogrenet.SchemeUDP,
-		Local:    p.LocalAddr(),
-		Remote:   p.RemoteAddr(),
+	out := ogrenet.PacketConnStats{
+		ResourceID: p.id,
+		Protocol:   ogrenet.SchemeUDP,
+		Local:      p.LocalAddr(),
+		Remote:     p.RemoteAddr(),
 	}
+	if p.stats != nil {
+		out.Age = p.stats.age.current()
+		out.BytesRX = p.stats.bytesRX.Load()
+		out.BytesTX = p.stats.bytesTX.Load()
+		out.PacketsRX = p.stats.packetsRX.Load()
+		out.PacketsTX = p.stats.packetsTX.Load()
+		out.Backpressure = p.stats.backpressure.Load()
+		out.DroppedDatagrams = p.stats.droppedDatagrams.Load()
+	}
+	if p.slots != nil {
+		out.QueuedPackets = uint64(len(p.slots))
+	}
+	if p.quota != nil {
+		out.QueuedBytes = nonNegativeUint64(p.quota.current())
+	}
+	return out
 }
 
 func (l *listener) Stats() ogrenet.ListenerStats {
