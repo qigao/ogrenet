@@ -20,16 +20,22 @@ func (e *Engine) dialTCP(ctx context.Context, endpoint ogrenet.Endpoint) (*net.T
 	defer cancel()
 	raw, err := dialer.DialContext(dctx, "tcp", endpoint.Address())
 	if err != nil {
-		return nil, mapOperationTimeout(ctx, dctx, TimeoutConnect, err)
+		mapped := mapOperationTimeout(ctx, dctx, TimeoutConnect, err)
+		if cause := context.Cause(ctx); cause != nil {
+			return nil, cause
+		}
+		return nil, classifyOperational(OpDial, endpoint.Scheme, nil, nil, mapped, hintNone)
 	}
 	tcp, ok := raw.(*net.TCPConn)
 	if !ok {
+		local, remote := raw.LocalAddr(), raw.RemoteAddr()
 		_ = raw.Close()
-		return nil, fmt.Errorf("transport: tcp dial returned %T", raw)
+		return nil, classifyOperational(OpDial, endpoint.Scheme, local, remote, fmt.Errorf("transport: tcp dial returned %T", raw), hintNone)
 	}
 	if err := e.configureTCP(tcp); err != nil {
+		local, remote := tcp.LocalAddr(), tcp.RemoteAddr()
 		_ = tcp.Close()
-		return nil, err
+		return nil, classifyOperational(OpDial, endpoint.Scheme, local, remote, err, hintNone)
 	}
 	return tcp, nil
 }
@@ -38,12 +44,16 @@ func (e *Engine) listenTCP(ctx context.Context, endpoint ogrenet.Endpoint) (*net
 	lc := net.ListenConfig{}
 	raw, err := lc.Listen(ctx, "tcp", endpoint.Address())
 	if err != nil {
-		return nil, err
+		if cause := context.Cause(ctx); cause != nil {
+			return nil, cause
+		}
+		return nil, classifyOperational(OpListen, endpoint.Scheme, nil, nil, err, hintNone)
 	}
 	ln, ok := raw.(*net.TCPListener)
 	if !ok {
+		local := raw.Addr()
 		_ = raw.Close()
-		return nil, fmt.Errorf("transport: tcp listen returned %T", raw)
+		return nil, classifyOperational(OpListen, endpoint.Scheme, local, nil, fmt.Errorf("transport: tcp listen returned %T", raw), hintNone)
 	}
 	return ln, nil
 }
