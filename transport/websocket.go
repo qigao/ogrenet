@@ -368,8 +368,13 @@ func (s *wsSession) readerLoop() {
 		typ, payload, err := s.ws.Read(readCtx)
 		cancel()
 		if err != nil {
-			if isNormalWSClose(err) && isClosedSignal(s.life.fullRequested()) && !isClosedSignal(s.life.aborted()) {
-				s.life.markReadClosed()
+			normalClose := isNormalWSClose(err)
+			if normalClose {
+				if isClosedSignal(s.life.fullRequested()) && !isClosedSignal(s.life.aborted()) {
+					s.life.markReadClosed()
+				} else {
+					s.initiateClose(nil)
+				}
 				return
 			}
 			if s.readIdle > 0 && isTimeoutFailure(err) && !s.isClosing() {
@@ -378,6 +383,12 @@ func (s *wsSession) readerLoop() {
 				s.initiateClose(s.operationalError(OpWrite, &TimeoutError{Kind: TimeoutWrite, Cause: cause}, hintNone))
 			} else if normalized := normalizeWSError(err); normalized != nil {
 				s.initiateClose(s.operationalError(OpRead, normalized, hintNone))
+			} else if s.writeState.active() {
+				// coder/websocket can make a blocked writer close the physical
+				// connection before the writer goroutine has published its real
+				// error. A cause-less read close while a write is still active is
+				// therefore derivative; let the writer own terminal failure.
+				return
 			} else {
 				s.initiateClose(nil)
 			}
