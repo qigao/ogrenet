@@ -275,16 +275,13 @@ func (s *wsSession) handleOutbound(req wsOutbound) bool {
 	s.writeState.begin(ctx)
 	err := s.ws.Write(ctx, req.typ, req.payload)
 	cancel()
-	cleanClose := err != nil && normalizeWSError(err) == nil
 	if err == nil {
 		s.writeState.end()
 		if s.activity != nil {
 			s.activity.touch()
 		}
 	}
-	if cleanClose {
-		err = ErrClosed
-	} else if err != nil && isTimeoutFailure(err) {
+	if err != nil && isTimeoutFailure(err) {
 		err = &TimeoutError{Kind: TimeoutWrite, Cause: err}
 	} else if err != nil {
 		err = fmt.Errorf("transport: websocket write: %w", err)
@@ -299,11 +296,7 @@ func (s *wsSession) handleOutbound(req wsOutbound) bool {
 		req.ack <- sendErr
 	}
 	if err != nil {
-		if cleanClose {
-			s.initiateClose(nil)
-		} else {
-			s.initiateClose(err)
-		}
+		s.initiateClose(err)
 		s.writeState.end()
 		return false
 	}
