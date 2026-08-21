@@ -270,7 +270,7 @@ func TestGracefulRaceWebSocketCloseVsWriteTimeout(t *testing.T) {
 	ws := session.(*wsSession)
 	sendResult := make(chan error, 1)
 	go func() { sendResult <- session.Send(context.Background(), ogrenet.Bin(make([]byte, 4<<20))) }()
-	waitWSWriteActive(t, ws)
+	waitGracefulWSWriteActive(t, ws)
 	shutdownResult := make(chan error, 1)
 	go func() { shutdownResult <- session.Shutdown(context.Background()) }()
 
@@ -283,6 +283,21 @@ func TestGracefulRaceWebSocketCloseVsWriteTimeout(t *testing.T) {
 	}
 	waitClosed(t, session.Done(), "WebSocket timeout session")
 	assertGracefulAccountingZero(t, e)
+}
+
+func waitGracefulWSWriteActive(t *testing.T, s *wsSession) {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		s.writeState.mu.RLock()
+		active := s.writeState.ctx != nil
+		s.writeState.mu.RUnlock()
+		if active {
+			return
+		}
+		time.Sleep(time.Millisecond)
+	}
+	t.Fatal("WebSocket writer did not enter active write")
 }
 
 func assertGracefulAccountingZero(t *testing.T, e *Engine) {
