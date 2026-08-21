@@ -107,8 +107,8 @@ func (e *Engine) Stats() ogrenet.EngineStats {
 		RejectedQueuedBytes: s.RejectedQueuedBytes,
 	}
 	if e.observer != nil {
-		out.ObserverDroppedEvents = e.observer.dropped.Load()
-		out.ObserverPanics = e.observer.panics.Load()
+		out.ObserverDroppedEvents = e.observer.droppedCount()
+		out.ObserverPanics = e.observer.panicCount()
 	}
 	return out
 }
