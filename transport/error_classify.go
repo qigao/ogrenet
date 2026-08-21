@@ -8,6 +8,7 @@ import (
 
 	"github.com/coder/websocket"
 	"github.com/qigao/ogrenet"
+	"github.com/qigao/ogrenet/wire"
 )
 
 type classifyHint uint8
@@ -53,10 +54,24 @@ func classifyOperational(op Op, protocol ogrenet.Scheme, local, remote net.Addr,
 		return envelopeOperational(op, protocol, local, remote, ErrorBackpressure, cause)
 	case errors.Is(cause, ErrMessageTooLarge), errors.Is(cause, ErrDatagramTooLarge):
 		return envelopeOperational(op, protocol, local, remote, ErrorTooLarge, cause)
+	case errors.Is(cause, wire.ErrFrameTooLarge):
+		return envelopeOperational(op, protocol, local, remote, ErrorTooLarge, categorized(ErrMessageTooLarge, cause))
 	case errors.Is(cause, ErrFrameExceedsQueueBudget), errors.Is(cause, ErrReadBufferFull):
 		return envelopeOperational(op, protocol, local, remote, ErrorResourceExhausted, categorized(ErrResourceExhausted, cause))
 	case errors.Is(cause, ErrInvalidFramer):
 		return envelopeOperational(op, protocol, local, remote, ErrorUnknown, cause)
+	case errors.Is(cause, ErrPeerClosed):
+		return envelopeOperational(op, protocol, local, remote, ErrorPeerClosed, cause)
+	case errors.Is(cause, ErrConnectionRefused):
+		return envelopeOperational(op, protocol, local, remote, ErrorRefused, cause)
+	case errors.Is(cause, ErrConnectionReset):
+		return envelopeOperational(op, protocol, local, remote, ErrorReset, cause)
+	case errors.Is(cause, ErrDNS):
+		return envelopeOperational(op, protocol, local, remote, ErrorDNS, cause)
+	case errors.Is(cause, ErrTLS):
+		return envelopeOperational(op, protocol, local, remote, ErrorTLS, cause)
+	case errors.Is(cause, ErrProtocolViolation):
+		return envelopeOperational(op, protocol, local, remote, ErrorProtocol, cause)
 	}
 
 	var dns *net.DNSError
