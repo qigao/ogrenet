@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net"
 	"sync"
+	"time"
 
 	"github.com/qigao/ogrenet"
 )
@@ -24,6 +25,8 @@ type packetConn struct {
 	remote    *net.UDPAddr
 	handler   ogrenet.PacketHandler
 	maxPacket int
+	timeouts  Timeouts
+	activity  *activityClock
 	queue     chan packetOutbound
 	quota     *byteQuota
 	gate      *sendGate
@@ -217,7 +220,11 @@ func (p *packetConn) Close() error {
 }
 
 func (p *packetConn) start() {
-	p.loops.Add(2)
+	loopCount := 2
+	if p.activity != nil {
+		loopCount++
+	}
+	p.loops.Add(loopCount)
 	go func() {
 		defer p.loops.Done()
 		p.writerLoop()
@@ -226,6 +233,14 @@ func (p *packetConn) start() {
 		defer p.loops.Done()
 		p.readerLoop()
 	}()
+	if p.activity != nil {
+		go func() {
+			defer p.loops.Done()
+			p.activity.run(p.closing, func(kind TimeoutKind) {
+				p.initiateClose(&TimeoutError{Kind: kind})
+			})
+		}()
+	}
 	go func() {
 		p.loops.Wait()
 		p.finalize()
@@ -242,12 +257,7 @@ func (p *packetConn) writerLoop() {
 		case <-p.closing:
 			return
 		case req := <-p.queue:
-			var err error
-			if req.peer == nil {
-				_, err = p.conn.Write(req.data)
-			} else {
-				_, err = p.conn.WriteToUDP(req.data, req.peer)
-			}
+			err := p.writeDatagram(req)
 			p.quota.release(req.bytes)
 			p.releaseSlot()
 			sendErr := err
@@ -258,11 +268,41 @@ func (p *packetConn) writerLoop() {
 				req.ack <- sendErr
 			}
 			if err != nil {
-				p.initiateClose(fmt.Errorf("transport: UDP write: %w", err))
+				p.initiateClose(err)
 				return
 			}
 		}
 	}
+}
+
+func (p *packetConn) writeDatagram(req packetOutbound) error {
+	writeTimeout := p.timeouts.Write
+	if writeTimeout <= 0 {
+		writeTimeout = defaultWriteTimeout
+	}
+	if err := p.conn.SetWriteDeadline(time.Now().Add(writeTimeout)); err != nil {
+		return fmt.Errorf("transport: set UDP write deadline: %w", err)
+	}
+	var err error
+	if req.peer == nil {
+		_, err = p.conn.Write(req.data)
+	} else {
+		_, err = p.conn.WriteToUDP(req.data, req.peer)
+	}
+	clearErr := p.conn.SetWriteDeadline(time.Time{})
+	if err != nil {
+		if isTimeoutFailure(err) {
+			return &TimeoutError{Kind: TimeoutWrite, Cause: err}
+		}
+		return fmt.Errorf("transport: UDP write: %w", err)
+	}
+	if clearErr != nil {
+		return fmt.Errorf("transport: clear UDP write deadline: %w", clearErr)
+	}
+	if p.activity != nil {
+		p.activity.touch()
+	}
+	return nil
 }
 
 func (p *packetConn) failPending(err error) {
@@ -283,6 +323,12 @@ func (p *packetConn) failPending(err error) {
 func (p *packetConn) readerLoop() {
 	buf := make([]byte, 65535)
 	for {
+		if p.remote != nil && p.timeouts.ReadIdle > 0 {
+			if err := p.conn.SetReadDeadline(time.Now().Add(p.timeouts.ReadIdle)); err != nil {
+				p.initiateClose(fmt.Errorf("transport: set UDP read deadline: %w", err))
+				return
+			}
+		}
 		var (
 			n    int
 			peer *net.UDPAddr
@@ -294,8 +340,21 @@ func (p *packetConn) readerLoop() {
 			n, err = p.conn.Read(buf)
 			peer = p.remote
 		}
+		if p.remote != nil && p.timeouts.ReadIdle > 0 {
+			if clearErr := p.conn.SetReadDeadline(time.Time{}); clearErr != nil && err == nil {
+				p.initiateClose(fmt.Errorf("transport: clear UDP read deadline: %w", clearErr))
+				return
+			}
+		}
+		if n > 0 && p.activity != nil {
+			p.activity.touch()
+		}
 		if err != nil {
-			p.initiateClose(normalizePacketError(err))
+			if p.remote != nil && p.timeouts.ReadIdle > 0 && isTimeoutFailure(err) && !p.isClosing() {
+				p.initiateClose(&TimeoutError{Kind: TimeoutReadIdle, Cause: err})
+			} else {
+				p.initiateClose(normalizePacketError(err))
+			}
 			return
 		}
 		if n > p.maxPacket {
@@ -401,9 +460,11 @@ func (e *Engine) listenPacket(ctx context.Context, endpoint ogrenet.Endpoint, h 
 
 func (e *Engine) dialPacket(ctx context.Context, endpoint ogrenet.Endpoint, h ogrenet.PacketHandler) (ogrenet.PacketConn, error) {
 	dialer := net.Dialer{}
-	raw, err := dialer.DialContext(ctx, "udp", endpoint.Address())
+	dctx, cancel := boundedOperationContext(ctx, e.cfg.timeouts.Connect)
+	defer cancel()
+	raw, err := dialer.DialContext(dctx, "udp", endpoint.Address())
 	if err != nil {
-		return nil, err
+		return nil, mapOperationTimeout(ctx, dctx, TimeoutConnect, err)
 	}
 	conn, ok := raw.(*net.UDPConn)
 	if !ok {
@@ -420,6 +481,7 @@ func (e *Engine) dialPacket(ctx context.Context, endpoint ogrenet.Endpoint, h og
 		_ = conn.Close()
 		return nil, err
 	}
+	p.activity = newActivityClock(e.cfg.timeouts.ConnectionIdle, e.cfg.timeouts.MaxLifetime)
 	p.start()
 	return p, nil
 }
@@ -432,6 +494,7 @@ func (e *Engine) newPacketConn(conn *net.UDPConn, endpoint ogrenet.Endpoint, rem
 		remote:    remote,
 		handler:   h,
 		maxPacket: e.cfg.maxDatagramBytes,
+		timeouts:  e.cfg.timeouts,
 		queue:     make(chan packetOutbound, e.cfg.writeQueue),
 		quota:     newByteQuota(e.cfg.maxQueuedBytes),
 		gate:      newSendGate(),
