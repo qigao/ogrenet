@@ -19,7 +19,7 @@ func (e *Engine) dialStream(ctx context.Context, endpoint ogrenet.Endpoint, h og
 	raw, err := e.dialTCP(ctx, endpoint)
 	var connectDuration time.Duration
 	if observing {
-		connectDuration = time.Since(connectStart)
+		connectDuration = positiveElapsed(connectStart)
 	}
 	if err != nil {
 		if observing {
@@ -65,7 +65,7 @@ func (e *Engine) dialStream(ctx context.Context, endpoint ogrenet.Endpoint, h og
 		}
 		handshake, err := e.acquireHandshake()
 		if observing {
-			handshakeDuration = time.Since(handshakeStart)
+			handshakeDuration = positiveElapsed(handshakeStart)
 		}
 		if err != nil {
 			opErr := classifyOperational(OpHandshake, endpoint.Scheme, local, remote, err, hintNone)
@@ -82,7 +82,7 @@ func (e *Engine) dialStream(ctx context.Context, endpoint ogrenet.Endpoint, h og
 		}
 		err = e.cfg.handshakeClient(ctx, tlsConn)
 		if observing {
-			handshakeDuration = time.Since(handshakeStart)
+			handshakeDuration = positiveElapsed(handshakeStart)
 		}
 		handshake.release()
 		if err != nil {
