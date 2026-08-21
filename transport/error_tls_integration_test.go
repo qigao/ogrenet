@@ -47,31 +47,19 @@ func TestTransportErrorTLSCertificateFailureUsesOpHandshake(t *testing.T) {
 }
 
 func TestTransportErrorTLSCloseWriteTimeoutUsesOpClose(t *testing.T) {
-	serverTLS, clientTLS := testTLSConfigs(t)
-	clientTLS = clientTLS.Clone()
-	clientTLS.ServerName = "localhost"
-	clientRaw, serverRaw := net.Pipe()
-	clientConn := tls.Client(clientRaw, clientTLS)
-	serverConn := tls.Server(serverRaw, serverTLS)
-	serverHandshake := make(chan error, 1)
-	go func() { serverHandshake <- serverConn.Handshake() }()
-	if err := clientConn.Handshake(); err != nil {
-		t.Fatal(err)
-	}
-	if err := <-serverHandshake; err != nil {
-		t.Fatal(err)
-	}
-
-	e, err := New(WithTimeouts(Timeouts{Write: 30 * time.Millisecond}))
+	e, err := New()
 	if err != nil {
 		t.Fatal(err)
 	}
-	c, err := e.adoptStream(clientConn, ogrenet.Endpoint{Scheme: ogrenet.SchemeTLS, Host: "pipe", Port: 1}, ogrenet.HandlerFuncs{})
+	left, right := net.Pipe()
+	rawTimeout := &TimeoutError{Kind: TimeoutWrite, Cause: context.DeadlineExceeded}
+	wrapped := &closeWriteErrorConn{Conn: left, err: rawTimeout}
+	c, err := e.adoptStream(wrapped, ogrenet.Endpoint{Scheme: ogrenet.SchemeTLS, Host: "pipe", Port: 1}, ogrenet.HandlerFuncs{})
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer func() {
-		_ = serverConn.Close()
+		_ = right.Close()
 		_ = e.Close()
 	}()
 
@@ -103,3 +91,10 @@ func TestTransportErrorTLSCleanCloseNotifyRemainsErrorFree(t *testing.T) {
 		t.Fatalf("clean close_notify populated Session.Err: %v", err)
 	}
 }
+
+type closeWriteErrorConn struct {
+	net.Conn
+	err error
+}
+
+func (c *closeWriteErrorConn) CloseWrite() error { return c.err }
