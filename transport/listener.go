@@ -10,7 +10,7 @@ import (
 	"github.com/qigao/ogrenet"
 )
 
-type streamPrepare func(context.Context, net.Conn) (net.Conn, error)
+type streamPrepare func(context.Context, net.Conn) (net.Conn, time.Duration, error)
 
 type listener struct {
 	engine   *Engine
@@ -109,9 +109,16 @@ func (l *listener) handleAccepted(raw net.Conn) {
 			lease.release()
 		}
 	}()
+
+	var handshakeDuration time.Duration
 	if l.prepare != nil {
-		prepared, err := l.prepare(l.ctx, raw)
-		if err != nil {
+		prepared, duration, prepareErr := l.prepare(l.ctx, raw)
+		handshakeDuration = duration
+		if prepareErr != nil {
+			if l.engine.observer != nil {
+				opErr := classifyOperational(OpHandshake, l.endpoint.Scheme, raw.LocalAddr(), raw.RemoteAddr(), prepareErr, hintTLSHandshake)
+				l.engine.observeSetup(ogrenet.EventHandshake, 0, l.id, l.endpoint.Scheme, raw.LocalAddr(), raw.RemoteAddr(), handshakeDuration, opErr)
+			}
 			_ = raw.Close()
 			return
 		}
@@ -130,6 +137,9 @@ func (l *listener) handleAccepted(raw net.Conn) {
 		l.stats.accepted.Add(1)
 	}
 	if l.engine.observer != nil {
+		if l.prepare != nil {
+			l.engine.observeSetup(ogrenet.EventHandshake, session.ID(), l.id, session.Protocol(), session.LocalAddr(), session.RemoteAddr(), handshakeDuration, nil)
+		}
 		l.engine.observer.emit(ogrenet.Event{
 			Kind:       ogrenet.EventAccept,
 			Resource:   ogrenet.ResourceSession,
