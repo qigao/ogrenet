@@ -13,11 +13,13 @@ import (
 
 type wsListener struct {
 	engine   *Engine
+	id       uint64
 	endpoint ogrenet.Endpoint
 	ln       net.Listener
 	server   *http.Server
 	tracker  *httpConnTracker
 	capacity *listenerCapacity
+	stats    *listenerCounters
 	closing  chan struct{}
 	done     chan struct{}
 	cancel   context.CancelFunc
@@ -83,10 +85,12 @@ func (e *Engine) listenWebSocket(ctx context.Context, endpoint ogrenet.Endpoint,
 
 	l := &wsListener{
 		engine:   e,
+		id:       e.nextID.Add(1),
 		endpoint: bound,
 		ln:       serveLn,
 		tracker:  tracker,
 		capacity: capacity,
+		stats:    newListenerCounters(),
 		closing:  make(chan struct{}),
 		done:     make(chan struct{}),
 		cancel:   cancel,
