@@ -347,21 +347,21 @@ func (l *activityLease) release() bool {
 }
 
 type admissionSnapshot struct {
-	OpeningConnections   int
-	ActiveConnections    int
-	DrainingConnections  int
-	ActiveHandshakes     int
-	PendingUpgrades      int
-	GlobalQueuedBytes    int64
-	RejectedConnections  uint64
-	RejectedPeers        uint64
-	RejectedListeners    uint64
-	RejectedHandshakes   uint64
-	RejectedUpgrades     uint64
-	RejectedQueuedBytes  uint64
+	OpeningConnections  int
+	ActiveConnections   int
+	DrainingConnections int
+	ActiveHandshakes    int
+	PendingUpgrades     int
+	GlobalQueuedBytes   int64
+	RejectedConnections uint64
+	RejectedPeers       uint64
+	RejectedListeners   uint64
+	RejectedHandshakes  uint64
+	RejectedUpgrades    uint64
+	RejectedQueuedBytes uint64
 }
 
-func (a *admissionController) snapshot() admissionSnapshot {
+func (a *admissionController) snapshot() (admissionSnapshot) {
 	a.mu.Lock()
 	opening, active, draining, handshakes, upgrades := a.opening, a.active, a.draining, a.handshakes, a.upgrades
 	a.mu.Unlock()
