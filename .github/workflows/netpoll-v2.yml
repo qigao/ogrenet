@@ -105,6 +105,9 @@ jobs:
       - name: Observability race loop
         if: matrix.go == '1.26.x'
         run: go test -race ./transport -run '^TestObservabilityRace' -count=20
+      - name: Runtimecore ownership race loop
+        if: matrix.go == '1.26.x'
+        run: go test -race ./internal/runtimecore -count=20
       - name: Test with race detector
         run: go test -race -count=1 ./...
 
