@@ -384,7 +384,11 @@ func (s *wsSession) readerLoop() {
 		typ, payload, err := s.ws.Read(readCtx)
 		cancel()
 		if err != nil {
-			if isNormalWSClose(err) && isClosedSignal(s.life.fullRequested()) && !isClosedSignal(s.life.aborted()) {
+			if isClosedSignal(s.life.fullRequested()) && !isClosedSignal(s.life.aborted()) &&
+				(isNormalWSClose(err) || isClosedSignal(s.writerDrained)) {
+				// Once the writer is drained, ws.Close/watchCloseTimeout own the
+				// local close handshake. Reader-side close errors observed in
+				// that phase are derivative and must not steal terminal cause.
 				s.life.markReadClosed()
 				return
 			}
