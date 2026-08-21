@@ -33,23 +33,27 @@ func BenchmarkGracefulTrySendRunning(b *testing.B) {
 	defer c.Close()
 	defer peer.Close()
 
+	// TrySend returns after admission, while the writer processes the accepted
+	// frame asynchronously. Benchmark only the caller-side admission path and
+	// drain the writer with the timer stopped so process-wide allocation counters
+	// do not depend on scheduler timing.
+	previousProcs := runtime.GOMAXPROCS(1)
+	defer runtime.GOMAXPROCS(previousProcs)
+
 	payload := ogrenet.Bin(make([]byte, 128))
 	b.ReportAllocs()
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		for {
-			err := c.TrySend(payload)
-			switch {
-			case err == nil:
-				goto accepted
-			case errors.Is(err, ErrWouldBlock):
-				runtime.Gosched()
-			default:
-				b.Fatal(err)
-			}
+		if err := c.TrySend(payload); err != nil {
+			b.Fatal(err)
 		}
-	accepted:
+		b.StopTimer()
+		for len(c.frameSlots) != 0 {
+			runtime.Gosched()
+		}
+		b.StartTimer()
 	}
+	b.StopTimer()
 }
 
 func BenchmarkGracefulDrainOneFrame(b *testing.B) {
