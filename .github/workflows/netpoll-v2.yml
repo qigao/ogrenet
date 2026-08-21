@@ -39,6 +39,11 @@ jobs:
           go test ./transport -run '^$'
           -bench 'BenchmarkGraceful(SendRunning|TrySendRunning|DrainOneFrame|Drain256Frames)'
           -benchmem -benchtime=1x
+      - name: Error taxonomy benchmark smoke
+        run: >-
+          go test ./transport -run '^$'
+          -bench 'BenchmarkError(WrapKnown|WrapUnknown|ClassifyReset|ClassifyTimeout)'
+          -benchmem -benchtime=1x
       - name: Test with race detector
         run: go test -race -count=1 ./...
 
@@ -65,6 +70,22 @@ jobs:
           cache: true
       - run: go vet ./...
       - run: go test -count=1 ./...
+
+  freebsd-runtime:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+      - name: Test transport error classifier on FreeBSD
+        uses: vmactions/freebsd-vm@77ed28d336d03fe19a3f4f7266c1d2c4714dd79d
+        with:
+          release: "14.4"
+          usesh: true
+          prepare: |
+            pkg install -y go126
+          run: |
+            go126 version
+            go126 test ./transport -run 'Test(ClassifyPlatformCauseUnix|TransportError(TCP|UDP|Resource|Listener))' -count=1
 
   gmssl:
     runs-on: ubuntu-latest
