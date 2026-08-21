@@ -188,7 +188,7 @@ func TestWSSServerCloseTimeoutUsesPhysicalTransport(t *testing.T) {
 
 	httpClient := &http.Client{Transport: &http.Transport{TLSClientConfig: clientTLS.Clone()}}
 	peer, _, err := websocket.Dial(context.Background(), ln.Endpoint().URL(), &websocket.DialOptions{
-		HTTPClient:       httpClient,
+		HTTPClient:      httpClient,
 		CompressionMode: websocket.CompressionDisabled,
 	})
 	if err != nil {
