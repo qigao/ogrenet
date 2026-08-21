@@ -3,7 +3,6 @@ package transport
 import (
 	"context"
 	"errors"
-	"io"
 	"net"
 	"runtime"
 	"testing"
@@ -207,6 +206,30 @@ func newGracefulBenchmarkConn(b *testing.B) (*Engine, *conn, net.Conn) {
 		_ = right.Close()
 		b.Fatal(err)
 	}
-	go func() { _, _ = io.Copy(io.Discard, right) }()
+
+	// Keep asynchronous peer-drain setup outside the timed/allocation sample.
+	// With -benchtime=1x, starting io.Copy immediately before ResetTimer made its
+	// first buffer/goroutine allocations race with the single measured Send.
+	drainBuf := make([]byte, 32<<10)
+	drainReady := make(chan struct{})
+	go func() {
+		first := true
+		for {
+			_, readErr := right.Read(drainBuf)
+			if first {
+				close(drainReady)
+				first = false
+			}
+			if readErr != nil {
+				return
+			}
+		}
+	}()
+	if _, err := left.Write([]byte{0}); err != nil {
+		_ = e.Close()
+		_ = right.Close()
+		b.Fatal(err)
+	}
+	<-drainReady
 	return e, c, right
 }
