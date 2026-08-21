@@ -1,6 +1,7 @@
 package transport
 
 import (
+	"net"
 	"sync/atomic"
 	"time"
 
@@ -14,6 +15,17 @@ type resourceAge struct {
 
 func newResourceAge() resourceAge { return resourceAge{started: time.Now()} }
 
+func positiveElapsed(start time.Time) time.Duration {
+	if start.IsZero() {
+		return 0
+	}
+	elapsed := time.Since(start)
+	if elapsed <= 0 {
+		return time.Nanosecond
+	}
+	return elapsed
+}
+
 func (a *resourceAge) current() time.Duration {
 	if a == nil || a.started.IsZero() {
 		return 0
@@ -21,14 +33,14 @@ func (a *resourceAge) current() time.Duration {
 	if v := a.finalNS.Load(); v > 0 {
 		return time.Duration(v - 1)
 	}
-	return time.Since(a.started)
+	return positiveElapsed(a.started)
 }
 
 func (a *resourceAge) freeze() {
 	if a == nil || a.started.IsZero() {
 		return
 	}
-	a.finalNS.CompareAndSwap(0, int64(time.Since(a.started))+1)
+	a.finalNS.CompareAndSwap(0, int64(positiveElapsed(a.started))+1)
 }
 
 type listenerCounters struct {
@@ -87,7 +99,7 @@ func (e *Engine) Stats() ogrenet.EngineStats {
 	return out
 }
 
-func sessionStatsSnapshot(id uint64, protocol ogrenet.Scheme, local, remote interface{ Network() string; String() string }, counters *sessionCounters) ogrenet.SessionStats {
+func sessionStatsSnapshot(id uint64, protocol ogrenet.Scheme, local, remote net.Addr, counters *sessionCounters) ogrenet.SessionStats {
 	out := ogrenet.SessionStats{ResourceID: id, Protocol: protocol, Local: local, Remote: remote}
 	if counters != nil {
 		out.Age = counters.age.current()
