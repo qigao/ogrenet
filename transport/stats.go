@@ -40,6 +40,22 @@ func newListenerCounters() *listenerCounters {
 	return &listenerCounters{age: newResourceAge()}
 }
 
+type sessionCounters struct {
+	bytesRX      atomic.Uint64
+	bytesTX      atomic.Uint64
+	messagesRX   atomic.Uint64
+	messagesTX   atomic.Uint64
+	queuedFrames atomic.Uint64
+	queuedBytes  atomic.Uint64
+	backpressure atomic.Uint64
+	decodeErrors atomic.Uint64
+	age          resourceAge
+}
+
+func newSessionCounters() *sessionCounters {
+	return &sessionCounters{age: newResourceAge()}
+}
+
 func nonNegativeUint64[T ~int | ~int64](v T) uint64 {
 	if v <= 0 {
 		return 0
@@ -77,12 +93,24 @@ func (c *conn) Stats() ogrenet.SessionStats {
 	if c == nil {
 		return ogrenet.SessionStats{}
 	}
-	return ogrenet.SessionStats{
+	out := ogrenet.SessionStats{
 		ResourceID: c.id,
 		Protocol:   c.protocol,
 		Local:      c.LocalAddr(),
 		Remote:     c.RemoteAddr(),
 	}
+	if c.stats != nil {
+		out.Age = c.stats.age.current()
+		out.BytesRX = c.stats.bytesRX.Load()
+		out.BytesTX = c.stats.bytesTX.Load()
+		out.MessagesRX = c.stats.messagesRX.Load()
+		out.MessagesTX = c.stats.messagesTX.Load()
+		out.QueuedFrames = c.stats.queuedFrames.Load()
+		out.QueuedBytes = c.stats.queuedBytes.Load()
+		out.Backpressure = c.stats.backpressure.Load()
+		out.DecodeErrors = c.stats.decodeErrors.Load()
+	}
+	return out
 }
 
 func (s *wsSession) Stats() ogrenet.SessionStats {
