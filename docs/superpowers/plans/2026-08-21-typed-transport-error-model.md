@@ -40,10 +40,10 @@
 - `transport/error_classify_unix_test.go` — Unix errno identity tests.
 - `transport/error_classify_windows.go` — Windows Winsock errno classification.
 - `transport/error_classify_windows_test.go` — Windows errno identity tests.
-- `transport/error_tcp_integration_test.go` — TCP dial/refused/reset/FIN/write-timeout/send-vs-write behavior.
+- `transport/error_tcp_integration_test.go` — TCP dial/listen/refused/reset/FIN/write-timeout/send-vs-write behavior.
 - `transport/error_tls_integration_test.go` — x509/TLS vs reset classification.
 - `transport/error_websocket_integration_test.go` — WS/WSS upgrade/close/protocol/too-large classification.
-- `transport/error_udp_integration_test.go` — UDP send/receive/size/DNS classification.
+- `transport/error_udp_integration_test.go` — UDP send/receive/size classification.
 - `transport/error_resource_lifecycle_test.go` — Listener/PacketConn/Session `Err()` ownership and context-control behavior.
 - `transport/error_race_test.go` — first-failure owner races.
 - `transport/error_benchmark_test.go` — error-path microbenchmarks.
@@ -52,15 +52,13 @@
 **Modify**
 
 - `transport/errors.go` — add stable category sentinels only.
-- `transport/timeouts.go` — no public semantic redesign; ensure timeout specialized errors compose inside `Error`.
-- `transport/limits.go` — no limit semantic redesign; outbound operational limit failures become enveloped at runtime boundaries.
 - `transport/tcp.go` — wrap dial/listen/socket operational failures with correct `Op`/`Protocol` and preserve caller context precedence.
 - `transport/tls.go` — handshakes return typed operational errors while configuration TLS errors remain direct sentinels.
-- `transport/engine_stream_dial.go` — wrap outbound admission and TLS handshake boundaries; record framer origin if needed for remote wire classification.
+- `transport/engine_stream_dial.go` — wrap outbound admission and TLS handshake boundaries; record framer origin for remote wire classification.
 - `transport/conn.go` — Send/TrySend, stream write/read/decode, read-buffer exhaustion, plugin failures, terminal `Err()` storage.
 - `transport/stream_graceful.go` — classify close/close-notify failures at `OpClose`; keep control arbitration direct.
 - `transport/listener.go` — fatal accept typed error; owner context cancellation leaves `Listener.Err()==nil`; inbound admission rejection stays nonterminal.
-- `transport/packet.go` — Send/TrySend/SendTo, UDP write/receive, peer DNS, owner context semantics, terminal `Err()` storage.
+- `transport/packet.go` — Send/TrySend/SendTo, UDP write/receive, peer DNS mapping, owner context semantics, terminal `Err()` storage.
 - `transport/websocket_client.go` — outbound upgrade/DNS/TLS/resource classification.
 - `transport/websocket.go` — WS send/write/read/decode/protocol/too-large classification.
 - `transport/websocket_graceful.go` — `TimeoutClose` becomes `OpClose/ErrorTimeout`; control aborts remain error-free in resource `Err()`.
@@ -307,7 +305,14 @@ go test ./transport -run 'Test(TransportError|OpString|ErrorKindString|EnvelopeO
 
 Expected: PASS.
 
-- [ ] **Step 5: Open the Draft PR as the authoritative Go 1.25/1.26 CI harness**
+- [ ] **Step 5: Commit Task 1**
+
+```bash
+git add transport/errors.go transport/error_model.go transport/error_model_test.go
+git commit -m "transport: add operational error envelope"
+```
+
+- [ ] **Step 6: Open the Draft PR as the authoritative Go 1.25/1.26 CI harness**
 
 Create Draft PR from `feat/typed-error-model` to `master`:
 
@@ -323,13 +328,6 @@ Refs #38
 ```
 
 Keep the PR Draft until Task 6 final verification.
-
-- [ ] **Step 6: Commit Task 1**
-
-```bash
-git add transport/errors.go transport/error_model.go transport/error_model_test.go
-git commit -m "transport: add operational error envelope"
-```
 
 ---
 
@@ -366,7 +364,7 @@ Create protocol-neutral table tests:
 
 ```go
 func TestClassifyOperationalKnownSentinels(t *testing.T) {
-    tests := []struct{
+    tests := []struct {
         name string; op Op; cause error; wantKind ErrorKind; wantIs error
     }{
         {"closed", OpSend, ErrClosed, ErrorClosed, ErrClosed},
@@ -412,7 +410,7 @@ func TestClassifyOperationalPreservesTimeoutAndLimitTypes(t *testing.T) {
 }
 ```
 
-Add DNS/TLS unit tests using real typed errors:
+Add DNS/TLS unit tests using typed errors only:
 
 ```go
 func TestClassifyOperationalDNS(t *testing.T) {
@@ -479,8 +477,6 @@ func TestClassifyPlatformUnixConnectionErrors(t *testing.T) {
 Windows test (build tag `//go:build windows`) uses `syscall.Errno` values matching Winsock constants defined in `error_classify_windows.go` and wraps them in `*os.SyscallError`/`*net.OpError`. Verify refused/reset/aborted/shutdown/not-connected exactly as specified.
 
 - [ ] **Step 3: Run focused classifier tests RED**
-
-Run on the local/CI platform:
 
 ```bash
 go test ./transport -run '^TestClassify' -count=1
@@ -601,7 +597,7 @@ git commit -m "transport: classify operational transport failures"
 
 Use existing `dialSessionPair` plus deterministic wrappers where kernel behavior would otherwise be flaky.
 
-Required assertions:
+Required helper:
 
 ```go
 func assertTransportError(t *testing.T, err error, op Op, protocol ogrenet.Scheme, kind ErrorKind) *Error {
@@ -627,9 +623,11 @@ waitClosed(t, clientHalf.ReadClosed(), "client read-half")
 if err := client.Err(); err != nil { t.Fatalf("clean FIN Err=%v", err) }
 ```
 
-- [ ] **Step 2: Write TCP dial refused + timeout RED tests**
+- [ ] **Step 2: Write TCP Dial/Listen/timeout RED tests**
 
-Bind then close a loopback TCP listener to obtain a concrete unused address and dial it immediately. Assert the returned error is `OpDial/ErrorRefused`, `errors.Is(err, ErrConnectionRefused)`, and `Remote==nil` if no established remote `net.Addr` exists.
+For refused Dial, bind then close a loopback TCP listener to obtain a concrete unused address and dial it immediately. Assert `OpDial/ErrorRefused`, `errors.Is(err, ErrConnectionRefused)`, and `Remote==nil` if no established remote `net.Addr` exists.
+
+For listener bind failure, keep a raw listener bound on a loopback address and call `Engine.Listen` on the same address. Assert `OpListen/ErrorUnknown` and that the raw bind error remains reachable through the cause chain. Do not add `ErrorAddressInUse` in P0-4.
 
 Reuse the existing blocked `net.Pipe` timeout fixture and assert write timeout now has the envelope:
 
@@ -655,7 +653,7 @@ go test ./transport -run 'TestTransportErrorTCP|TestTransportErrorTLS' -count=1
 
 Expected: failures because runtime paths still return raw/specialized/sentinel errors without the outer envelope.
 
-- [ ] **Step 5: Wrap outbound Dial/Handshake boundaries**
+- [ ] **Step 5: Wrap outbound Dial/Listen/Handshake boundaries**
 
 In `dialTCP`, after `mapOperationTimeout`, preserve caller context first:
 
@@ -664,6 +662,16 @@ if err != nil {
     mapped := mapOperationTimeout(ctx, dctx, TimeoutConnect, err)
     if cause := context.Cause(ctx); cause != nil { return nil, cause }
     return nil, classifyOperational(OpDial, endpoint.Scheme, nil, nil, mapped, hintNone)
+}
+```
+
+In `listenTCP`, wrap bind/listen failures with `OpListen` after preserving caller context cancellation:
+
+```go
+raw, err := lc.Listen(ctx, "tcp", endpoint.Address())
+if err != nil {
+    if cause := context.Cause(ctx); cause != nil { return nil, cause }
+    return nil, classifyOperational(OpListen, endpoint.Scheme, nil, nil, err, hintNone)
 }
 ```
 
@@ -728,7 +736,7 @@ func (c *conn) abort(reason abortReason, cause error) bool {
 }
 ```
 
-`initiateClose` must classify at callers/ownership points, not inside finalize. Derived `net.ErrClosed` after lifecycle abort stays suppressed.
+The omitted physical-close lines are the existing unchanged P0-3 logic: close `c.physical` when non-nil, otherwise `c.raw`. Do not reclassify in `finalize`; derived `net.ErrClosed` after lifecycle abort stays suppressed.
 
 - [ ] **Step 8: Classify stream close/half-close failures as OpClose**
 
@@ -806,7 +814,7 @@ func classifyWebSocketDial(endpoint ogrenet.Endpoint, err error) error {
     first := classifyOperational(OpUpgrade, endpoint.Scheme, nil, nil, err, hintWSUpgrade)
     var te *Error
     if errors.As(first, &te) && endpoint.Scheme == ogrenet.SchemeWSS && te.Kind == ErrorTLS {
-        return envelopeOperational(OpHandshake, endpoint.Scheme, te.Local, te.Remote, te.Kind, te.Cause)
+        return &Error{Op: OpHandshake, Protocol: endpoint.Scheme, Kind: te.Kind, Local: te.Local, Remote: te.Remote, Cause: te.Cause}
     }
     return first
 }
@@ -868,7 +876,6 @@ git commit -m "transport: type WebSocket operational errors"
 - Create: `transport/error_resource_lifecycle_test.go`
 - Modify: `transport/packet.go`
 - Modify: `transport/listener.go`
-- Modify: `transport/limits.go` only where runtime boundary tests require no semantic change to `LimitError` itself.
 
 **Interfaces:**
 - Produces: UDP operational errors use `OpSend`/`OpWrite`/`OpReceive`; fatal listener accept uses `OpAccept`; owner context cancellation leaves resource `Err()==nil`; outbound admission failures are enveloped, inbound rejection remains nonterminal.
@@ -879,20 +886,21 @@ Cover:
 
 ```go
 func TestTransportErrorUDPDatagramTooLarge(t *testing.T) {
-    // create connected UDP PacketConn with small max datagram
+    // fixture creates a connected UDP PacketConn with max datagram smaller than payload
     err := p.Send(context.Background(), ogrenet.Packet{Data: make([]byte, max+1)})
     assertTransportError(t, err, OpSend, ogrenet.SchemeUDP, ErrorTooLarge)
     if !errors.Is(err, ErrDatagramTooLarge) { t.Fatalf("missing sentinel: %v", err) }
 }
 ```
 
-Add tests for:
+Add deterministic tests for:
 
-- `SendTo` peer `*net.DNSError` => `OpSend/ErrorDNS`, raw `*net.DNSError` reachable.
-- deterministic UDP write timeout => `OpWrite/ErrorTimeout` + `TimeoutWrite`.
+- UDP write timeout => `OpWrite/ErrorTimeout` + `TimeoutWrite`.
 - connected UDP read-idle => terminal `PacketConn.Err()` `OpReceive/ErrorTimeout` + `TimeoutReadIdle`.
 - TrySend saturation => `OpSend/ErrorBackpressure` + `ErrWouldBlock`.
 - explicit `Close()` => `PacketConn.Err()==nil`.
+
+DNS is already proven with a typed `*net.DNSError` in Task 2. In `resolvePeer`, simply route any real resolver error through `classifyOperational(OpSend, ...)`; do not add a public-network-dependent `.invalid` integration test.
 
 - [ ] **Step 2: Write resource owner-context RED tests**
 
@@ -961,7 +969,7 @@ Expected: PASS.
 - [ ] **Step 8: Commit Task 5**
 
 ```bash
-git add transport/packet.go transport/listener.go transport/limits.go transport/error_udp_integration_test.go transport/error_resource_lifecycle_test.go
+git add transport/packet.go transport/listener.go transport/error_udp_integration_test.go transport/error_resource_lifecycle_test.go
 git commit -m "transport: type UDP and listener operational errors"
 ```
 
@@ -1000,10 +1008,9 @@ err := c.Err()
 assertTransportError(t, err, OpWrite, ogrenet.SchemeTCP, ErrorTimeout)
 var timeout *TimeoutError
 if !errors.As(err, &timeout) || timeout.Kind != TimeoutWrite { t.Fatalf("terminal error=%#v", err) }
-if errors.Is(err, net.ErrClosed) && timeout.Cause == nil { t.Fatalf("derived close replaced timeout: %v", err) }
 ```
 
-Reset-vs-Close must prove that if reset ownership is synchronized before explicit `Close`, `Session.Err()` remains `ErrorReset`; if explicit Close ownership is synchronized first, `Session.Err()==nil` and derived reset/closed fallout is ignored.
+Reset-vs-Close must prove both directions with explicit synchronization: reset ownership first preserves `ErrorReset`; explicit Close ownership first leaves `Session.Err()==nil` and suppresses derived reset/closed fallout.
 
 - [ ] **Step 2: Run race tests repeatedly**
 
@@ -1053,14 +1060,12 @@ func BenchmarkErrorClassifyTimeout(b *testing.B) {
 
 - [ ] **Step 4: Run benchmark smoke and compare successful-path allocations**
 
-Run:
-
 ```bash
 go test ./transport -run '^$' -bench 'BenchmarkError(WrapKnown|WrapUnknown|ClassifyReset|ClassifyTimeout)' -benchmem -benchtime=1x
 go test ./transport -run '^$' -bench 'BenchmarkGraceful(SendRunning|TrySendRunning)' -benchmem -benchtime=10x
 ```
 
-Record `allocs/op` for the running-state graceful benchmarks and compare against the pre-P0-4 baseline from `master` using the same Go version and command. Acceptance: no increase in allocations/op. Do not set a nanosecond threshold for error paths.
+Record `allocs/op` for the running-state graceful benchmarks and compare against `master` using the same Go version and command. Acceptance: no increase in allocations/op. Do not set a nanosecond threshold for error paths.
 
 - [ ] **Step 5: Write `docs/runtime-errors.md`**
 
@@ -1082,7 +1087,7 @@ Include exactly these sections:
 13. Unknown Errors
 ```
 
-Include the recommended usage example:
+Include:
 
 ```go
 var te *transport.Error
@@ -1103,7 +1108,7 @@ Explicitly document that operational sentinel checks use `errors.Is`, not `==`, 
 
 - [ ] **Step 6: Add error benchmark smoke to Linux CI**
 
-After the graceful lifecycle benchmark smoke in `.github/workflows/netpoll-v2.yml` add:
+After the graceful lifecycle benchmark smoke:
 
 ```yaml
       - name: Error taxonomy benchmark smoke
@@ -1115,9 +1120,7 @@ After the graceful lifecycle benchmark smoke in `.github/workflows/netpoll-v2.ym
 
 - [ ] **Step 7: Add pinned FreeBSD runtime classifier job**
 
-Use the currently verified `vmactions/freebsd-vm` v1.5.2 commit SHA `77ed28d336d03fe19a3f4f7266c1d2c4714dd79d` rather than a floating tag. The action supports FreeBSD 14.4 and runs on an Ubuntu host.
-
-Add:
+Use verified `vmactions/freebsd-vm` v1.5.2 commit SHA `77ed28d336d03fe19a3f4f7266c1d2c4714dd79d` rather than a floating tag. Add:
 
 ```yaml
   freebsd-runtime:
@@ -1137,9 +1140,19 @@ Add:
             go test ./transport -run 'Test(ClassifyPlatformUnixConnectionErrors|TransportErrorTCP|TransportErrorUDP|TransportErrorResource|TransportErrorListener)' -count=1
 ```
 
-If the VM action cannot install/run the repository's minimum Go version reliably, treat FreeBSD runtime evidence as a release blocker; do not delete the job or substitute cross-compile-only evidence.
+If the VM action cannot install/run the repository's minimum Go version reliably, FreeBSD runtime evidence is a release blocker; do not delete the job or substitute cross-compile-only evidence.
 
-- [ ] **Step 8: Run complete final verification**
+- [ ] **Step 8: Commit Task 6 so CI can verify the exact candidate head**
+
+```bash
+git add transport/error_race_test.go transport/error_benchmark_test.go docs/runtime-errors.md .github/workflows/netpoll-v2.yml
+git add transport/*_test.go  # only existing tests intentionally migrated from direct == to errors.Is
+ngit commit -m "transport: harden and document typed errors"
+```
+
+The command above must be entered as `git commit`, not `ngit commit`; the leading `n` is not part of the command.
+
+- [ ] **Step 9: Run complete final verification on the committed exact head**
 
 Focused commands:
 
@@ -1162,7 +1175,7 @@ GmSSL: secure/gmssl + wire + transport
 existing epoll/kqueue/IOCP cross-compile matrix
 ```
 
-- [ ] **Step 9: Review final diff against the approved spec**
+- [ ] **Step 10: Review final diff against the approved spec**
 
 Check specifically:
 
@@ -1178,16 +1191,9 @@ all new enums append-only and String() stable
 all raw causes reachable
 ```
 
-- [ ] **Step 10: Update Draft PR and mark Ready only after exact-head verification**
+- [ ] **Step 11: Update Draft PR and mark Ready only after exact-head verification**
 
 Update PR body with final exact head and CI run evidence. Then mark Ready for Review. Do not merge without explicit user authorization.
-
-- [ ] **Step 11: Commit Task 6**
-
-```bash
-git add transport/error_race_test.go transport/error_benchmark_test.go docs/runtime-errors.md .github/workflows/netpoll-v2.yml
-git commit -m "transport: harden and document typed errors"
-```
 
 ---
 
@@ -1198,7 +1204,7 @@ git commit -m "transport: harden and document typed errors"
 - TimeoutError/LimitError composition: Task 2.
 - DNS/Unix/Windows/TLS/WS/wire classification order: Task 2.
 - `OpSend` vs `OpWrite`: Tasks 3-5.
-- TCP/TLS mapping, clean half-close, close-notify semantics: Task 3.
+- TCP Dial/Listen, TCP/TLS mapping, clean half-close, close-notify semantics: Task 3.
 - WS/WSS upgrade, protocol close, normal close, CloseTimeout: Task 4.
 - UDP, listener, admission, owner-context `Err()` semantics: Task 5.
 - First-failure race ownership: Task 6.
