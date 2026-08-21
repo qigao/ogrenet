@@ -8,12 +8,10 @@ import (
 	"github.com/qigao/ogrenet"
 )
 
-var (
-	benchmarkObserverBoolSink  bool
-	benchmarkEngineStatsSink   ogrenet.EngineStats
-	benchmarkSessionStatsSink  ogrenet.SessionStats
-	benchmarkPacketStatsSink   ogrenet.PacketConnStats
-)
+var benchmarkObserverBoolSink bool
+var benchmarkEngineStatsSink ogrenet.EngineStats
+var benchmarkSessionStatsSink ogrenet.SessionStats
+var benchmarkPacketStatsSink ogrenet.PacketConnStats
 
 func BenchmarkObserverDisabledEmitPath(b *testing.B) {
 	e, err := New()
