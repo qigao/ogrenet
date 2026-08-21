@@ -65,15 +65,17 @@ func (s *wsSession) abort(reason abortReason, cause error) bool {
 	// classified by the operation that owns them. Normalizing again here would
 	// incorrectly erase typed errors whose underlying cause also matches
 	// net.ErrClosed (notably WebSocket write timeouts).
-	if !s.life.abort(reason) {
-		return false
-	}
-	s.closeOnce.Do(func() {
+	won := s.life.abortWith(reason, func() {
 		if reason == abortFailure && cause != nil {
 			s.errMu.Lock()
 			s.err = cause
 			s.errMu.Unlock()
 		}
+	})
+	if !won {
+		return false
+	}
+	s.closeOnce.Do(func() {
 		s.gate.close()
 		close(s.closing)
 		if s.physical != nil {

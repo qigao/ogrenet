@@ -79,6 +79,14 @@ func (l *sessionLifecycle) requestWithPrevious(goal closeGoal) (bool, closeGoal)
 }
 
 func (l *sessionLifecycle) abort(reason abortReason) bool {
+	return l.abortWith(reason, nil)
+}
+
+// abortWith lets the winning abort publish resource terminal state while
+// ownership is still serialized, before any abort/read/write completion signal
+// becomes observable. Losing aborts cannot return until that publication has
+// completed.
+func (l *sessionLifecycle) abortWith(reason abortReason, publish func()) bool {
 	l.mu.Lock()
 	if l.terminal || l.goal == closeGoalAbort {
 		l.mu.Unlock()
@@ -86,6 +94,9 @@ func (l *sessionLifecycle) abort(reason abortReason) bool {
 	}
 	l.goal = closeGoalAbort
 	l.why = reason
+	if publish != nil {
+		publish()
+	}
 	l.mu.Unlock()
 
 	l.writeReqOnce.Do(func() { close(l.writeReq) })
