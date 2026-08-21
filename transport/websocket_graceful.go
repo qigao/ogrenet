@@ -61,7 +61,10 @@ func (s *wsSession) watchCloseTimeout() {
 }
 
 func (s *wsSession) abort(reason abortReason, cause error) bool {
-	cause = normalizeWSError(cause)
+	// Failure causes reaching this point have already been normalized and
+	// classified by the operation that owns them. Normalizing again here would
+	// incorrectly erase typed errors whose underlying cause also matches
+	// net.ErrClosed (notably WebSocket write timeouts).
 	if !s.life.abort(reason) {
 		return false
 	}
