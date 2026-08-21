@@ -21,9 +21,10 @@ const (
 )
 
 type sessionLifecycle struct {
-	mu   sync.Mutex
-	goal closeGoal
-	why  abortReason
+	mu       sync.Mutex
+	goal     closeGoal
+	why      abortReason
+	terminal bool
 
 	writeReq chan struct{}
 	fullReq  chan struct{}
@@ -52,14 +53,20 @@ func newSessionLifecycle() *sessionLifecycle {
 }
 
 func (l *sessionLifecycle) request(goal closeGoal) bool {
+	owner, _ := l.requestWithPrevious(goal)
+	return owner
+}
+
+func (l *sessionLifecycle) requestWithPrevious(goal closeGoal) (bool, closeGoal) {
 	if goal <= closeGoalRunning || goal >= closeGoalAbort {
-		return false
+		return false, closeGoalRunning
 	}
 
 	l.mu.Lock()
-	if l.goal >= goal {
+	previous := l.goal
+	if l.terminal || l.goal >= goal {
 		l.mu.Unlock()
-		return false
+		return false, previous
 	}
 	l.goal = goal
 	l.mu.Unlock()
@@ -68,12 +75,12 @@ func (l *sessionLifecycle) request(goal closeGoal) bool {
 	if goal >= closeGoalFull {
 		l.fullReqOnce.Do(func() { close(l.fullReq) })
 	}
-	return true
+	return true, previous
 }
 
 func (l *sessionLifecycle) abort(reason abortReason) bool {
 	l.mu.Lock()
-	if l.goal == closeGoalAbort {
+	if l.terminal || l.goal == closeGoalAbort {
 		l.mu.Unlock()
 		return false
 	}
@@ -110,7 +117,28 @@ func (l *sessionLifecycle) markWriteClosed() {
 	l.writeOnce.Do(func() { close(l.writeCh) })
 }
 
+func (l *sessionLifecycle) tryMarkTerminal() bool {
+	l.mu.Lock()
+	if l.terminal || l.goal == closeGoalAbort {
+		l.mu.Unlock()
+		return false
+	}
+	l.terminal = true
+	l.mu.Unlock()
+	l.markTerminalChannels()
+	return true
+}
+
 func (l *sessionLifecycle) markTerminal() {
+	l.mu.Lock()
+	if !l.terminal {
+		l.terminal = true
+	}
+	l.mu.Unlock()
+	l.markTerminalChannels()
+}
+
+func (l *sessionLifecycle) markTerminalChannels() {
 	l.markReadClosed()
 	l.markWriteClosed()
 	l.termOnce.Do(func() { close(l.termCh) })
