@@ -45,8 +45,6 @@ type sessionCounters struct {
 	bytesTX      atomic.Uint64
 	messagesRX   atomic.Uint64
 	messagesTX   atomic.Uint64
-	queuedFrames atomic.Uint64
-	queuedBytes  atomic.Uint64
 	backpressure atomic.Uint64
 	decodeErrors atomic.Uint64
 	age          resourceAge
@@ -105,10 +103,14 @@ func (c *conn) Stats() ogrenet.SessionStats {
 		out.BytesTX = c.stats.bytesTX.Load()
 		out.MessagesRX = c.stats.messagesRX.Load()
 		out.MessagesTX = c.stats.messagesTX.Load()
-		out.QueuedFrames = c.stats.queuedFrames.Load()
-		out.QueuedBytes = c.stats.queuedBytes.Load()
 		out.Backpressure = c.stats.backpressure.Load()
 		out.DecodeErrors = c.stats.decodeErrors.Load()
+	}
+	if c.frameSlots != nil {
+		out.QueuedFrames = uint64(len(c.frameSlots))
+	}
+	if c.quota != nil {
+		out.QueuedBytes = nonNegativeUint64(c.quota.current())
 	}
 	return out
 }
