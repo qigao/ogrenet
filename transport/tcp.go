@@ -16,9 +16,11 @@ func (e *Engine) dialTCP(ctx context.Context, endpoint ogrenet.Endpoint) (*net.T
 	} else {
 		dialer.KeepAlive = -1
 	}
-	raw, err := dialer.DialContext(ctx, "tcp", endpoint.Address())
+	dctx, cancel := boundedOperationContext(ctx, e.cfg.timeouts.Connect)
+	defer cancel()
+	raw, err := dialer.DialContext(dctx, "tcp", endpoint.Address())
 	if err != nil {
-		return nil, err
+		return nil, mapOperationTimeout(ctx, dctx, TimeoutConnect, err)
 	}
 	tcp, ok := raw.(*net.TCPConn)
 	if !ok {
