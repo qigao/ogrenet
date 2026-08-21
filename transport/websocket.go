@@ -23,31 +23,31 @@ type wsOutbound struct {
 }
 
 type wsSession struct {
-	engine     *Engine
-	id         uint64
-	protocol   ogrenet.Scheme
-	endpoint   ogrenet.Endpoint
-	ws         *websocket.Conn
-	local      net.Addr
-	remote     net.Addr
-	handler    ogrenet.Handler
-	cipher     secure.Cipher
-	maxMessage int
-	writeTO    time.Duration
-	readIdle   time.Duration
-	activity   *activityClock
-	writeState wsWriteState
-	pingEvery  time.Duration
-	pongTO     time.Duration
-	queue      chan wsOutbound
-	quota      *byteQuota
-	gate       *sendGate
-	frameSlots chan struct{}
-	encodeSlot chan struct{}
-	life       *sessionLifecycle
-	closing    chan struct{}
+	engine        *Engine
+	id            uint64
+	protocol      ogrenet.Scheme
+	endpoint      ogrenet.Endpoint
+	ws            *websocket.Conn
+	local         net.Addr
+	remote        net.Addr
+	handler       ogrenet.Handler
+	cipher        secure.Cipher
+	maxMessage    int
+	writeTO       time.Duration
+	readIdle      time.Duration
+	activity      *activityClock
+	writeState    wsWriteState
+	pingEvery     time.Duration
+	pongTO        time.Duration
+	queue         chan wsOutbound
+	quota         *byteQuota
+	gate          *sendGate
+	frameSlots    chan struct{}
+	encodeSlot    chan struct{}
+	life          *sessionLifecycle
+	closing       chan struct{}
 	writerDrained chan struct{}
-	done       chan struct{}
+	done          chan struct{}
 
 	closeOnce         sync.Once
 	finalOnce         sync.Once
