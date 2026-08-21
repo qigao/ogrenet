@@ -5,20 +5,38 @@ import (
 	"crypto/tls"
 	"errors"
 	"net"
+	"time"
 
 	"github.com/qigao/ogrenet"
 )
 
 func (e *Engine) dialStream(ctx context.Context, endpoint ogrenet.Endpoint, h ogrenet.Handler) (ogrenet.Session, error) {
+	observing := e.observer != nil
+	var connectStart time.Time
+	if observing {
+		connectStart = time.Now()
+	}
 	raw, err := e.dialTCP(ctx, endpoint)
+	var connectDuration time.Duration
+	if observing {
+		connectDuration = time.Since(connectStart)
+	}
 	if err != nil {
+		if observing {
+			e.observeSetup(ogrenet.EventConnect, 0, 0, endpoint.Scheme, nil, nil, connectDuration, err)
+		}
 		return nil, err
 	}
+	local, remote := raw.LocalAddr(), raw.RemoteAddr()
+
 	lease, err := e.acquireOpening(raw.RemoteAddr())
 	if err != nil {
-		local, remote := raw.LocalAddr(), raw.RemoteAddr()
+		opErr := classifyOperational(OpDial, endpoint.Scheme, local, remote, err, hintNone)
+		if observing {
+			e.observeSetup(ogrenet.EventConnect, 0, 0, endpoint.Scheme, local, remote, connectDuration, nil)
+		}
 		_ = raw.Close()
-		return nil, classifyOperational(OpDial, endpoint.Scheme, local, remote, err, hintNone)
+		return nil, opErr
 	}
 	transferred := false
 	defer func() {
@@ -27,35 +45,73 @@ func (e *Engine) dialStream(ctx context.Context, endpoint ogrenet.Endpoint, h og
 		}
 	}()
 
-	var stream net.Conn = raw
+	var (
+		stream            net.Conn = raw
+		handshakeDuration time.Duration
+		handshakeComplete bool
+	)
 	if endpoint.Scheme == ogrenet.SchemeTLS {
 		cfg, err := e.cfg.clientTLSConfig(endpoint)
 		if err != nil {
+			if observing {
+				e.observeSetup(ogrenet.EventConnect, 0, 0, endpoint.Scheme, local, remote, connectDuration, nil)
+			}
 			_ = raw.Close()
 			return nil, err
 		}
+		var handshakeStart time.Time
+		if observing {
+			handshakeStart = time.Now()
+		}
 		handshake, err := e.acquireHandshake()
+		if observing {
+			handshakeDuration = time.Since(handshakeStart)
+		}
 		if err != nil {
-			local, remote := raw.LocalAddr(), raw.RemoteAddr()
+			opErr := classifyOperational(OpHandshake, endpoint.Scheme, local, remote, err, hintNone)
+			if observing {
+				e.observeSetup(ogrenet.EventConnect, 0, 0, endpoint.Scheme, local, remote, connectDuration, nil)
+				e.observeSetup(ogrenet.EventHandshake, 0, 0, endpoint.Scheme, local, remote, handshakeDuration, opErr)
+			}
 			_ = raw.Close()
-			return nil, classifyOperational(OpHandshake, endpoint.Scheme, local, remote, err, hintNone)
+			return nil, opErr
 		}
 		tlsConn := tls.Client(raw, cfg)
+		if observing {
+			handshakeStart = time.Now()
+		}
 		err = e.cfg.handshakeClient(ctx, tlsConn)
+		if observing {
+			handshakeDuration = time.Since(handshakeStart)
+		}
 		handshake.release()
 		if err != nil {
-			local, remote := raw.LocalAddr(), raw.RemoteAddr()
+			local, remote = raw.LocalAddr(), raw.RemoteAddr()
 			_ = tlsConn.Close()
+			var opErr error
 			if cause := context.Cause(ctx); cause != nil {
-				return nil, cause
+				opErr = cause
+			} else {
+				opErr = classifyOperational(OpHandshake, endpoint.Scheme, local, remote, err, hintTLSHandshake)
 			}
-			return nil, classifyOperational(OpHandshake, endpoint.Scheme, local, remote, err, hintTLSHandshake)
+			if observing {
+				e.observeSetup(ogrenet.EventConnect, 0, 0, endpoint.Scheme, local, remote, connectDuration, nil)
+				e.observeSetup(ogrenet.EventHandshake, 0, 0, endpoint.Scheme, local, remote, handshakeDuration, opErr)
+			}
+			return nil, opErr
 		}
+		handshakeComplete = true
 		stream = tlsConn
 	}
 	c, err := e.adoptStreamWithLease(stream, endpoint, h, lease)
 	if err != nil {
-		local, remote := stream.LocalAddr(), stream.RemoteAddr()
+		local, remote = stream.LocalAddr(), stream.RemoteAddr()
+		if observing {
+			e.observeSetup(ogrenet.EventConnect, 0, 0, endpoint.Scheme, local, remote, connectDuration, nil)
+			if handshakeComplete {
+				e.observeSetup(ogrenet.EventHandshake, 0, 0, endpoint.Scheme, local, remote, handshakeDuration, nil)
+			}
+		}
 		_ = stream.Close()
 		if errors.Is(err, ErrClosed) || errors.Is(err, ErrResourceExhausted) {
 			return nil, classifyOperational(OpDial, endpoint.Scheme, local, remote, err, hintNone)
@@ -63,6 +119,12 @@ func (e *Engine) dialStream(ctx context.Context, endpoint ogrenet.Endpoint, h og
 		return nil, err
 	}
 	transferred = true
+	if observing {
+		e.observeSetup(ogrenet.EventConnect, c.id, 0, endpoint.Scheme, c.LocalAddr(), c.RemoteAddr(), connectDuration, nil)
+		if handshakeComplete {
+			e.observeSetup(ogrenet.EventHandshake, c.id, 0, endpoint.Scheme, c.LocalAddr(), c.RemoteAddr(), handshakeDuration, nil)
+		}
+	}
 	return c, nil
 }
 
