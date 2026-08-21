@@ -19,6 +19,7 @@ const (
 type Engine struct {
 	cfg       config
 	admission *admissionController
+	observer  *observerDispatcher
 
 	mu              sync.Mutex
 	state           engineState
@@ -54,6 +55,7 @@ func New(opts ...Option) (*Engine, error) {
 	return &Engine{
 		cfg:             cfg,
 		admission:       newAdmissionController(cfg.limits),
+		observer:        newObserverDispatcher(cfg.observer, cfg.observerBuffer),
 		state:           engineRunning,
 		streamListeners: make(map[*listener]struct{}),
 		wsListeners:     make(map[*wsListener]struct{}),
