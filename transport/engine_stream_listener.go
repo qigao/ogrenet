@@ -3,8 +3,9 @@ package transport
 import (
 	"context"
 	"crypto/tls"
-	"github.com/qigao/ogrenet"
 	"net"
+
+	"github.com/qigao/ogrenet"
 )
 
 func (e *Engine) listenStream(ctx context.Context, endpoint ogrenet.Endpoint, h ogrenet.Handler) (ogrenet.Listener, error) {
@@ -34,7 +35,20 @@ func (e *Engine) listenStream(ctx context.Context, endpoint ogrenet.Endpoint, h 
 		}
 	}
 	lctx, cancel := context.WithCancel(ctx)
-	l := &listener{engine: e, endpoint: bound, ln: ln, handler: h, prepare: prepare, ctx: lctx, cancel: cancel, capacity: newListenerCapacity(e.cfg.limits.MaxConnectionsPerListener), closing: make(chan struct{}), done: make(chan struct{})}
+	l := &listener{
+		engine:   e,
+		id:       e.nextID.Add(1),
+		endpoint: bound,
+		ln:       ln,
+		handler:  h,
+		prepare:  prepare,
+		ctx:      lctx,
+		cancel:   cancel,
+		capacity: newListenerCapacity(e.cfg.limits.MaxConnectionsPerListener),
+		stats:    newListenerCounters(),
+		closing:  make(chan struct{}),
+		done:     make(chan struct{}),
+	}
 	if err := e.addStreamListener(l); err != nil {
 		cancel()
 		_ = ln.Close()
