@@ -48,6 +48,8 @@ func TestTransportErrorTLSCertificateFailureUsesOpHandshake(t *testing.T) {
 
 func TestTransportErrorTLSCloseWriteTimeoutUsesOpClose(t *testing.T) {
 	serverTLS, clientTLS := testTLSConfigs(t)
+	clientTLS = clientTLS.Clone()
+	clientTLS.ServerName = "localhost"
 	clientRaw, serverRaw := net.Pipe()
 	clientConn := tls.Client(clientRaw, clientTLS)
 	serverConn := tls.Server(serverRaw, serverTLS)
