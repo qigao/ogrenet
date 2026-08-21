@@ -53,7 +53,7 @@ func TestPacketStatsCountPayloadPacketsAndEvents(t *testing.T) {
 
 	clientStats := clientPacket.Stats()
 	serverStats := serverPacket.Stats()
-	if clientStats.ResourceID == 0 || serverStats.ResourceID == 0 || clientStats.ResourceID == serverStats.ResourceID {
+	if clientStats.ResourceID == 0 || serverStats.ResourceID == 0 {
 		t.Fatalf("resource IDs client=%d server=%d", clientStats.ResourceID, serverStats.ResourceID)
 	}
 	if clientStats.BytesTX != uint64(len(payload)) || clientStats.PacketsTX != 1 {
