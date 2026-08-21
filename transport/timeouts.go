@@ -1,6 +1,7 @@
 package transport
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"time"
@@ -114,6 +115,23 @@ func (e *TimeoutError) Unwrap() error {
 func (e *TimeoutError) Is(target error) bool { return target == ErrTimeout }
 func (e *TimeoutError) Timeout() bool        { return true }
 func (e *TimeoutError) Temporary() bool      { return false }
+
+func boundedOperationContext(parent context.Context, timeout time.Duration) (context.Context, context.CancelFunc) {
+	return context.WithTimeout(parent, timeout)
+}
+
+func mapOperationTimeout(parent, operation context.Context, kind TimeoutKind, err error) error {
+	if err == nil {
+		return nil
+	}
+	if cause := context.Cause(parent); cause != nil {
+		return cause
+	}
+	if errors.Is(context.Cause(operation), context.DeadlineExceeded) {
+		return &TimeoutError{Kind: kind, Cause: err}
+	}
+	return err
+}
 
 func (c config) effectiveTLSHandshakeTimeout() time.Duration {
 	if c.timeoutOverrides.tlsHandshake {
