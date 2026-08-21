@@ -36,6 +36,7 @@ type wsSession struct {
 	writeTO    time.Duration
 	readIdle   time.Duration
 	activity   *activityClock
+	writeState wsWriteState
 	pingEvery  time.Duration
 	pongTO     time.Duration
 	queue      chan wsOutbound
@@ -124,7 +125,7 @@ func (s *wsSession) Send(ctx context.Context, msg ogrenet.Message) error {
 		case err := <-ack:
 			return err
 		default:
-			return ErrClosed
+			return s.writeTimeoutOrClosed()
 		}
 	}
 }
@@ -223,12 +224,16 @@ func (s *wsSession) writerLoop() {
 			return
 		case req := <-s.queue:
 			ctx, cancel := context.WithTimeout(context.Background(), s.writeTO)
+			s.writeState.begin(ctx)
 			err := s.ws.Write(ctx, req.typ, req.payload)
 			cancel()
-			if err == nil && s.activity != nil {
-				s.activity.touch()
+			if err == nil {
+				s.writeState.end()
+				if s.activity != nil {
+					s.activity.touch()
+				}
 			}
-			if err != nil && isTimeoutFailure(err) && !s.isClosing() {
+			if err != nil && isTimeoutFailure(err) {
 				err = &TimeoutError{Kind: TimeoutWrite, Cause: err}
 			} else if err != nil {
 				err = fmt.Errorf("transport: websocket write: %w", err)
@@ -236,7 +241,7 @@ func (s *wsSession) writerLoop() {
 			s.quota.release(req.bytes)
 			s.releaseFrameSlot()
 			sendErr := err
-			if err != nil && s.isClosing() {
+			if err != nil && s.isClosing() && !errors.Is(err, ErrTimeout) {
 				sendErr = ErrClosed
 			}
 			if req.ack != nil {
@@ -244,6 +249,7 @@ func (s *wsSession) writerLoop() {
 			}
 			if err != nil {
 				s.initiateClose(err)
+				s.writeState.end()
 				return
 			}
 		}
@@ -281,6 +287,8 @@ func (s *wsSession) readerLoop() {
 		if err != nil {
 			if s.readIdle > 0 && isTimeoutFailure(err) && !s.isClosing() {
 				s.initiateClose(&TimeoutError{Kind: TimeoutReadIdle, Cause: err})
+			} else if cause := s.writeState.timeoutCause(); cause != nil {
+				s.initiateClose(&TimeoutError{Kind: TimeoutWrite, Cause: cause})
 			} else {
 				s.initiateClose(normalizeWSError(err))
 			}
