@@ -376,14 +376,14 @@ func (s *wsSession) readerLoop() {
 				s.initiateClose(s.operationalError(OpRead, &TimeoutError{Kind: TimeoutReadIdle, Cause: err}, hintNone))
 			} else if cause := s.writeState.timeoutCause(); cause != nil {
 				s.initiateClose(s.operationalError(OpWrite, &TimeoutError{Kind: TimeoutWrite, Cause: cause}, hintNone))
-			} else if normalized := normalizeWSError(err); normalized != nil {
-				s.initiateClose(s.operationalError(OpRead, normalized, hintNone))
 			} else if s.writeState.active() {
 				// coder/websocket can make a blocked writer close the physical
 				// connection before the writer goroutine has published its real
-				// error. A cause-less read close while a write is still active is
-				// therefore derivative; let the writer own terminal failure.
+				// error. Any read-side close while a write is still active is
+				// derivative; let the writer own terminal failure classification.
 				return
+			} else if normalized := normalizeWSError(err); normalized != nil {
+				s.initiateClose(s.operationalError(OpRead, normalized, hintNone))
 			} else {
 				s.initiateClose(nil)
 			}
