@@ -41,3 +41,12 @@ func (s *wsWriteState) timeoutCause() error {
 	}
 	return nil
 }
+
+func (s *wsSession) writeTimeoutOrClosed() error {
+	err := s.Err()
+	var timeout *TimeoutError
+	if errors.As(err, &timeout) && timeout.Kind == TimeoutWrite {
+		return err
+	}
+	return ErrClosed
+}
