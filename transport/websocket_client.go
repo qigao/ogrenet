@@ -34,11 +34,18 @@ func (e *Engine) dialWebSocket(ctx context.Context, endpoint ogrenet.Endpoint, h
 
 	observing := e.observer != nil
 	dialCtx := ctx
-	var setupStart, gotConn time.Time
+	var setupStart time.Time
+	var gotConnCh chan time.Time
 	if observing {
 		setupStart = time.Now()
+		gotConnCh = make(chan time.Time, 1)
 		dialCtx = httptrace.WithClientTrace(ctx, &httptrace.ClientTrace{
-			GotConn: func(httptrace.GotConnInfo) { gotConn = time.Now() },
+			GotConn: func(httptrace.GotConnInfo) {
+				select {
+				case gotConnCh <- time.Now():
+				default:
+				}
+			},
 		})
 	}
 	ws, _, err := websocket.Dial(dialCtx, endpoint.URL(), &websocket.DialOptions{HTTPClient: client, Subprotocols: e.cfg.ws.Subprotocols, CompressionMode: websocket.CompressionDisabled})
@@ -50,6 +57,11 @@ func (e *Engine) dialWebSocket(ctx context.Context, endpoint ogrenet.Endpoint, h
 	var connectDone bool
 	if observing {
 		connectLocal, connectRemote, connectDuration, connectErr, connectDone = state.connectInfo()
+		var gotConn time.Time
+		select {
+		case gotConn = <-gotConnCh:
+		default:
+		}
 		if !gotConn.IsZero() {
 			handshakeDuration = positiveElapsed(gotConn)
 		} else {
