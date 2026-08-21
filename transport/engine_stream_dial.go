@@ -91,6 +91,7 @@ func (e *Engine) adoptStreamWithLease(raw net.Conn, endpoint ogrenet.Endpoint, h
 		frameSlots:    make(chan struct{}, e.cfg.writeQueue+1),
 		encodeSlot:    make(chan struct{}, 1),
 		life:          newSessionLifecycle(),
+		stats:         newSessionCounters(),
 		closing:       make(chan struct{}),
 		writerDrained: make(chan struct{}),
 		done:          make(chan struct{}),
