@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"sync"
+	"time"
 )
 
 // wsWriteState lets the reader attribute a connection close caused by
@@ -38,6 +39,9 @@ func (s *wsWriteState) timeoutCause() error {
 	cause := context.Cause(ctx)
 	if errors.Is(cause, context.DeadlineExceeded) {
 		return cause
+	}
+	if deadline, ok := ctx.Deadline(); ok && !time.Now().Before(deadline) {
+		return context.DeadlineExceeded
 	}
 	return nil
 }
