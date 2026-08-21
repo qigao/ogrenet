@@ -51,6 +51,8 @@ type config struct {
 	clientTLS           *tls.Config
 	serverTLS           *tls.Config
 	tlsHandshakeTimeout time.Duration
+	timeouts            Timeouts
+	timeoutOverrides    timeoutOverrides
 	tcp                 TCPConfig
 	ws                  WebSocketConfig
 	limits              Limits
@@ -65,6 +67,11 @@ type config struct {
 func defaultConfig() config {
 	return config{
 		tlsHandshakeTimeout: defaultTLSHandshakeTimeout,
+		timeouts: Timeouts{
+			Connect:   defaultConnectTimeout,
+			Handshake: defaultHandshakeTimeout,
+			Write:     defaultWriteTimeout,
+		},
 		tcp: TCPConfig{
 			NoDelay:         true,
 			KeepAlive:       true,
@@ -165,6 +172,7 @@ func WithTLSHandshakeTimeout(timeout time.Duration) Option {
 			return ErrInvalidTimeout
 		}
 		c.tlsHandshakeTimeout = timeout
+		c.timeoutOverrides.tlsHandshake = true
 		return nil
 	}
 }
@@ -190,6 +198,8 @@ func WithWebSocketConfig(cfg WebSocketConfig) Option {
 		cfg.OriginPatterns = append([]string(nil), cfg.OriginPatterns...)
 		cfg.Subprotocols = append([]string(nil), cfg.Subprotocols...)
 		c.ws = cfg
+		c.timeoutOverrides.wsHandshake = true
+		c.timeoutOverrides.wsWrite = true
 		return nil
 	}
 }
