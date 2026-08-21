@@ -20,6 +20,7 @@ type Session interface {
 	TrySend(msg Message) error
 	LocalAddr() net.Addr
 	RemoteAddr() net.Addr
+	Stats() SessionStats
 	Done() <-chan struct{}
 	Err() error
 	Shutdown(ctx context.Context) error
@@ -41,6 +42,7 @@ type HalfCloseSession interface {
 type Listener interface {
 	Endpoint() Endpoint
 	Addr() net.Addr
+	Stats() ListenerStats
 	Done() <-chan struct{}
 	Err() error
 	Close() error
@@ -95,6 +97,7 @@ type PacketConn interface {
 	Endpoint() Endpoint
 	LocalAddr() net.Addr
 	RemoteAddr() net.Addr
+	Stats() PacketConnStats
 	Send(ctx context.Context, packet Packet) error
 	TrySend(packet Packet) error
 	SendTo(ctx context.Context, peer net.Addr, packet Packet) error
@@ -141,6 +144,7 @@ type Engine interface {
 	Dial(ctx context.Context, endpoint Endpoint, h Handler) (Session, error)
 	ListenPacket(ctx context.Context, endpoint Endpoint, h PacketHandler) (PacketConn, error)
 	DialPacket(ctx context.Context, endpoint Endpoint, h PacketHandler) (PacketConn, error)
+	Stats() EngineStats
 	Done() <-chan struct{}
 	Shutdown(ctx context.Context) error
 	Close() error
