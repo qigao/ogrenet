@@ -127,14 +127,21 @@ func (c *conn) closeTLSWrite(tc *tls.Conn) error {
 }
 
 func (c *conn) abort(reason abortReason, cause error) bool {
-	cause = normalizeConnError(cause)
-	if !c.life.abort(reason) {
-		return false
+	if cause != nil {
+		var typed *Error
+		if !errors.As(cause, &typed) {
+			cause = normalizeConnError(cause)
+		}
 	}
-	c.closeOnce.Do(func() {
+	won := c.life.abortWith(reason, func() {
 		c.errMu.Lock()
 		c.err = cause
 		c.errMu.Unlock()
+	})
+	if !won {
+		return false
+	}
+	c.closeOnce.Do(func() {
 		c.gate.close()
 		close(c.closing)
 		if c.physical != nil {

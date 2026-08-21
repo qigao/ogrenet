@@ -30,4 +30,11 @@ var (
 	ErrTLSCertificateRequired  = errors.New("transport: server TLS certificate is required")
 	ErrInvalidTimeout          = errors.New("transport: timeout must be positive")
 	ErrInvalidWebSocketConfig  = errors.New("transport: invalid WebSocket configuration")
+
+	ErrPeerClosed        = errors.New("transport: peer closed")
+	ErrConnectionRefused = errors.New("transport: connection refused")
+	ErrConnectionReset   = errors.New("transport: connection reset")
+	ErrDNS               = errors.New("transport: DNS failure")
+	ErrTLS               = errors.New("transport: TLS failure")
+	ErrProtocolViolation = errors.New("transport: protocol violation")
 )

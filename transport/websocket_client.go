@@ -18,7 +18,7 @@ func (e *Engine) dialWebSocket(ctx context.Context, endpoint ogrenet.Endpoint, h
 
 	upgrade, err := e.acquireUpgrade()
 	if err != nil {
-		return nil, err
+		return nil, classifyOperational(OpUpgrade, endpoint.Scheme, nil, nil, err, hintNone)
 	}
 	defer upgrade.release()
 
@@ -34,20 +34,26 @@ func (e *Engine) dialWebSocket(ctx context.Context, endpoint ogrenet.Endpoint, h
 		if cause := context.Cause(ctx); cause != nil {
 			return nil, cause
 		}
-		var timeoutErr *TimeoutError
-		if errors.As(err, &timeoutErr) {
-			return nil, err
-		}
 		if isTimeoutFailure(err) {
-			return nil, &TimeoutError{Kind: TimeoutHandshake, Cause: err}
+			var timeoutErr *TimeoutError
+			if !errors.As(err, &timeoutErr) {
+				err = &TimeoutError{Kind: TimeoutHandshake, Cause: err}
+			}
 		}
-		return nil, err
+		typed := classifyOperational(OpUpgrade, endpoint.Scheme, nil, nil, err, hintWSUpgrade)
+		if endpoint.Scheme == ogrenet.SchemeWSS {
+			var te *Error
+			if errors.As(typed, &te) && te.Kind == ErrorTLS {
+				typed = &Error{Op: OpHandshake, Protocol: te.Protocol, Kind: te.Kind, Local: te.Local, Remote: te.Remote, Cause: te.Cause}
+			}
+		}
+		return nil, typed
 	}
 	ws.SetReadLimit(int64(e.cfg.maxMessageBytes))
 	cipher, err := e.cfg.newCipher()
 	if err != nil {
 		_ = ws.CloseNow()
-		return nil, err
+		return nil, classifyOperational(OpUpgrade, endpoint.Scheme, nil, nil, err, hintNone)
 	}
 	lease, local, remote, physical := state.take()
 	if lease == nil {
@@ -55,7 +61,7 @@ func (e *Engine) dialWebSocket(ctx context.Context, endpoint ogrenet.Endpoint, h
 			_ = physical.Close()
 		}
 		_ = ws.CloseNow()
-		return nil, errors.New("transport: websocket dial completed without connection admission")
+		return nil, classifyOperational(OpUpgrade, endpoint.Scheme, local, remote, errors.New("transport: websocket dial completed without connection admission"), hintNone)
 	}
 	transferred := false
 	defer func() {
@@ -80,7 +86,7 @@ func (e *Engine) dialWebSocket(ctx context.Context, endpoint ogrenet.Endpoint, h
 		} else {
 			_ = ws.CloseNow()
 		}
-		return nil, err
+		return nil, classifyOperational(OpUpgrade, endpoint.Scheme, local, remote, err, hintNone)
 	}
 	transferred = true
 	sess.start()

@@ -27,6 +27,7 @@ type conn struct {
 	raw        net.Conn
 	physical   io.Closer
 	framer     wire.Framer
+	wireFramer bool
 	handler    ogrenet.Handler
 	queue      chan outbound
 	quota      *byteQuota
@@ -66,6 +67,22 @@ func (c *conn) Err() error {
 	return c.err
 }
 
+func (c *conn) operationalError(op Op, cause error, hint classifyHint) error {
+	return classifyOperational(op, c.protocol, c.LocalAddr(), c.RemoteAddr(), cause, hint)
+}
+
+func (c *conn) sendError(ctx context.Context, err error) error {
+	if err == nil {
+		return nil
+	}
+	if ctx != nil {
+		if cause := context.Cause(ctx); cause != nil {
+			return cause
+		}
+	}
+	return c.operationalError(OpSend, err, hintNone)
+}
+
 // Send waits for frame-count and byte-budget admission, then waits for the
 // frame's socket write to complete. If ctx is canceled after queue admission,
 // the frame may still be written by the writer goroutine even though Send
@@ -74,17 +91,20 @@ func (c *conn) Send(ctx context.Context, msg ogrenet.Message) error {
 	if ctx == nil {
 		return ErrNilContext
 	}
-	if err := ctx.Err(); err != nil {
-		return err
+	if cause := context.Cause(ctx); cause != nil {
+		return cause
 	}
 	if !c.gate.enter() {
-		return ErrClosed
+		return c.operationalError(OpSend, ErrClosed, hintNone)
 	}
 	defer c.gate.leave()
+	if err := msg.Validate(); err != nil {
+		return err
+	}
 
 	frame, err := c.prepareSend(ctx, msg)
 	if err != nil {
-		return err
+		return c.sendError(ctx, err)
 	}
 
 	ack := make(chan error, 1)
@@ -93,11 +113,14 @@ func (c *conn) Send(ctx context.Context, msg ogrenet.Message) error {
 	case <-ctx.Done():
 		c.quota.release(req.bytes)
 		c.releaseFrameSlot()
-		return ctx.Err()
+		return context.Cause(ctx)
 	case <-c.closing:
 		c.quota.release(req.bytes)
 		c.releaseFrameSlot()
-		return ErrClosed
+		if cause := context.Cause(ctx); cause != nil {
+			return cause
+		}
+		return c.operationalError(OpSend, ErrClosed, hintNone)
 	case c.queue <- req:
 	}
 
@@ -105,13 +128,19 @@ func (c *conn) Send(ctx context.Context, msg ogrenet.Message) error {
 	case err := <-ack:
 		return err
 	case <-ctx.Done():
-		return ctx.Err()
+		return context.Cause(ctx)
 	case <-c.closing:
 		select {
 		case err := <-ack:
 			return err
 		default:
-			return ErrClosed
+			if cause := context.Cause(ctx); cause != nil {
+				return cause
+			}
+			if terminal := c.Err(); terminal != nil {
+				return terminal
+			}
+			return c.operationalError(OpSend, ErrClosed, hintNone)
 		}
 	}
 }
@@ -121,26 +150,29 @@ func (c *conn) Send(ctx context.Context, msg ogrenet.Message) error {
 // be obtained immediately.
 func (c *conn) TrySend(msg ogrenet.Message) error {
 	if !c.gate.enter() {
-		return ErrClosed
+		return c.operationalError(OpSend, ErrClosed, hintNone)
 	}
 	defer c.gate.leave()
+	if err := msg.Validate(); err != nil {
+		return err
+	}
 
 	frame, err := c.prepareTrySend(msg)
 	if err != nil {
-		return err
+		return c.operationalError(OpSend, err, hintNone)
 	}
 	req := outbound{frame: frame, bytes: len(frame)}
 	select {
 	case <-c.closing:
 		c.quota.release(req.bytes)
 		c.releaseFrameSlot()
-		return ErrClosed
+		return c.operationalError(OpSend, ErrClosed, hintNone)
 	case c.queue <- req:
 		return nil
 	default:
 		c.quota.release(req.bytes)
 		c.releaseFrameSlot()
-		return ErrWouldBlock
+		return c.operationalError(OpSend, ErrWouldBlock, hintNone)
 	}
 }
 
@@ -218,7 +250,7 @@ func (c *conn) writerLoop() {
 						}
 					default:
 						if err := c.closeProtocolWrite(); err != nil {
-							c.initiateClose(err)
+							c.initiateClose(c.operationalError(OpClose, err, hintNone))
 							return
 						}
 						c.life.markWriteClosed()
@@ -248,18 +280,25 @@ func (c *conn) handleOutbound(req outbound) bool {
 	err := c.writeFrame(req.frame)
 	c.quota.release(req.bytes)
 	c.releaseFrameSlot()
-	sendErr := err
-	if err != nil && c.isClosing() {
-		sendErr = ErrClosed
+	if err == nil {
+		if req.ack != nil {
+			req.ack <- nil
+		}
+		return true
+	}
+
+	opErr := c.operationalError(OpWrite, err, hintNone)
+	won := c.abort(abortFailure, opErr)
+	sendErr := ErrClosed
+	if won {
+		sendErr = opErr
+	} else if terminal := c.Err(); terminal != nil {
+		sendErr = terminal
 	}
 	if req.ack != nil {
 		req.ack <- sendErr
 	}
-	if err != nil {
-		c.initiateClose(err)
-		return false
-	}
-	return true
+	return false
 }
 
 func (c *conn) writeFrame(frame []byte) error {
@@ -281,13 +320,17 @@ func (c *conn) writeFrame(frame []byte) error {
 }
 
 func (c *conn) failPending(err error) {
+	pendingErr := err
+	if errors.Is(err, ErrClosed) {
+		pendingErr = c.operationalError(OpSend, ErrClosed, hintNone)
+	}
 	for {
 		select {
 		case req := <-c.queue:
 			c.quota.release(req.bytes)
 			c.releaseFrameSlot()
 			if req.ack != nil {
-				req.ack <- err
+				req.ack <- pendingErr
 			}
 		default:
 			return
@@ -307,14 +350,14 @@ func (c *conn) readerLoop() {
 	for {
 		if c.timeouts.ReadIdle > 0 {
 			if err := c.raw.SetReadDeadline(time.Now().Add(c.timeouts.ReadIdle)); err != nil {
-				c.initiateClose(fmt.Errorf("transport: set read deadline: %w", err))
+				c.initiateClose(c.operationalError(OpRead, fmt.Errorf("transport: set read deadline: %w", err), hintNone))
 				return
 			}
 		}
 		n, readErr := c.raw.Read(readBuf)
 		if c.timeouts.ReadIdle > 0 {
 			if err := c.raw.SetReadDeadline(time.Time{}); err != nil && readErr == nil {
-				c.initiateClose(fmt.Errorf("transport: clear read deadline: %w", err))
+				c.initiateClose(c.operationalError(OpRead, fmt.Errorf("transport: clear read deadline: %w", err), hintNone))
 				return
 			}
 		}
@@ -336,15 +379,19 @@ func (c *conn) readerLoop() {
 					break
 				}
 				if err != nil {
-					c.initiateClose(fmt.Errorf("transport: decode frame: %w", err))
+					hint := hintNone
+					if c.wireFramer {
+						hint = hintWireDecode
+					}
+					c.initiateClose(c.operationalError(OpRead, fmt.Errorf("transport: decode frame: %w", err), hint))
 					return
 				}
 				if consumed <= 0 || consumed > len(remaining) {
-					c.initiateClose(ErrInvalidFramer)
+					c.initiateClose(c.operationalError(OpRead, ErrInvalidFramer, hintNone))
 					return
 				}
 				if err := msg.Validate(); err != nil {
-					c.initiateClose(fmt.Errorf("transport: invalid message: %w", err))
+					c.initiateClose(c.operationalError(OpRead, fmt.Errorf("transport: invalid message: %w", err), hintMessageDecode))
 					return
 				}
 
@@ -365,7 +412,7 @@ func (c *conn) readerLoop() {
 			}
 
 			if len(pending) > c.maxRead {
-				c.initiateClose(ErrReadBufferFull)
+				c.initiateClose(c.operationalError(OpRead, ErrReadBufferFull, hintNone))
 				return
 			}
 			if len(pending) == 0 && cap(pending) > retainedReadCapacity(c.readSize) {
@@ -378,9 +425,9 @@ func (c *conn) readerLoop() {
 				return
 			}
 			if c.timeouts.ReadIdle > 0 && isTimeoutFailure(readErr) {
-				c.initiateClose(&TimeoutError{Kind: TimeoutReadIdle, Cause: readErr})
+				c.initiateClose(c.operationalError(OpRead, &TimeoutError{Kind: TimeoutReadIdle, Cause: readErr}, hintNone))
 			} else if normalized := normalizeConnError(readErr); normalized != nil {
-				c.initiateClose(normalized)
+				c.initiateClose(c.operationalError(OpRead, normalized, hintNone))
 			} else {
 				c.life.markReadClosed()
 				c.maybeFinishGraceful()

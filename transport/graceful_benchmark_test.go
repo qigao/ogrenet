@@ -3,7 +3,6 @@ package transport
 import (
 	"context"
 	"errors"
-	"io"
 	"net"
 	"runtime"
 	"testing"
@@ -34,23 +33,27 @@ func BenchmarkGracefulTrySendRunning(b *testing.B) {
 	defer c.Close()
 	defer peer.Close()
 
+	// TrySend returns after admission, while the writer processes the accepted
+	// frame asynchronously. Benchmark only the caller-side admission path and
+	// drain the writer with the timer stopped so process-wide allocation counters
+	// do not depend on scheduler timing.
+	previousProcs := runtime.GOMAXPROCS(1)
+	defer runtime.GOMAXPROCS(previousProcs)
+
 	payload := ogrenet.Bin(make([]byte, 128))
 	b.ReportAllocs()
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		for {
-			err := c.TrySend(payload)
-			switch {
-			case err == nil:
-				goto accepted
-			case errors.Is(err, ErrWouldBlock):
-				runtime.Gosched()
-			default:
-				b.Fatal(err)
-			}
+		if err := c.TrySend(payload); err != nil {
+			b.Fatal(err)
 		}
-	accepted:
+		b.StopTimer()
+		for len(c.frameSlots) != 0 {
+			runtime.Gosched()
+		}
+		b.StartTimer()
 	}
+	b.StopTimer()
 }
 
 func BenchmarkGracefulDrainOneFrame(b *testing.B) {
@@ -207,6 +210,30 @@ func newGracefulBenchmarkConn(b *testing.B) (*Engine, *conn, net.Conn) {
 		_ = right.Close()
 		b.Fatal(err)
 	}
-	go func() { _, _ = io.Copy(io.Discard, right) }()
+
+	// Keep asynchronous peer-drain setup outside the timed/allocation sample.
+	// With -benchtime=1x, starting io.Copy immediately before ResetTimer made its
+	// first buffer/goroutine allocations race with the single measured Send.
+	drainBuf := make([]byte, 32<<10)
+	drainReady := make(chan struct{})
+	go func() {
+		first := true
+		for {
+			_, readErr := right.Read(drainBuf)
+			if first {
+				close(drainReady)
+				first = false
+			}
+			if readErr != nil {
+				return
+			}
+		}
+	}()
+	if _, err := left.Write([]byte{0}); err != nil {
+		_ = e.Close()
+		_ = right.Close()
+		b.Fatal(err)
+	}
+	<-drainReady
 	return e, c, right
 }

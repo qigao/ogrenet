@@ -34,11 +34,54 @@ jobs:
         run: go test ./client -run '^$' -bench 'BenchmarkHTTPProtocolFacade' -benchtime=1x
       - name: Runtime timeout benchmark smoke
         run: go test ./transport -run '^$' -bench 'Benchmark(ActivityClockTouch|StreamTimeoutPolicyDisabled)' -benchmem -benchtime=1x
-      - name: Graceful lifecycle benchmark smoke
+      - name: Graceful lifecycle allocation gate
+        env:
+          GO_MATRIX_VERSION: ${{ matrix.go }}
+        run: |
+          output="$(go test ./transport -run '^$' -bench 'BenchmarkGraceful(SendRunning|TrySendRunning)' -benchmem -benchtime=1x -count=5)"
+          printf '%s\n' "$output"
+          if [[ "$GO_MATRIX_VERSION" == "1.25.x" ]]; then
+            send_limit=29
+          else
+            send_limit=17
+          fi
+          printf '%s\n' "$output" | awk -v send_limit="$send_limit" -v try_limit=4 '
+            /BenchmarkGracefulSendRunning/ {
+              alloc = $(NF-1) + 0
+              seen_send++
+              if (alloc > send_limit) {
+                printf "SendRunning allocation regression: %d > %d allocs/op\n", alloc, send_limit > "/dev/stderr"
+                bad = 1
+              }
+            }
+            /BenchmarkGracefulTrySendRunning/ {
+              alloc = $(NF-1) + 0
+              seen_try++
+              if (alloc > try_limit) {
+                printf "TrySendRunning allocation regression: %d > %d allocs/op\n", alloc, try_limit > "/dev/stderr"
+                bad = 1
+              }
+            }
+            END {
+              if (seen_send != 5 || seen_try != 5) {
+                printf "expected 5 SendRunning and 5 TrySendRunning samples, got %d and %d\n", seen_send, seen_try > "/dev/stderr"
+                bad = 1
+              }
+              exit bad
+            }'
+      - name: Graceful drain benchmark smoke
         run: >-
           go test ./transport -run '^$'
-          -bench 'BenchmarkGraceful(SendRunning|TrySendRunning|DrainOneFrame|Drain256Frames)'
+          -bench 'BenchmarkGraceful(DrainOneFrame|Drain256Frames)'
           -benchmem -benchtime=1x
+      - name: Error taxonomy benchmark smoke
+        run: >-
+          go test ./transport -run '^$'
+          -bench 'BenchmarkError(WrapKnown|WrapUnknown|ClassifyReset|ClassifyTimeout)'
+          -benchmem -benchtime=1x
+      - name: Typed error ownership race loop
+        if: matrix.go == '1.26.x'
+        run: go test -race ./transport -run '^TestTransportErrorRace' -count=20
       - name: Test with race detector
         run: go test -race -count=1 ./...
 
@@ -65,6 +108,22 @@ jobs:
           cache: true
       - run: go vet ./...
       - run: go test -count=1 ./...
+
+  freebsd-runtime:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+      - name: Test transport error classifier on FreeBSD
+        uses: vmactions/freebsd-vm@77ed28d336d03fe19a3f4f7266c1d2c4714dd79d
+        with:
+          release: "14.4"
+          usesh: true
+          prepare: |
+            pkg install -y go126
+          run: |
+            go126 version
+            go126 test ./transport -run 'Test(ClassifyPlatformCauseUnix|TransportError(TCP|UDP|Resource|Listener))' -count=1
 
   gmssl:
     runs-on: ubuntu-latest

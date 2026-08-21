@@ -53,21 +53,29 @@ func (s *wsSession) watchCloseTimeout() {
 	defer timer.Stop()
 	select {
 	case <-timer.C:
-		s.abort(abortFailure, &TimeoutError{Kind: TimeoutClose, Cause: context.DeadlineExceeded})
+		cause := &TimeoutError{Kind: TimeoutClose, Cause: context.DeadlineExceeded}
+		s.abort(abortFailure, s.operationalError(OpClose, cause, hintNone))
 	case <-s.life.aborted():
 	case <-s.done:
 	}
 }
 
 func (s *wsSession) abort(reason abortReason, cause error) bool {
-	cause = normalizeWSError(cause)
-	if !s.life.abort(reason) {
+	// Failure causes reaching this point have already been normalized and
+	// classified by the operation that owns them. Normalizing again here would
+	// incorrectly erase typed errors whose underlying cause also matches
+	// net.ErrClosed (notably WebSocket write timeouts).
+	won := s.life.abortWith(reason, func() {
+		if reason == abortFailure && cause != nil {
+			s.errMu.Lock()
+			s.err = cause
+			s.errMu.Unlock()
+		}
+	})
+	if !won {
 		return false
 	}
 	s.closeOnce.Do(func() {
-		s.errMu.Lock()
-		s.err = cause
-		s.errMu.Unlock()
 		s.gate.close()
 		close(s.closing)
 		if s.physical != nil {
@@ -93,7 +101,7 @@ func (s *wsSession) lifecycleResult() error {
 
 func (s *wsSession) finishLocalGraceful(err error) {
 	if normalized := normalizeWSError(err); normalized != nil {
-		s.initiateClose(normalized)
+		s.initiateClose(s.operationalError(OpClose, normalized, hintNone))
 		return
 	}
 	s.life.markReadClosed()

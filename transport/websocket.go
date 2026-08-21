@@ -75,16 +75,19 @@ func (s *wsSession) Send(ctx context.Context, msg ogrenet.Message) error {
 	if ctx == nil {
 		return ErrNilContext
 	}
-	if err := ctx.Err(); err != nil {
-		return err
+	if cause := context.Cause(ctx); cause != nil {
+		return cause
 	}
 	if !s.gate.enter() {
-		return ErrClosed
+		return s.operationalError(OpSend, ErrClosed, hintNone)
 	}
 	defer s.gate.leave()
+	if err := msg.Validate(); err != nil {
+		return err
+	}
 
 	if err := s.acquireFrameSlot(ctx); err != nil {
-		return err
+		return s.sendError(ctx, err)
 	}
 	held := true
 	defer func() {
@@ -93,15 +96,15 @@ func (s *wsSession) Send(ctx context.Context, msg ogrenet.Message) error {
 		}
 	}()
 	if err := s.acquireEncoder(ctx); err != nil {
-		return err
+		return s.sendError(ctx, err)
 	}
 	typ, payload, err := s.encode(msg)
 	s.releaseEncoder()
 	if err != nil {
-		return err
+		return s.sendError(ctx, err)
 	}
 	if err := s.quota.acquire(ctx, s.closing, len(payload)); err != nil {
-		return err
+		return s.sendError(ctx, err)
 	}
 	held = false
 
@@ -111,11 +114,17 @@ func (s *wsSession) Send(ctx context.Context, msg ogrenet.Message) error {
 	case <-ctx.Done():
 		s.quota.release(req.bytes)
 		s.releaseFrameSlot()
-		return ctx.Err()
+		return context.Cause(ctx)
 	case <-s.closing:
 		s.quota.release(req.bytes)
 		s.releaseFrameSlot()
-		return ErrClosed
+		if cause := context.Cause(ctx); cause != nil {
+			return cause
+		}
+		if terminal := s.Err(); terminal != nil {
+			return terminal
+		}
+		return s.operationalError(OpSend, ErrClosed, hintNone)
 	case s.queue <- req:
 	}
 
@@ -123,24 +132,33 @@ func (s *wsSession) Send(ctx context.Context, msg ogrenet.Message) error {
 	case err := <-ack:
 		return err
 	case <-ctx.Done():
-		return ctx.Err()
+		return context.Cause(ctx)
 	case <-s.closing:
 		select {
 		case err := <-ack:
 			return err
 		default:
-			return s.writeTimeoutOrClosed()
+			if cause := context.Cause(ctx); cause != nil {
+				return cause
+			}
+			if terminal := s.Err(); terminal != nil {
+				return terminal
+			}
+			return s.operationalError(OpSend, ErrClosed, hintNone)
 		}
 	}
 }
 
 func (s *wsSession) TrySend(msg ogrenet.Message) error {
 	if !s.gate.enter() {
-		return ErrClosed
+		return s.operationalError(OpSend, ErrClosed, hintNone)
 	}
 	defer s.gate.leave()
-	if err := s.tryAcquireFrameSlot(); err != nil {
+	if err := msg.Validate(); err != nil {
 		return err
+	}
+	if err := s.tryAcquireFrameSlot(); err != nil {
+		return s.operationalError(OpSend, err, hintNone)
 	}
 	held := true
 	defer func() {
@@ -149,15 +167,15 @@ func (s *wsSession) TrySend(msg ogrenet.Message) error {
 		}
 	}()
 	if err := s.tryAcquireEncoder(); err != nil {
-		return err
+		return s.operationalError(OpSend, err, hintNone)
 	}
 	typ, payload, err := s.encode(msg)
 	s.releaseEncoder()
 	if err != nil {
-		return err
+		return s.operationalError(OpSend, err, hintNone)
 	}
 	if err := s.quota.tryAcquire(len(payload)); err != nil {
-		return err
+		return s.operationalError(OpSend, err, hintNone)
 	}
 	held = false
 	req := wsOutbound{typ: typ, payload: payload, bytes: len(payload)}
@@ -165,13 +183,16 @@ func (s *wsSession) TrySend(msg ogrenet.Message) error {
 	case <-s.closing:
 		s.quota.release(req.bytes)
 		s.releaseFrameSlot()
-		return ErrClosed
+		if terminal := s.Err(); terminal != nil {
+			return terminal
+		}
+		return s.operationalError(OpSend, ErrClosed, hintNone)
 	case s.queue <- req:
 		return nil
 	default:
 		s.quota.release(req.bytes)
 		s.releaseFrameSlot()
-		return ErrWouldBlock
+		return s.operationalError(OpSend, ErrWouldBlock, hintNone)
 	}
 }
 
@@ -212,7 +233,7 @@ func (s *wsSession) start() {
 		go func() {
 			defer s.loops.Done()
 			s.activity.run(s.closing, func(kind TimeoutKind) {
-				s.initiateClose(&TimeoutError{Kind: kind})
+				s.initiateClose(s.operationalError(OpRead, &TimeoutError{Kind: kind}, hintNone))
 			})
 		}()
 	}
@@ -274,43 +295,77 @@ func (s *wsSession) handleOutbound(req wsOutbound) bool {
 	ctx, cancel := context.WithTimeout(context.Background(), s.writeTO)
 	s.writeState.begin(ctx)
 	err := s.ws.Write(ctx, req.typ, req.payload)
-	cancel()
+	timeoutCause := s.writeState.timeoutCause()
+
 	if err == nil {
-		s.writeState.end()
+		pendingReadErr, pendingRead := s.writeState.end()
+		cancel()
 		if s.activity != nil {
 			s.activity.touch()
 		}
+		s.quota.release(req.bytes)
+		s.releaseFrameSlot()
+		if req.ack != nil {
+			req.ack <- nil
+		}
+		if pendingRead {
+			if normalized := normalizeWSError(pendingReadErr); normalized != nil {
+				s.initiateClose(s.operationalError(OpRead, normalized, hintNone))
+			} else {
+				s.initiateClose(nil)
+			}
+			return false
+		}
+		return true
 	}
-	if err != nil && isTimeoutFailure(err) {
-		err = &TimeoutError{Kind: TimeoutWrite, Cause: err}
-	} else if err != nil {
-		err = fmt.Errorf("transport: websocket write: %w", err)
-	}
+
+	cancel()
+	pendingReadErr, pendingRead := s.writeState.pendingRead()
 	s.quota.release(req.bytes)
 	s.releaseFrameSlot()
-	sendErr := err
-	if err != nil && s.isClosing() && !errors.Is(err, ErrTimeout) {
-		sendErr = ErrClosed
+
+	var opErr error
+	switch {
+	case timeoutCause != nil || isTimeoutFailure(err):
+		opErr = s.operationalError(OpWrite, &TimeoutError{Kind: TimeoutWrite, Cause: err}, hintNone)
+	case pendingRead:
+		if normalized := normalizeWSError(pendingReadErr); normalized != nil {
+			opErr = s.operationalError(OpRead, normalized, hintNone)
+		}
+	default:
+		opErr = s.operationalError(OpWrite, fmt.Errorf("transport: websocket write: %w", err), hintNone)
+	}
+
+	won := s.abort(abortFailure, opErr)
+	_, _ = s.writeState.end()
+	sendErr := ErrClosed
+	if won && opErr != nil {
+		sendErr = opErr
+	} else if terminal := s.Err(); terminal != nil {
+		sendErr = terminal
 	}
 	if req.ack != nil {
 		req.ack <- sendErr
 	}
-	if err != nil {
-		s.initiateClose(err)
-		s.writeState.end()
-		return false
-	}
-	return true
+	return false
 }
 
 func (s *wsSession) failPending(err error) {
+	pendingErr := err
+	if errors.Is(err, ErrClosed) {
+		if terminal := s.Err(); terminal != nil {
+			pendingErr = terminal
+		} else {
+			pendingErr = s.operationalError(OpSend, ErrClosed, hintNone)
+		}
+	}
 	for {
 		select {
 		case req := <-s.queue:
 			s.quota.release(req.bytes)
 			s.releaseFrameSlot()
 			if req.ack != nil {
-				req.ack <- err
+				req.ack <- pendingErr
 			}
 		default:
 			return
@@ -332,16 +387,28 @@ func (s *wsSession) readerLoop() {
 		typ, payload, err := s.ws.Read(readCtx)
 		cancel()
 		if err != nil {
-			if isNormalWSClose(err) && isClosedSignal(s.life.fullRequested()) && !isClosedSignal(s.life.aborted()) {
+			if isClosedSignal(s.life.fullRequested()) && !isClosedSignal(s.life.aborted()) &&
+				(isNormalWSClose(err) || isClosedSignal(s.writerDrained)) {
+				// Once the writer is drained, ws.Close/watchCloseTimeout own the
+				// local close handshake. Reader-side close errors observed in
+				// that phase are derivative and must not steal terminal cause.
 				s.life.markReadClosed()
 				return
 			}
 			if s.readIdle > 0 && isTimeoutFailure(err) && !s.isClosing() {
-				s.initiateClose(&TimeoutError{Kind: TimeoutReadIdle, Cause: err})
+				s.initiateClose(s.operationalError(OpRead, &TimeoutError{Kind: TimeoutReadIdle, Cause: err}, hintNone))
 			} else if cause := s.writeState.timeoutCause(); cause != nil {
-				s.initiateClose(&TimeoutError{Kind: TimeoutWrite, Cause: cause})
+				s.initiateClose(s.operationalError(OpWrite, &TimeoutError{Kind: TimeoutWrite, Cause: cause}, hintNone))
+			} else if s.writeState.deferRead(err) {
+				// The read failure may be a side effect of coder/websocket
+				// terminating the shared connection while a bounded write is in
+				// flight. Let the writer arbitrate timeout vs genuine peer/read
+				// failure after the write returns.
+				return
+			} else if normalized := normalizeWSError(err); normalized != nil {
+				s.initiateClose(s.operationalError(OpRead, normalized, hintNone))
 			} else {
-				s.initiateClose(normalizeWSError(err))
+				s.initiateClose(nil)
 			}
 			return
 		}
@@ -350,7 +417,7 @@ func (s *wsSession) readerLoop() {
 		}
 		msg, err := s.decode(typ, payload)
 		if err != nil {
-			s.initiateClose(err)
+			s.initiateClose(s.operationalError(OpRead, err, hintMessageDecode))
 			return
 		}
 		s.handler.OnMessage(s, msg)
@@ -374,7 +441,7 @@ func (s *wsSession) pingLoop() {
 			err := s.ws.Ping(ctx)
 			cancel()
 			if err != nil {
-				s.initiateClose(fmt.Errorf("transport: websocket ping: %w", err))
+				s.initiateClose(s.operationalError(OpWrite, fmt.Errorf("transport: websocket ping: %w", err), hintNone))
 				return
 			}
 		}

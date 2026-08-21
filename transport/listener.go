@@ -35,13 +35,19 @@ func (l *listener) Addr() net.Addr             { return l.ln.Addr() }
 func (l *listener) Done() <-chan struct{}      { return l.done }
 func (l *listener) Err() error                 { l.errMu.RLock(); defer l.errMu.RUnlock(); return l.err }
 func (l *listener) Close() error               { return l.initiateClose(nil) }
+
+func (l *listener) operationalError(op Op, cause error) error {
+	return classifyOperational(op, l.endpoint.Scheme, l.Addr(), nil, cause, hintNone)
+}
+
 func (l *listener) watchContext() {
 	select {
 	case <-l.ctx.Done():
-		_ = l.initiateClose(l.ctx.Err())
+		_ = l.initiateClose(nil)
 	case <-l.done:
 	}
 }
+
 func (l *listener) acceptLoop() {
 	defer l.finalize()
 	var delay time.Duration
@@ -65,7 +71,12 @@ func (l *listener) acceptLoop() {
 				}
 				continue
 			}
-			_ = l.initiateClose(normalizeListenerError(err))
+			normalized := normalizeListenerError(err)
+			if normalized != nil {
+				_ = l.initiateClose(l.operationalError(OpAccept, normalized))
+			} else {
+				_ = l.initiateClose(nil)
+			}
 			return
 		}
 		delay = 0
@@ -78,6 +89,7 @@ func (l *listener) acceptLoop() {
 		go l.handleAccepted(raw)
 	}
 }
+
 func (l *listener) handleAccepted(raw net.Conn) {
 	if err := l.engine.beginOp(); err != nil {
 		_ = raw.Close()
@@ -112,6 +124,7 @@ func (l *listener) handleAccepted(raw net.Conn) {
 	}
 	transferred = true
 }
+
 func waitOrClosed(delay time.Duration, closing <-chan struct{}) bool {
 	timer := time.NewTimer(delay)
 	defer timer.Stop()
@@ -122,30 +135,35 @@ func waitOrClosed(delay time.Duration, closing <-chan struct{}) bool {
 		return false
 	}
 }
+
 func (l *listener) initiateClose(cause error) error {
 	var closeErr error
 	l.closeOnce.Do(func() {
-		cause = normalizeListenerError(cause)
-		l.errMu.Lock()
-		l.err = cause
-		l.errMu.Unlock()
+		if cause != nil {
+			var typed *Error
+			if !errors.As(cause, &typed) {
+				cause = normalizeListenerError(cause)
+			}
+		}
+		if cause != nil {
+			l.errMu.Lock()
+			l.err = cause
+			l.errMu.Unlock()
+		}
 		close(l.closing)
 		l.cancel()
 		closeErr = l.ln.Close()
 		if errors.Is(closeErr, net.ErrClosed) {
 			closeErr = nil
 		}
-		if cause == nil && closeErr != nil {
-			l.errMu.Lock()
-			l.err = closeErr
-			l.errMu.Unlock()
-		}
 	})
 	return closeErr
 }
+
 func (l *listener) finalize() {
 	l.finalOnce.Do(func() { _ = l.initiateClose(nil); close(l.done); l.engine.removeStreamListener(l) })
 }
+
 func (l *listener) isClosing() bool {
 	select {
 	case <-l.closing:
@@ -154,6 +172,7 @@ func (l *listener) isClosing() bool {
 		return false
 	}
 }
+
 func normalizeListenerError(err error) error {
 	if err == nil || errors.Is(err, net.ErrClosed) {
 		return nil

@@ -3,6 +3,7 @@ package transport
 import (
 	"context"
 	"crypto/tls"
+	"errors"
 	"net"
 
 	"github.com/qigao/ogrenet"
@@ -15,8 +16,9 @@ func (e *Engine) dialStream(ctx context.Context, endpoint ogrenet.Endpoint, h og
 	}
 	lease, err := e.acquireOpening(raw.RemoteAddr())
 	if err != nil {
+		local, remote := raw.LocalAddr(), raw.RemoteAddr()
 		_ = raw.Close()
-		return nil, err
+		return nil, classifyOperational(OpDial, endpoint.Scheme, local, remote, err, hintNone)
 	}
 	transferred := false
 	defer func() {
@@ -34,21 +36,30 @@ func (e *Engine) dialStream(ctx context.Context, endpoint ogrenet.Endpoint, h og
 		}
 		handshake, err := e.acquireHandshake()
 		if err != nil {
+			local, remote := raw.LocalAddr(), raw.RemoteAddr()
 			_ = raw.Close()
-			return nil, err
+			return nil, classifyOperational(OpHandshake, endpoint.Scheme, local, remote, err, hintNone)
 		}
 		tlsConn := tls.Client(raw, cfg)
 		err = e.cfg.handshakeClient(ctx, tlsConn)
 		handshake.release()
 		if err != nil {
+			local, remote := raw.LocalAddr(), raw.RemoteAddr()
 			_ = tlsConn.Close()
-			return nil, err
+			if cause := context.Cause(ctx); cause != nil {
+				return nil, cause
+			}
+			return nil, classifyOperational(OpHandshake, endpoint.Scheme, local, remote, err, hintTLSHandshake)
 		}
 		stream = tlsConn
 	}
 	c, err := e.adoptStreamWithLease(stream, endpoint, h, lease)
 	if err != nil {
+		local, remote := stream.LocalAddr(), stream.RemoteAddr()
 		_ = stream.Close()
+		if errors.Is(err, ErrClosed) || errors.Is(err, ErrResourceExhausted) {
+			return nil, classifyOperational(OpDial, endpoint.Scheme, local, remote, err, hintNone)
+		}
 		return nil, err
 	}
 	transferred = true
@@ -72,6 +83,7 @@ func (e *Engine) adoptStreamWithLease(raw net.Conn, endpoint ogrenet.Endpoint, h
 		raw:           raw,
 		physical:      physicalStreamCloser(raw),
 		framer:        framer,
+		wireFramer:    e.cfg.framerFactory == nil,
 		handler:       h,
 		queue:         make(chan outbound, e.cfg.writeQueue),
 		quota:         newByteQuota(e.cfg.maxQueuedBytes),
