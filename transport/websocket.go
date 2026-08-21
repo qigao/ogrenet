@@ -44,14 +44,17 @@ type wsSession struct {
 	gate       *sendGate
 	frameSlots chan struct{}
 	encodeSlot chan struct{}
+	life       *sessionLifecycle
 	closing    chan struct{}
+	writerDrained chan struct{}
 	done       chan struct{}
 
-	closeOnce sync.Once
-	finalOnce sync.Once
-	loops     sync.WaitGroup
-	errMu     sync.RWMutex
-	err       error
+	closeOnce         sync.Once
+	finalOnce         sync.Once
+	writerDrainedOnce sync.Once
+	loops             sync.WaitGroup
+	errMu             sync.RWMutex
+	err               error
 }
 
 func (s *wsSession) ID() uint64                 { return s.id }
@@ -172,7 +175,12 @@ func (s *wsSession) TrySend(msg ogrenet.Message) error {
 }
 
 func (s *wsSession) Close() error {
-	s.initiateClose(nil)
+	select {
+	case <-s.done:
+		return nil
+	default:
+	}
+	s.abort(abortExplicit, nil)
 	return nil
 }
 
@@ -217,43 +225,81 @@ func (s *wsSession) writerLoop() {
 	defer func() {
 		<-s.gate.done()
 		s.failPending(ErrClosed)
+		s.markWriterDrained()
 	}()
+
+	graceful := false
 	for {
+		if graceful {
+			select {
+			case <-s.closing:
+				return
+			case req := <-s.queue:
+				if !s.handleOutbound(req) {
+					return
+				}
+			case <-s.gate.done():
+				for {
+					select {
+					case req := <-s.queue:
+						if !s.handleOutbound(req) {
+							return
+						}
+					default:
+						s.markWriterDrained()
+						err := s.ws.Close(websocket.StatusNormalClosure, "")
+						s.finishLocalGraceful(err)
+						return
+					}
+				}
+			}
+			continue
+		}
+
 		select {
 		case <-s.closing:
 			return
+		case <-s.life.fullRequested():
+			graceful = true
 		case req := <-s.queue:
-			ctx, cancel := context.WithTimeout(context.Background(), s.writeTO)
-			s.writeState.begin(ctx)
-			err := s.ws.Write(ctx, req.typ, req.payload)
-			cancel()
-			if err == nil {
-				s.writeState.end()
-				if s.activity != nil {
-					s.activity.touch()
-				}
-			}
-			if err != nil && isTimeoutFailure(err) {
-				err = &TimeoutError{Kind: TimeoutWrite, Cause: err}
-			} else if err != nil {
-				err = fmt.Errorf("transport: websocket write: %w", err)
-			}
-			s.quota.release(req.bytes)
-			s.releaseFrameSlot()
-			sendErr := err
-			if err != nil && s.isClosing() && !errors.Is(err, ErrTimeout) {
-				sendErr = ErrClosed
-			}
-			if req.ack != nil {
-				req.ack <- sendErr
-			}
-			if err != nil {
-				s.initiateClose(err)
-				s.writeState.end()
+			if !s.handleOutbound(req) {
 				return
 			}
 		}
 	}
+}
+
+func (s *wsSession) handleOutbound(req wsOutbound) bool {
+	ctx, cancel := context.WithTimeout(context.Background(), s.writeTO)
+	s.writeState.begin(ctx)
+	err := s.ws.Write(ctx, req.typ, req.payload)
+	cancel()
+	if err == nil {
+		s.writeState.end()
+		if s.activity != nil {
+			s.activity.touch()
+		}
+	}
+	if err != nil && isTimeoutFailure(err) {
+		err = &TimeoutError{Kind: TimeoutWrite, Cause: err}
+	} else if err != nil {
+		err = fmt.Errorf("transport: websocket write: %w", err)
+	}
+	s.quota.release(req.bytes)
+	s.releaseFrameSlot()
+	sendErr := err
+	if err != nil && s.isClosing() && !errors.Is(err, ErrTimeout) {
+		sendErr = ErrClosed
+	}
+	if req.ack != nil {
+		req.ack <- sendErr
+	}
+	if err != nil {
+		s.initiateClose(err)
+		s.writeState.end()
+		return false
+	}
+	return true
 }
 
 func (s *wsSession) failPending(err error) {
@@ -285,6 +331,10 @@ func (s *wsSession) readerLoop() {
 		typ, payload, err := s.ws.Read(readCtx)
 		cancel()
 		if err != nil {
+			if isNormalWSClose(err) && isClosedSignal(s.life.fullRequested()) && !isClosedSignal(s.life.aborted()) {
+				s.life.markReadClosed()
+				return
+			}
 			if s.readIdle > 0 && isTimeoutFailure(err) && !s.isClosing() {
 				s.initiateClose(&TimeoutError{Kind: TimeoutReadIdle, Cause: err})
 			} else if cause := s.writeState.timeoutCause(); cause != nil {
@@ -315,6 +365,8 @@ func (s *wsSession) pingLoop() {
 	for {
 		select {
 		case <-s.closing:
+			return
+		case <-s.life.fullRequested():
 			return
 		case <-ticker.C:
 			ctx, cancel := context.WithTimeout(context.Background(), s.pongTO)
@@ -415,20 +467,14 @@ func wsAAD(protocol ogrenet.Scheme, kind ogrenet.PayloadType) [4]byte {
 }
 
 func (s *wsSession) initiateClose(cause error) {
-	s.closeOnce.Do(func() {
-		cause = normalizeWSError(cause)
-		s.errMu.Lock()
-		s.err = cause
-		s.errMu.Unlock()
-		s.gate.close()
-		close(s.closing)
-		_ = s.ws.CloseNow()
-	})
+	s.abort(abortFailure, cause)
 }
 
 func (s *wsSession) finalize() {
 	s.finalOnce.Do(func() {
-		s.initiateClose(nil)
+		if !s.isClosing() {
+			s.initiateClose(nil)
+		}
 		defer func() {
 			close(s.done)
 			s.engine.removeWebSocket(s)
