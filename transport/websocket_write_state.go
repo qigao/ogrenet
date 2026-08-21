@@ -29,6 +29,14 @@ func (s *wsWriteState) begin(ctx context.Context) {
 	s.mu.Unlock()
 }
 
+func (s *wsWriteState) pendingRead() (error, bool) {
+	s.mu.RLock()
+	pendingErr := s.pendingReadErr
+	observed := s.pendingReadObserved
+	s.mu.RUnlock()
+	return pendingErr, observed
+}
+
 func (s *wsWriteState) end() (error, bool) {
 	s.mu.Lock()
 	pendingErr := s.pendingReadErr
