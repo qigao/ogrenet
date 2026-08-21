@@ -49,8 +49,11 @@ func (e *Engine) dialWebSocket(ctx context.Context, endpoint ogrenet.Endpoint, h
 		_ = ws.CloseNow()
 		return nil, err
 	}
-	lease, local, remote := state.take()
+	lease, local, remote, physical := state.take()
 	if lease == nil {
+		if physical != nil {
+			_ = physical.Close()
+		}
 		_ = ws.CloseNow()
 		return nil, errors.New("transport: websocket dial completed without connection admission")
 	}
@@ -58,6 +61,9 @@ func (e *Engine) dialWebSocket(ctx context.Context, endpoint ogrenet.Endpoint, h
 	defer func() {
 		if !transferred {
 			lease.release()
+			if physical != nil {
+				_ = physical.Close()
+			}
 		}
 	}()
 	if local == nil {
@@ -67,8 +73,13 @@ func (e *Engine) dialWebSocket(ctx context.Context, endpoint ogrenet.Endpoint, h
 		remote = staticAddr{network: endpoint.Scheme.String(), value: endpoint.Address()}
 	}
 	sess := e.newWSSession(ws, endpoint, local, remote, h, cipher)
+	sess.physical = physical
 	if err := e.addWebSocketWithLease(sess, lease); err != nil {
-		_ = ws.CloseNow()
+		if physical != nil {
+			_ = physical.Close()
+		} else {
+			_ = ws.CloseNow()
+		}
 		return nil, err
 	}
 	transferred = true
@@ -89,6 +100,7 @@ func (e *Engine) newWSSession(ws *websocket.Conn, endpoint ogrenet.Endpoint, loc
 		cipher:        cipher,
 		maxMessage:    e.cfg.maxMessageBytes,
 		writeTO:       e.cfg.effectiveWSWriteTimeout(),
+		closeTO:       e.cfg.ws.CloseTimeout,
 		readIdle:      e.cfg.timeouts.ReadIdle,
 		activity:      newActivityClock(e.cfg.timeouts.ConnectionIdle, e.cfg.timeouts.MaxLifetime),
 		pingEvery:     e.cfg.ws.PingInterval,
