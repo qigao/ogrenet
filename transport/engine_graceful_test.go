@@ -186,8 +186,10 @@ func TestEngineShutdownIgnoresChildFailure(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	serverFirst := <-accepted
-	serverSecond := <-accepted
+
+	serverA := <-accepted
+	serverB := <-accepted
+	serverFirst, serverSecond := pairAcceptedSessions(t, first, second, serverA, serverB)
 
 	result := make(chan error, 1)
 	go func() { result <- client.Shutdown(ctx) }()
@@ -214,4 +216,26 @@ func TestEngineShutdownIgnoresChildFailure(t *testing.T) {
 	}
 	waitClosed(t, second.Done(), "clean child")
 	_ = serverFirst.Close()
+}
+
+func pairAcceptedSessions(t *testing.T, first, second, serverA, serverB ogrenet.Session) (ogrenet.Session, ogrenet.Session) {
+	t.Helper()
+	servers := []ogrenet.Session{serverA, serverB}
+	var firstPeer, secondPeer ogrenet.Session
+	for _, serverSession := range servers {
+		remote := serverSession.RemoteAddr()
+		if remote == nil {
+			t.Fatalf("server session %T has nil remote address", serverSession)
+		}
+		switch remote.String() {
+		case first.LocalAddr().String():
+			firstPeer = serverSession
+		case second.LocalAddr().String():
+			secondPeer = serverSession
+		}
+	}
+	if firstPeer == nil || secondPeer == nil {
+		t.Fatalf("could not pair accepted sessions: first local=%v second local=%v serverA remote=%v serverB remote=%v", first.LocalAddr(), second.LocalAddr(), serverA.RemoteAddr(), serverB.RemoteAddr())
+	}
+	return firstPeer, secondPeer
 }
