@@ -1,6 +1,7 @@
 package transport
 
 import (
+	"context"
 	"errors"
 	"testing"
 	"time"
@@ -16,7 +17,7 @@ func TestStreamStatsCountApplicationPayload(t *testing.T) {
 
 			payload := []byte("application-payload-is-not-wire-frame")
 			msg := ogrenet.Bin(payload)
-			if err := p.client.Send(testContext(t), msg); err != nil {
+			if err := p.client.Send(context.Background(), msg); err != nil {
 				t.Fatalf("Send: %v", err)
 			}
 			select {
@@ -67,9 +68,4 @@ func TestStreamTrySendBackpressureCountsOnce(t *testing.T) {
 	if got := client.Stats().Backpressure; got != 1 {
 		t.Fatalf("backpressure=%d, want 1", got)
 	}
-}
-
-func testContext(t *testing.T) interface{ Done() <-chan struct{} } {
-	t.Helper()
-	return nil
 }
