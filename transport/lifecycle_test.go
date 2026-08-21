@@ -33,10 +33,16 @@ func TestSessionLifecycleAbortFirstWins(t *testing.T) {
 	if got := l.reason(); got != abortCaller {
 		t.Fatalf("abort reason = %v, want %v", got, abortCaller)
 	}
-	select {
-	case <-l.aborted():
-	default:
-		t.Fatal("abort channel is open")
+	for name, ch := range map[string]<-chan struct{}{
+		"abort": l.aborted(),
+		"read":  l.readDone(),
+		"write": l.writeDone(),
+	} {
+		select {
+		case <-ch:
+		default:
+			t.Fatalf("%s channel is open after abort", name)
+		}
 	}
 }
 
@@ -57,6 +63,22 @@ func TestSessionLifecycleChannelsCloseExactlyOnce(t *testing.T) {
 		case <-ch:
 		default:
 			t.Fatalf("%s channel is open", name)
+		}
+	}
+}
+
+func TestSessionLifecycleTerminalClosesReadAndWrite(t *testing.T) {
+	l := newSessionLifecycle()
+	l.markTerminal()
+	for name, ch := range map[string]<-chan struct{}{
+		"read":     l.readDone(),
+		"write":    l.writeDone(),
+		"terminal": l.terminalDone(),
+	} {
+		select {
+		case <-ch:
+		default:
+			t.Fatalf("%s channel is open after terminal", name)
 		}
 	}
 }
