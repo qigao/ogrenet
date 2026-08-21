@@ -7,6 +7,7 @@ import (
 	"io"
 	"net"
 	"sync"
+	"time"
 
 	"github.com/qigao/ogrenet"
 	"github.com/qigao/ogrenet/wire"
@@ -34,6 +35,8 @@ type conn struct {
 
 	readSize int
 	maxRead  int
+	timeouts Timeouts
+	activity *activityClock
 
 	framerMu  sync.Mutex
 	closeOnce sync.Once
@@ -143,7 +146,11 @@ func (c *conn) Close() error {
 }
 
 func (c *conn) start() {
-	c.loops.Add(2)
+	loopCount := 2
+	if c.activity != nil {
+		loopCount++
+	}
+	c.loops.Add(loopCount)
 	go func() {
 		defer c.loops.Done()
 		c.writerLoop()
@@ -152,6 +159,14 @@ func (c *conn) start() {
 		defer c.loops.Done()
 		c.readerLoop()
 	}()
+	if c.activity != nil {
+		go func() {
+			defer c.loops.Done()
+			c.activity.run(c.closing, func(kind TimeoutKind) {
+				c.initiateClose(&TimeoutError{Kind: kind})
+			})
+		}()
+	}
 	go func() {
 		c.loops.Wait()
 		c.finalize()
@@ -184,7 +199,7 @@ func (c *conn) writerLoop() {
 		case <-c.closing:
 			return
 		case req := <-c.queue:
-			err := writeAll(c.raw, req.frame)
+			err := c.writeFrame(req.frame)
 			c.quota.release(req.bytes)
 			c.releaseFrameSlot()
 			sendErr := err
@@ -195,11 +210,29 @@ func (c *conn) writerLoop() {
 				req.ack <- sendErr
 			}
 			if err != nil {
-				c.initiateClose(fmt.Errorf("transport: write: %w", err))
+				c.initiateClose(err)
 				return
 			}
 		}
 	}
+}
+
+func (c *conn) writeFrame(frame []byte) error {
+	if err := c.raw.SetWriteDeadline(time.Now().Add(c.timeouts.Write)); err != nil {
+		return fmt.Errorf("transport: set write deadline: %w", err)
+	}
+	err := writeAll(c.raw, frame, c.activity)
+	clearErr := c.raw.SetWriteDeadline(time.Time{})
+	if err != nil {
+		if isTimeoutFailure(err) {
+			return &TimeoutError{Kind: TimeoutWrite, Cause: err}
+		}
+		return fmt.Errorf("transport: write: %w", err)
+	}
+	if clearErr != nil {
+		return fmt.Errorf("transport: clear write deadline: %w", clearErr)
+	}
+	return nil
 }
 
 func (c *conn) failPending(err error) {
@@ -227,8 +260,26 @@ func (c *conn) readerLoop() {
 	pending := make([]byte, 0, c.readSize)
 
 	for {
+		if c.timeouts.ReadIdle > 0 {
+			if err := c.raw.SetReadDeadline(time.Now().Add(c.timeouts.ReadIdle)); err != nil {
+				c.initiateClose(fmt.Errorf("transport: set read deadline: %w", err))
+				return
+			}
+		}
 		n, readErr := c.raw.Read(readBuf)
+		if c.timeouts.ReadIdle > 0 {
+			if err := c.raw.SetReadDeadline(time.Time{}); err != nil && readErr == nil {
+				c.initiateClose(fmt.Errorf("transport: clear read deadline: %w", err))
+				return
+			}
+		}
 		if n > 0 {
+			if c.activity != nil {
+				c.activity.touch()
+			}
+			if isTimeoutFailure(readErr) {
+				readErr = nil
+			}
 			pending = append(pending, readBuf[:n]...)
 			consumedTotal := 0
 			for consumedTotal < len(pending) {
@@ -278,7 +329,11 @@ func (c *conn) readerLoop() {
 		}
 
 		if readErr != nil {
-			c.initiateClose(normalizeConnError(readErr))
+			if c.timeouts.ReadIdle > 0 && isTimeoutFailure(readErr) && !c.isClosing() {
+				c.initiateClose(&TimeoutError{Kind: TimeoutReadIdle, Cause: readErr})
+			} else {
+				c.initiateClose(normalizeConnError(readErr))
+			}
 			return
 		}
 		if c.isClosing() {
@@ -334,10 +389,21 @@ func normalizeConnError(err error) error {
 	return err
 }
 
-func writeAll(w io.Writer, p []byte) error {
+func isTimeoutFailure(err error) bool {
+	if err == nil {
+		return false
+	}
+	var netErr net.Error
+	return errors.As(err, &netErr) && netErr.Timeout()
+}
+
+func writeAll(w io.Writer, p []byte, activity *activityClock) error {
 	for len(p) > 0 {
 		n, err := w.Write(p)
 		if n > 0 {
+			if activity != nil {
+				activity.touch()
+			}
 			p = p[n:]
 		}
 		if err != nil {
