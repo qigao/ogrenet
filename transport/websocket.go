@@ -296,10 +296,10 @@ func (s *wsSession) handleOutbound(req wsOutbound) bool {
 	s.writeState.begin(ctx)
 	err := s.ws.Write(ctx, req.typ, req.payload)
 	timeoutCause := s.writeState.timeoutCause()
-	pendingReadErr, pendingRead := s.writeState.end()
-	cancel()
 
 	if err == nil {
+		pendingReadErr, pendingRead := s.writeState.end()
+		cancel()
 		if s.activity != nil {
 			s.activity.touch()
 		}
@@ -319,6 +319,8 @@ func (s *wsSession) handleOutbound(req wsOutbound) bool {
 		return true
 	}
 
+	cancel()
+	pendingReadErr, pendingRead := s.writeState.pendingRead()
 	s.quota.release(req.bytes)
 	s.releaseFrameSlot()
 
@@ -335,6 +337,7 @@ func (s *wsSession) handleOutbound(req wsOutbound) bool {
 	}
 
 	won := s.abort(abortFailure, opErr)
+	_, _ = s.writeState.end()
 	sendErr := ErrClosed
 	if won && opErr != nil {
 		sendErr = opErr
