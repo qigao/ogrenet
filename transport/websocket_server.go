@@ -130,7 +130,7 @@ func (e *Engine) listenWebSocket(ctx context.Context, endpoint ogrenet.Endpoint,
 		if err != nil {
 			return
 		}
-		connLease := holder.take()
+		connLease, physical := holder.takeWithPhysical()
 		if connLease == nil {
 			_ = ws.CloseNow()
 			return
@@ -139,19 +139,31 @@ func (e *Engine) listenWebSocket(ctx context.Context, endpoint ogrenet.Endpoint,
 		defer func() {
 			if !transferred {
 				connLease.release()
+				if physical != nil {
+					_ = physical.Close()
+				}
 			}
 		}()
 
 		ws.SetReadLimit(int64(e.cfg.maxMessageBytes))
 		cipher, err := e.cfg.newCipher()
 		if err != nil {
-			_ = ws.CloseNow()
+			if physical != nil {
+				_ = physical.Close()
+			} else {
+				_ = ws.CloseNow()
+			}
 			return
 		}
 		remote := parseRemoteAddr(r.RemoteAddr)
 		s := e.newWSSession(ws, bound, serveLn.Addr(), remote, h, cipher)
+		s.physical = physical
 		if err := e.addWebSocketWithLease(s, connLease); err != nil {
-			_ = ws.CloseNow()
+			if physical != nil {
+				_ = physical.Close()
+			} else {
+				_ = ws.CloseNow()
+			}
 			return
 		}
 		transferred = true
