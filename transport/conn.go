@@ -25,6 +25,7 @@ type conn struct {
 	protocol   ogrenet.Scheme
 	endpoint   ogrenet.Endpoint
 	raw        net.Conn
+	physical   io.Closer
 	framer     wire.Framer
 	handler    ogrenet.Handler
 	queue      chan outbound
@@ -32,18 +33,21 @@ type conn struct {
 	gate       *sendGate
 	frameSlots chan struct{}
 	encodeSlot chan struct{}
+	life       *sessionLifecycle
 
 	readSize int
 	maxRead  int
 	timeouts Timeouts
 	activity *activityClock
 
-	framerMu  sync.Mutex
-	closeOnce sync.Once
-	finalOnce sync.Once
-	loops     sync.WaitGroup
-	closing   chan struct{}
-	done      chan struct{}
+	framerMu          sync.Mutex
+	closeOnce         sync.Once
+	finalOnce         sync.Once
+	writerDrainedOnce sync.Once
+	loops             sync.WaitGroup
+	closing           chan struct{}
+	writerDrained     chan struct{}
+	done              chan struct{}
 
 	errMu sync.RWMutex
 	err   error
@@ -141,7 +145,12 @@ func (c *conn) TrySend(msg ogrenet.Message) error {
 }
 
 func (c *conn) Close() error {
-	c.initiateClose(nil)
+	select {
+	case <-c.done:
+		return nil
+	default:
+	}
+	c.abort(abortExplicit, nil)
 	return nil
 }
 
@@ -187,34 +196,70 @@ func (c *conn) writerLoop() {
 	defer func() {
 		<-c.gate.done()
 		c.failPending(ErrClosed)
+		c.markWriterDrained()
 	}()
+
+	graceful := false
 	for {
-		select {
-		case <-c.closing:
-			return
-		default:
+		if graceful {
+			select {
+			case <-c.closing:
+				return
+			case req := <-c.queue:
+				if !c.handleOutbound(req) {
+					return
+				}
+			case <-c.gate.done():
+				for {
+					select {
+					case req := <-c.queue:
+						if !c.handleOutbound(req) {
+							return
+						}
+					default:
+						if err := c.closeProtocolWrite(); err != nil {
+							c.initiateClose(err)
+							return
+						}
+						c.life.markWriteClosed()
+						c.markWriterDrained()
+						c.maybeFinishGraceful()
+						return
+					}
+				}
+			}
+			continue
 		}
 
 		select {
 		case <-c.closing:
 			return
+		case <-c.life.writeRequested():
+			graceful = true
 		case req := <-c.queue:
-			err := c.writeFrame(req.frame)
-			c.quota.release(req.bytes)
-			c.releaseFrameSlot()
-			sendErr := err
-			if err != nil && c.isClosing() {
-				sendErr = ErrClosed
-			}
-			if req.ack != nil {
-				req.ack <- sendErr
-			}
-			if err != nil {
-				c.initiateClose(err)
+			if !c.handleOutbound(req) {
 				return
 			}
 		}
 	}
+}
+
+func (c *conn) handleOutbound(req outbound) bool {
+	err := c.writeFrame(req.frame)
+	c.quota.release(req.bytes)
+	c.releaseFrameSlot()
+	sendErr := err
+	if err != nil && c.isClosing() {
+		sendErr = ErrClosed
+	}
+	if req.ack != nil {
+		req.ack <- sendErr
+	}
+	if err != nil {
+		c.initiateClose(err)
+		return false
+	}
+	return true
 }
 
 func (c *conn) writeFrame(frame []byte) error {
@@ -329,10 +374,16 @@ func (c *conn) readerLoop() {
 		}
 
 		if readErr != nil {
-			if c.timeouts.ReadIdle > 0 && isTimeoutFailure(readErr) && !c.isClosing() {
+			if c.isClosing() {
+				return
+			}
+			if c.timeouts.ReadIdle > 0 && isTimeoutFailure(readErr) {
 				c.initiateClose(&TimeoutError{Kind: TimeoutReadIdle, Cause: readErr})
+			} else if normalized := normalizeConnError(readErr); normalized != nil {
+				c.initiateClose(normalized)
 			} else {
-				c.initiateClose(normalizeConnError(readErr))
+				c.life.markReadClosed()
+				c.maybeFinishGraceful()
 			}
 			return
 		}
@@ -350,21 +401,14 @@ func retainedReadCapacity(readSize int) int {
 	return readSize * 4
 }
 
-func (c *conn) initiateClose(cause error) {
-	c.closeOnce.Do(func() {
-		cause = normalizeConnError(cause)
-		c.errMu.Lock()
-		c.err = cause
-		c.errMu.Unlock()
-		c.gate.close()
-		close(c.closing)
-		_ = c.raw.Close()
-	})
-}
-
 func (c *conn) finalize() {
 	c.finalOnce.Do(func() {
-		c.initiateClose(nil)
+		if !isClosedSignal(c.life.terminalDone()) {
+			if !c.isClosing() {
+				c.initiateClose(nil)
+			}
+			c.life.markTerminal()
+		}
 		defer func() {
 			close(c.done)
 			c.engine.removeStream(c)
