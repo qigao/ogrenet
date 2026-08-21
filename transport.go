@@ -8,8 +8,10 @@ import (
 // Session is the common connection contract for TCP, TLS, WS, and WSS.
 //
 // TCP/TLS implementations use byte-stream framing. WS/WSS preserve native
-// WebSocket message boundaries. Done closes only after internal I/O work has
-// stopped and OnClose has returned. Err is stable once Done is closed.
+// WebSocket message boundaries. Shutdown performs a graceful full protocol
+// close, while Close aborts immediately without a graceful guarantee. Done
+// closes only after internal I/O work has stopped and OnClose has returned.
+// Err is stable once Done is closed.
 type Session interface {
 	ID() uint64
 	Protocol() Scheme
@@ -20,7 +22,19 @@ type Session interface {
 	RemoteAddr() net.Addr
 	Done() <-chan struct{}
 	Err() error
+	Shutdown(ctx context.Context) error
 	Close() error
+}
+
+// HalfCloseSession is the TCP/TLS capability for independent protocol read and
+// write halves. CloseWrite drains already-admitted writes before gracefully
+// closing the local protocol write side. ReadClosed closes when no additional
+// inbound application message can arrive; the Session may remain writable and
+// Done may remain open until the full Session terminates.
+type HalfCloseSession interface {
+	Session
+	CloseWrite(ctx context.Context) error
+	ReadClosed() <-chan struct{}
 }
 
 // Listener represents one active TCP/TLS/WS/WSS listening endpoint.
@@ -119,9 +133,9 @@ func (h PacketHandlerFuncs) OnClose(c PacketConn, err error) {
 // accept only UDP endpoints. There is no protocol fallback or automatic
 // downgrade.
 //
-// Close initiates shutdown and is idempotent. Done closes after every listener,
+// Close aborts immediately and is idempotent. Done closes after every listener,
 // session, packet socket, and in-flight Dial/Listen operation has fully
-// terminated. Shutdown combines Close with a context-bounded wait for Done.
+// terminated. Shutdown performs a context-bounded graceful Engine shutdown.
 type Engine interface {
 	Listen(ctx context.Context, endpoint Endpoint, h Handler) (Listener, error)
 	Dial(ctx context.Context, endpoint Endpoint, h Handler) (Session, error)
