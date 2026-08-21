@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/tls"
 	"net"
+	"time"
 
 	"github.com/qigao/ogrenet"
 )
@@ -21,17 +22,33 @@ func (e *Engine) listenStream(ctx context.Context, endpoint ogrenet.Endpoint, h 
 			_ = ln.Close()
 			return nil, err
 		}
-		prepare = func(ctx context.Context, raw net.Conn) (net.Conn, error) {
+		prepare = func(ctx context.Context, raw net.Conn) (net.Conn, time.Duration, error) {
+			observing := e.observer != nil
+			var started time.Time
+			if observing {
+				started = time.Now()
+			}
 			handshake, err := e.acquireHandshake()
+			var duration time.Duration
+			if observing {
+				duration = time.Since(started)
+			}
 			if err != nil {
-				return nil, err
+				return nil, duration, err
 			}
 			defer handshake.release()
 			tlsConn := tls.Server(raw, cfg.Clone())
-			if err := e.cfg.handshakeServer(ctx, tlsConn); err != nil {
-				return nil, err
+			if observing {
+				started = time.Now()
 			}
-			return tlsConn, nil
+			err = e.cfg.handshakeServer(ctx, tlsConn)
+			if observing {
+				duration = time.Since(started)
+			}
+			if err != nil {
+				return nil, duration, err
+			}
+			return tlsConn, duration, nil
 		}
 	}
 	lctx, cancel := context.WithCancel(ctx)
