@@ -14,6 +14,7 @@ type streamPrepare func(context.Context, net.Conn) (net.Conn, error)
 
 type listener struct {
 	engine   *Engine
+	id       uint64
 	endpoint ogrenet.Endpoint
 	ln       net.Listener
 	handler  ogrenet.Handler
@@ -21,6 +22,7 @@ type listener struct {
 	ctx      context.Context
 	cancel   context.CancelFunc
 	capacity *listenerCapacity
+	stats    *listenerCounters
 	closing  chan struct{}
 	done     chan struct{}
 
