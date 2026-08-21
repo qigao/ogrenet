@@ -295,9 +295,11 @@ func (s *wsSession) handleOutbound(req wsOutbound) bool {
 	ctx, cancel := context.WithTimeout(context.Background(), s.writeTO)
 	s.writeState.begin(ctx)
 	err := s.ws.Write(ctx, req.typ, req.payload)
+	timeoutCause := s.writeState.timeoutCause()
+	pendingReadErr, pendingRead := s.writeState.end()
 	cancel()
+
 	if err == nil {
-		s.writeState.end()
 		if s.activity != nil {
 			s.activity.touch()
 		}
@@ -306,20 +308,35 @@ func (s *wsSession) handleOutbound(req wsOutbound) bool {
 		if req.ack != nil {
 			req.ack <- nil
 		}
+		if pendingRead {
+			if normalized := normalizeWSError(pendingReadErr); normalized != nil {
+				s.initiateClose(s.operationalError(OpRead, normalized, hintNone))
+			} else {
+				s.initiateClose(nil)
+			}
+			return false
+		}
 		return true
 	}
-	if isTimeoutFailure(err) {
-		err = &TimeoutError{Kind: TimeoutWrite, Cause: err}
-	} else {
-		err = fmt.Errorf("transport: websocket write: %w", err)
-	}
+
 	s.quota.release(req.bytes)
 	s.releaseFrameSlot()
 
-	opErr := s.operationalError(OpWrite, err, hintNone)
+	var opErr error
+	switch {
+	case timeoutCause != nil || isTimeoutFailure(err):
+		opErr = s.operationalError(OpWrite, &TimeoutError{Kind: TimeoutWrite, Cause: err}, hintNone)
+	case pendingRead:
+		if normalized := normalizeWSError(pendingReadErr); normalized != nil {
+			opErr = s.operationalError(OpRead, normalized, hintNone)
+		}
+	default:
+		opErr = s.operationalError(OpWrite, fmt.Errorf("transport: websocket write: %w", err), hintNone)
+	}
+
 	won := s.abort(abortFailure, opErr)
 	sendErr := ErrClosed
-	if won {
+	if won && opErr != nil {
 		sendErr = opErr
 	} else if terminal := s.Err(); terminal != nil {
 		sendErr = terminal
@@ -327,7 +344,6 @@ func (s *wsSession) handleOutbound(req wsOutbound) bool {
 	if req.ack != nil {
 		req.ack <- sendErr
 	}
-	s.writeState.end()
 	return false
 }
 
@@ -376,11 +392,11 @@ func (s *wsSession) readerLoop() {
 				s.initiateClose(s.operationalError(OpRead, &TimeoutError{Kind: TimeoutReadIdle, Cause: err}, hintNone))
 			} else if cause := s.writeState.timeoutCause(); cause != nil {
 				s.initiateClose(s.operationalError(OpWrite, &TimeoutError{Kind: TimeoutWrite, Cause: cause}, hintNone))
-			} else if s.writeState.active() {
-				// coder/websocket can make a blocked writer close the physical
-				// connection before the writer goroutine has published its real
-				// error. Any read-side close while a write is still active is
-				// derivative; let the writer own terminal failure classification.
+			} else if s.writeState.deferRead(err) {
+				// The read failure may be a side effect of coder/websocket
+				// terminating the shared connection while a bounded write is in
+				// flight. Let the writer arbitrate timeout vs genuine peer/read
+				// failure after the write returns.
 				return
 			} else if normalized := normalizeWSError(err); normalized != nil {
 				s.initiateClose(s.operationalError(OpRead, normalized, hintNone))
