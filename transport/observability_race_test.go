@@ -257,15 +257,6 @@ func startSessionStatsReader(session ogrenet.Session) (chan struct{}, chan struc
 	return stop, done
 }
 
-func waitClosed(t *testing.T, ch <-chan struct{}, name string) {
-	t.Helper()
-	select {
-	case <-ch:
-	case <-time.After(2 * time.Second):
-		t.Fatalf("%s timeout", name)
-	}
-}
-
 type observabilityFailWriteConn struct {
 	net.Conn
 	entered chan struct{}
