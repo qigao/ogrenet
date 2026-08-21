@@ -9,10 +9,10 @@ import (
 )
 
 var (
-	benchmarkObserverBoolSink bool
-	benchmarkEngineStatsSink ogrenet.EngineStats
-	benchmarkSessionStatsSink ogrenet.SessionStats
-	benchmarkPacketStatsSink ogrenet.PacketConnStats
+	benchmarkObserverBoolSink  bool
+	benchmarkEngineStatsSink   ogrenet.EngineStats
+	benchmarkSessionStatsSink  ogrenet.SessionStats
+	benchmarkPacketStatsSink   ogrenet.PacketConnStats
 )
 
 func BenchmarkObserverDisabledEmitPath(b *testing.B) {
