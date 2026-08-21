@@ -20,6 +20,7 @@ const (
 	defaultTLSHandshakeTimeout = 10 * time.Second
 	defaultWSHandshakeTimeout  = 10 * time.Second
 	defaultWSWriteTimeout      = 10 * time.Second
+	defaultWSCloseTimeout      = 10 * time.Second
 	defaultWSPingInterval      = 30 * time.Second
 	defaultWSPongTimeout       = 10 * time.Second
 )
@@ -40,6 +41,7 @@ type WebSocketConfig struct {
 	Subprotocols     []string
 	HandshakeTimeout time.Duration
 	WriteTimeout     time.Duration
+	CloseTimeout     time.Duration
 	PingInterval     time.Duration
 	PongTimeout      time.Duration
 }
@@ -80,6 +82,7 @@ func defaultConfig() config {
 		ws: WebSocketConfig{
 			HandshakeTimeout: defaultWSHandshakeTimeout,
 			WriteTimeout:     defaultWSWriteTimeout,
+			CloseTimeout:     defaultWSCloseTimeout,
 			PingInterval:     defaultWSPingInterval,
 			PongTimeout:      defaultWSPongTimeout,
 		},
@@ -192,8 +195,11 @@ func WithTCPConfig(cfg TCPConfig) Option {
 
 func WithWebSocketConfig(cfg WebSocketConfig) Option {
 	return func(c *config) error {
-		if cfg.HandshakeTimeout <= 0 || cfg.WriteTimeout <= 0 || cfg.PongTimeout <= 0 || cfg.PingInterval < 0 {
+		if cfg.HandshakeTimeout <= 0 || cfg.WriteTimeout <= 0 || cfg.PongTimeout <= 0 || cfg.PingInterval < 0 || cfg.CloseTimeout < 0 {
 			return ErrInvalidWebSocketConfig
+		}
+		if cfg.CloseTimeout == 0 {
+			cfg.CloseTimeout = defaultWSCloseTimeout
 		}
 		cfg.OriginPatterns = append([]string(nil), cfg.OriginPatterns...)
 		cfg.Subprotocols = append([]string(nil), cfg.Subprotocols...)
