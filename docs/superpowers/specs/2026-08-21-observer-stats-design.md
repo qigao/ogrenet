@@ -8,13 +8,13 @@ Parent roadmap: #38 (P0-5)
 
 Add a stable, dependency-light observability contract to `ogrenet` that is shared by the portable runtime and future native backends. The contract must provide structured best-effort events and authoritative pull-based statistics without making OpenTelemetry, Prometheus, logging, or user callback latency part of core transport correctness.
 
-The design must preserve the P0-3 lifecycle ownership rules and the P0-4 typed error model. Observability consumes committed runtime state; it does not arbitrate lifecycle or error ownership.
+The design preserves the P0-3 lifecycle ownership rules and the P0-4 typed error model. Observability consumes committed runtime state; it never arbitrates lifecycle or error ownership.
 
 ## Design principles
 
 1. **Stats are authoritative; events are best effort.** Event loss must never make resource accounting incorrect.
 2. **Observer callbacks never run on I/O runtime paths.** A slow observer may stall observation delivery, but not socket read/write, admission, close, or Engine shutdown.
-3. **Disabled observer work starts after a nil guard.** No `Event`, address snapshot, duration, or error metadata is constructed when no observer is configured.
+3. **Disabled observer work starts after a nil guard.** No `Event`, address lookup, duration measurement, or error metadata is constructed when no observer is configured.
 4. **One stable observer method.** Adding a new event kind must not require extending an interface implemented by adapters.
 5. **Stats are part of the root application contract.** Portable and future native backends expose the same `Stats()` methods rather than optional capability interfaces.
 6. **No unbounded cardinality or retained telemetry state in core.** External adapters own label/cardinality policy.
@@ -87,13 +87,13 @@ Semantics:
 
 - `ResourceID` identifies the resource that owns the event. IDs are Engine-local and stable only for the resource lifetime.
 - `ParentID` is zero unless a stable parent exists. Accepted Sessions use the Listener ID as `ParentID`.
-- Failed pre-resource dial/handshake attempts may use `ResourceID == 0` because no durable Session exists.
-- `Bytes` is the amount meaningful at the runtime API boundary for that operation. It is not physical Ethernet/IP/TLS ciphertext byte accounting.
-- `Duration` is populated only for operations where timing is explicitly measured for observer delivery. It is allowed to be zero.
-- `Err` is the already-owned terminal/operational error. Observer code never changes which error wins.
+- Failed pre-resource dial/handshake attempts may use `ResourceID == 0` because no durable Session exists. Failed inbound handshakes retain the Listener ID in `ParentID`.
+- `Bytes` is **application payload bytes** for read/write/drop events. Framing bytes, WebSocket framing, TLS ciphertext overhead, IP headers, and link-layer bytes are excluded.
+- `Duration` is populated only for operations that explicitly measure timing for observer delivery, initially connect and handshake. It may be zero for other event kinds.
+- `Err` is the already-classified/owned operational error. Observer code never changes which error wins.
 - Events never contain application payload data.
 
-There is no total ordering guarantee across concurrent goroutines. The dispatcher preserves successful enqueue order, but adapters must not infer lifecycle correctness from event order. Close events are emitted only after terminal error/stats state has been committed.
+There is no total ordering guarantee across concurrent goroutines. The dispatcher preserves successful enqueue order, but adapters must not infer lifecycle correctness from event order. Close events are emitted only after terminal error and final Stats state have been committed.
 
 ## Stats API
 
@@ -173,7 +173,7 @@ type SessionStats struct {
 }
 ```
 
-`BytesRX/TX` are runtime-layer bytes associated with successfully processed application messages/frames, not physical TLS ciphertext or link-layer bytes. The exact counting point is protocol-specific but must be documented and tested so a counter is incremented once, not once per partial syscall.
+`BytesRX/TX` count application payload bytes from successfully delivered/written messages. TCP/TLS framing bytes, TLS record overhead, and WebSocket framing are excluded. One application message increments `MessagesRX/TX` once regardless of partial syscalls or internal framing.
 
 `Age` stops increasing when the resource terminates. After `Done()` closes, repeated Stats calls return the same final age.
 
@@ -195,12 +195,12 @@ type PacketConnStats struct {
     QueuedPackets uint64
     QueuedBytes   uint64
 
-    Backpressure   uint64
+    Backpressure     uint64
     DroppedDatagrams uint64
 }
 ```
 
-Inbound datagrams discarded because they exceed the configured application maximum increment `DroppedDatagrams`. Observer queue overflow does not increment this field.
+`BytesRX/TX` count UDP application datagram payload bytes. Inbound datagrams discarded because they exceed the configured application maximum increment `DroppedDatagrams` by one and contribute their received payload length to the `EventDrop.Bytes` field, but they do not increment `PacketsRX` or `BytesRX`. Observer queue overflow does not increment `DroppedDatagrams`.
 
 ### ListenerStats
 
@@ -217,7 +217,7 @@ type ListenerStats struct {
 }
 ```
 
-`CurrentConnections` covers opening, active, and draining children whose listener capacity lease has not yet been released.
+`AcceptedConnections` increments only after a child Session is successfully adopted by the Engine, not merely after an OS-level `Accept`. `RejectedConnections` counts per-listener admission rejection. Handshake failures are not classified as listener admission rejections. `CurrentConnections` covers opening, active, and draining children whose listener capacity lease has not yet been released.
 
 ## Counter ownership and counting points
 
@@ -227,11 +227,13 @@ Counters attach to the component that already owns the relevant transition:
 - Listener accepted/rejected/current counters: listener capacity lease ownership.
 - Session queue depth: send admission/release points that already own frame and byte quota.
 - Packet queue depth: packet send admission/release points.
-- RX message/packet counters: immediately before successful application callback delivery.
-- TX message/packet counters: after the runtime completes the corresponding outbound write successfully.
-- Backpressure: once per `TrySend`/`TrySendTo` attempt that fails due to local queue/byte-budget admission pressure (`ErrWouldBlock`, including the typed queued-byte limit composition).
+- Session RX: after a message has decoded and validated, immediately before `Handler.OnMessage`; increment bytes/messages first, enqueue the optional read event second, then invoke the application callback.
+- Packet RX: after packet-size policy passes, immediately before `PacketHandler.OnPacket`; increment bytes/packets first, enqueue the optional read event second, then invoke the application callback.
+- Session TX: after one outbound application message has completed its protocol write successfully; increment payload bytes/messages first, enqueue the optional write event second, then acknowledge a blocking `Send` if applicable.
+- Packet TX: after one outbound datagram write succeeds; increment payload bytes/packets first, enqueue the optional write event second, then acknowledge a blocking send if applicable.
+- Backpressure: once per `TrySend`/`TrySendTo` attempt that fails due to local queue/byte-budget admission pressure (`ErrWouldBlock`, including typed queued-byte limit composition).
 - Decode/protocol errors: when an already-classified read/decode failure is committed as the terminal operational error.
-- Final age: committed during resource finalization.
+- Final age: committed during resource finalization before the close event and before `Done()` becomes observable.
 
 Stats must not infer counts by periodically inspecting queue lengths when a race-free ownership transition already exists.
 
@@ -246,18 +248,19 @@ func WithObserverBuffer(size int) Option
 
 Rules:
 
-- nil observer means instrumentation event delivery is disabled.
-- the default observer buffer is finite and implementation-defined/documented; the initial implementation should use a conservative fixed default.
-- buffer size must be positive when explicitly configured.
-- configuring a buffer without an observer is allowed; it has no runtime effect until an observer is present.
+- nil observer means event delivery is disabled;
+- the default bounded observer queue capacity is **1024 events**;
+- an explicitly configured buffer size must be positive;
+- configuring a buffer without an observer is allowed and has no runtime effect until an observer is present;
+- Stats remain available regardless of observer configuration.
 
-Stats remain available regardless of whether an observer is configured.
+Configuration validation remains a direct configuration/programmer error and is not wrapped in the P0-4 operational error envelope.
 
 ## Dispatcher architecture
 
 Each Engine with a non-nil observer owns exactly one bounded dispatcher queue and at most one observer worker goroutine.
 
-Producer path:
+Producer code must guard before event construction:
 
 ```go
 if e.observer != nil {
@@ -265,7 +268,7 @@ if e.observer != nil {
 }
 ```
 
-The nil check occurs before constructing `Event` or any observation-only metadata.
+The nil check occurs before constructing `Event`, calling `LocalAddr`/`RemoteAddr` solely for telemetry, or taking observer-only timestamps.
 
 The dispatcher uses non-blocking enqueue semantics:
 
@@ -282,15 +285,28 @@ Consequences:
 - network I/O never waits for observer queue capacity;
 - event delivery is best effort;
 - Stats remain correct if every event is dropped;
-- observer queue retained memory is strictly bounded by configured capacity.
+- observer queue retained memory is strictly bounded by 1024 events by default, or by the explicit configured size.
 
 The worker invokes `Observer.Observe` serially. Serial delivery avoids concurrent callback requirements and bounds callback concurrency at one per Engine.
+
+### Dispatcher shutdown
+
+The event queue is **not closed by shutdown**. Closing a channel concurrently reachable by producers would create a send-on-closed race.
+
+Instead the dispatcher has a one-way stopped state plus a stop signal:
+
+- Engine termination marks the dispatcher stopped so future `emit` calls become no-ops;
+- the worker observes the stop signal and exits when it is not inside user callback code;
+- queued best-effort events may be discarded on stop;
+- producers never send to a channel that can be closed underneath them.
+
+The exact implementation may use atomics and a separate `done/stop` channel, but it must preserve those semantics.
 
 ### Slow observers
 
 A callback that blocks forever may stall that Engine's observer worker, but it cannot stall I/O runtime goroutines. Once the queue fills, further events are dropped and counted.
 
-`Engine.Done()` does not wait for an externally blocked observer callback. Observer execution is telemetry work, not part of the protocol shutdown barrier. On Engine termination, the dispatcher stops accepting new events and may discard queued best-effort events. If an in-progress user callback eventually returns, the worker exits.
+`Engine.Done()` does not wait for an externally blocked observer callback. Observer execution is telemetry work, not part of the protocol shutdown barrier. If an in-progress user callback eventually returns after Engine termination, the worker exits.
 
 This deliberately prevents user telemetry from redefining the meaning of `Done()`.
 
@@ -313,19 +329,19 @@ Emit after an inbound Session has been successfully adopted by the Engine and as
 
 ### Connect
 
-Emit after successful outbound transport connection establishment. A failed outbound connect may emit an event with `ResourceID == 0` and the typed P0-4 error when an observer is enabled.
+Emit after successful outbound transport connection establishment. A failed outbound connect may emit an event with `ResourceID == 0` and the typed P0-4 error when an observer is enabled. Connect duration is measured only when observer delivery is enabled.
 
 ### Handshake
 
-Emit after TLS or WebSocket/WSS handshake completion, successful or failed. Handshake error fields use the existing typed error model. No separate telemetry error type is introduced.
+Emit after TLS or WebSocket/WSS handshake completion, successful or failed. Handshake error fields reuse the existing typed error model. Failed pre-Session handshakes use `ResourceID == 0`; inbound failures retain the Listener ID in `ParentID`. Handshake duration is measured only when observer delivery is enabled.
 
 ### Read
 
-Emit for successfully delivered application messages/packets, after counters have been incremented and before/around callback delivery as defined per backend. Event data never includes the payload.
+Emit one event per successfully delivered application message/packet after Stats counters are updated and immediately before the corresponding application callback. `Bytes` is application payload size.
 
 ### Write
 
-Emit after a successfully completed outbound application message/packet write. Failed writes are reflected in terminal close/error events; P0-5 does not emit an additional required write-error event if doing so would duplicate terminal failure reporting.
+Emit one event per successfully completed outbound application message/packet after Stats counters are updated and before acknowledging a blocking send. `Bytes` is application payload size. Failed writes are represented by the terminal close/error path; P0-5 does not require a duplicate write-error event.
 
 ### Backpressure
 
@@ -337,7 +353,7 @@ Initially used for inbound datagrams intentionally discarded by runtime policy, 
 
 ### Close
 
-Emit exactly once per Listener, Session, and PacketConn finalization, after terminal error ownership and final Stats counters/age are committed. Explicit clean close uses `Err == nil`.
+Emit exactly once per Listener, Session, and PacketConn finalization after terminal error ownership, final queue gauges, and final age are committed. Explicit clean close uses `Err == nil`.
 
 ## Interaction with P0-4 typed errors
 
@@ -368,28 +384,30 @@ Recommended low-cardinality external metric labels are protocol, event/error kin
 
 ## Performance model
 
-Stats add fixed atomic/accounting work at existing ownership transitions. Observer delivery adds no work beyond the nil branch when disabled.
+Stats add fixed atomic/accounting work at existing ownership transitions. Observer delivery adds no allocation-producing work beyond the nil branch when disabled.
 
 Required benchmarks:
 
 1. existing graceful `Send`/`TrySend` allocation gates remain unchanged;
-2. observer-disabled send/read benchmark verifies zero additional allocations/event path;
+2. observer-disabled send/read benchmark verifies zero additional allocations on the event path;
 3. observer-enabled no-op observer benchmark measures CPU/alloc overhead;
 4. saturated observer benchmark proves producer latency remains bounded while `ObserverDroppedEvents` increases;
-5. Stats snapshot benchmark verifies allocation-free snapshots where address/interface copying permits it.
+5. Stats snapshot benchmark verifies zero allocations per snapshot with the chosen value representation.
 
-The acceptance target is semantic first: no per-event allocation when disabled and no regression of the existing running Send/TrySend allocation limits. Enabled observer CPU overhead is reported and tracked rather than hidden behind an arbitrary initial percentage threshold.
+The acceptance target is semantic first: no per-event allocation when disabled and no regression of existing running Send/TrySend allocation limits. Enabled observer CPU overhead is reported and tracked rather than hidden behind an arbitrary initial percentage threshold.
 
 ## Concurrency and lifecycle invariants
 
 - Stats counters are race-safe under concurrent read/write/close/shutdown.
 - No counter transition may acquire locks in an order that can invert existing lifecycle/admission locks.
-- Event enqueue never holds lifecycle, admission, handler, or socket locks while invoking user code; user code is invoked only on the dispatcher worker.
-- Close event emission cannot occur before the terminal error is stable.
+- Event enqueue never invokes user code and never waits for capacity.
+- User observer code runs only on the dispatcher worker.
+- Close event emission cannot occur before terminal error is stable.
 - Queue/frame byte gauges return to zero after resource finalization.
 - Listener current-child gauges return to zero after all child leases release.
 - Engine resource gauges remain driven by the admission owner and reach zero at shutdown completion.
-- Observer queue state is excluded from the Engine protocol shutdown barrier.
+- Observer queue state and callback completion are excluded from the Engine protocol shutdown barrier.
+- Observer shutdown cannot race producers into a send-on-closed panic.
 
 ## Testing strategy
 
@@ -397,8 +415,8 @@ The acceptance target is semantic first: no per-event allocation when disabled a
 
 - root interface compile-time coverage for all new `Stats()` methods;
 - snapshot field semantics and stable final age;
-- Session TCP/TLS/WS/WSS RX/TX message and byte accounting;
-- UDP packet/byte/drop accounting;
+- Session TCP/TLS/WS/WSS RX/TX payload/message accounting;
+- UDP payload/packet/drop accounting;
 - Listener accept/reject/current accounting;
 - Engine admission/rejection snapshot parity with existing internal accounting.
 
@@ -406,12 +424,13 @@ The acceptance target is semantic first: no per-event allocation when disabled a
 
 - event kind/resource/ID/parent correlation;
 - successful accept/connect/handshake/read/write/close coverage;
-- typed error preservation in failed handshake/close events;
+- typed error preservation in failed connect/handshake/close events;
 - backpressure and UDP drop events;
 - bounded queue overflow increments drop count;
 - blocked observer does not stall runtime progress or Engine `Done()`;
 - callback panic is recovered and counted;
-- clean explicit close does not invent an error.
+- clean explicit close does not invent an error;
+- dispatcher stop races cannot panic producers.
 
 ### Race/stress tests
 
@@ -442,7 +461,7 @@ Portable implementation:
 
 ```text
 transport/stats.go      # atomic counters and snapshot builders
-transport/observer.go   # bounded dispatcher, panic isolation
+transport/observer.go   # bounded dispatcher and panic isolation
 transport/options.go    # WithObserver / WithObserverBuffer
 ```
 
@@ -459,6 +478,7 @@ Existing transport files receive only local counting/emission hooks at ownership
 - error taxonomy redesign from P0-4
 - payload capture, packet tracing, or arbitrary user metadata
 - durable/reliable event delivery
+- physical wire-byte/ciphertext accounting
 
 ## Follow-up work
 
