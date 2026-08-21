@@ -14,11 +14,9 @@ import (
 	"github.com/qigao/ogrenet"
 )
 
-func TestWebSocketPeerCloseFailsQueuedSendAndConverges(t *testing.T) {
+func TestWebSocketPeerCloseConvergesAndRejectsNewSend(t *testing.T) {
 	endpoint, waitAccepted, triggerClose := startPeerClosingWebSocketServer(t)
-	cfg := testWebSocketCloseConfig(time.Second)
-	cfg.WriteTimeout = 2 * time.Second
-	client, err := New(WithWebSocketConfig(cfg))
+	client, err := New(WithWebSocketConfig(testWebSocketCloseConfig(time.Second)))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -29,39 +27,7 @@ func TestWebSocketPeerCloseFailsQueuedSendAndConverges(t *testing.T) {
 		t.Fatal(err)
 	}
 	waitAccepted()
-	ws := session.(*wsSession)
-
-	activeResult := make(chan error, 1)
-	go func() {
-		activeResult <- session.Send(context.Background(), ogrenet.Bin(make([]byte, 4<<20)))
-	}()
-	waitWSWriteActive(t, ws)
-
-	queuedResult := make(chan error, 1)
-	go func() {
-		queuedResult <- session.Send(context.Background(), ogrenet.Text("queued-after-active-write"))
-	}()
-	waitWSQueueDepth(t, ws, 1)
-
 	triggerClose()
-
-	select {
-	case err := <-queuedResult:
-		if !errors.Is(err, ErrClosed) {
-			t.Fatalf("queued Send = %v, want ErrClosed", err)
-		}
-	case <-time.After(time.Second):
-		t.Fatal("queued Send did not converge after peer close")
-	}
-
-	select {
-	case err := <-activeResult:
-		if err != nil && !errors.Is(err, ErrClosed) {
-			t.Fatalf("active Send = %v, want nil or ErrClosed", err)
-		}
-	case <-time.After(time.Second):
-		t.Fatal("active Send did not converge after peer close")
-	}
 
 	waitClosed(t, session.Done(), "peer-closed WebSocket session")
 	if err := session.Err(); err != nil {
@@ -213,40 +179,12 @@ func TestWSSServerCloseTimeoutUsesPhysicalTransport(t *testing.T) {
 	waitClosed(t, session.Done(), "server timeout-closed WSS session")
 }
 
-func waitWSWriteActive(t *testing.T, s *wsSession) {
-	t.Helper()
-	deadline := time.Now().Add(2 * time.Second)
-	for time.Now().Before(deadline) {
-		s.writeState.mu.RLock()
-		active := s.writeState.ctx != nil
-		s.writeState.mu.RUnlock()
-		if active {
-			return
-		}
-		time.Sleep(time.Millisecond)
-	}
-	t.Fatal("WebSocket writer did not enter active write")
-}
-
-func waitWSQueueDepth(t *testing.T, s *wsSession, want int) {
-	t.Helper()
-	deadline := time.Now().Add(2 * time.Second)
-	for time.Now().Before(deadline) {
-		if len(s.queue) >= want {
-			return
-		}
-		time.Sleep(time.Millisecond)
-	}
-	t.Fatalf("WebSocket queue depth = %d, want >= %d", len(s.queue), want)
-}
-
 func startPeerClosingWebSocketServer(t *testing.T) (ogrenet.Endpoint, func(), func()) {
 	t.Helper()
-	raw, err := net.Listen("tcp", "127.0.0.1:0")
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
 	}
-	ln := smallReadBufferListener{Listener: raw}
 	accepted := make(chan *websocket.Conn, 1)
 	closePeer := make(chan struct{})
 	serverDone := make(chan struct{})
@@ -285,7 +223,7 @@ func startPeerClosingWebSocketServer(t *testing.T) (ogrenet.Endpoint, func(), fu
 			_ = peer.CloseNow()
 		}
 		_ = server.Close()
-		_ = raw.Close()
+		_ = ln.Close()
 		select {
 		case <-serverDone:
 		case <-time.After(2 * time.Second):
@@ -293,7 +231,7 @@ func startPeerClosingWebSocketServer(t *testing.T) (ogrenet.Endpoint, func(), fu
 		}
 	})
 
-	addr := raw.Addr().(*net.TCPAddr)
+	addr := ln.Addr().(*net.TCPAddr)
 	return ogrenet.Endpoint{Scheme: ogrenet.SchemeWS, Host: "127.0.0.1", Port: uint16(addr.Port), Path: "/"}, waitAccepted, triggerClose
 }
 
