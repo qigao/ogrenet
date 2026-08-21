@@ -341,6 +341,7 @@ func (l *activityLease) release() bool {
 	case LimitUpgrades:
 		if a.upgrades > 0 {
 			a.upgrades--
+		}
 	}
 	a.mu.Unlock()
 	return true
@@ -361,7 +362,7 @@ type admissionSnapshot struct {
 	RejectedQueuedBytes uint64
 }
 
-func (a *admissionController) snapshot() (out admissionSnapshot) {
+func (a *admissionController) snapshot() admissionSnapshot {
 	a.mu.Lock()
 	opening, active, draining, handshakes, upgrades := a.opening, a.active, a.draining, a.handshakes, a.upgrades
 	a.mu.Unlock()
