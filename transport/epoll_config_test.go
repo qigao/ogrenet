@@ -76,3 +76,10 @@ func TestResolveEpollConfigNormalizesNonPositiveGOMAXPROCS(t *testing.T) {
 		t.Fatalf("got pollers=%d callbackWorkers=%d", got.pollers, got.callbackWorkers)
 	}
 }
+
+func TestNewEpollRejectsInvalidConfig(t *testing.T) {
+	_, err := NewEpoll(EpollConfig{Pollers: -1})
+	if !errors.Is(err, ErrInvalidEpollConfig) {
+		t.Fatalf("err=%v", err)
+	}
+}
