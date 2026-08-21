@@ -124,13 +124,13 @@ func TestTLSHandshakeEventsUseSessionAndListenerCorrelation(t *testing.T) {
 		t.Fatal("TLS accept timeout")
 	}
 
-	clientHandshake := waitObservedEvent(t, clientEvents, func(event ogrenet.Event) bool { return event.Kind == ogrenet.EventHandshake })
-	if clientHandshake.ResourceID != clientSession.ID() || clientHandshake.ParentID != 0 || clientHandshake.Protocol != ogrenet.SchemeTLS || clientHandshake.Duration <= 0 || clientHandshake.Err != nil {
-		t.Fatalf("client handshake event=%+v", clientHandshake)
-	}
 	clientConnect := waitObservedEvent(t, clientEvents, func(event ogrenet.Event) bool { return event.Kind == ogrenet.EventConnect })
 	if clientConnect.ResourceID != clientSession.ID() || clientConnect.Duration <= 0 || clientConnect.Err != nil {
 		t.Fatalf("client connect event=%+v", clientConnect)
+	}
+	clientHandshake := waitObservedEvent(t, clientEvents, func(event ogrenet.Event) bool { return event.Kind == ogrenet.EventHandshake })
+	if clientHandshake.ResourceID != clientSession.ID() || clientHandshake.ParentID != 0 || clientHandshake.Protocol != ogrenet.SchemeTLS || clientHandshake.Duration <= 0 || clientHandshake.Err != nil {
+		t.Fatalf("client handshake event=%+v", clientHandshake)
 	}
 
 	serverHandshake := waitObservedEvent(t, serverEvents, func(event ogrenet.Event) bool { return event.Kind == ogrenet.EventHandshake })
