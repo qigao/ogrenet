@@ -2,75 +2,75 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Establish the Linux native Engine public construction/capability contract, a reusable public-contract parity harness, and a small shared semantic core without implementing native socket I/O or changing portable transport behavior.
+**Goal:** Establish the Linux native Engine construction/capability contract, a reusable public-contract parity harness, and a small shared semantic core without implementing native socket I/O or changing portable transport behavior.
 
-**Architecture:** `transport.New()` stays the portable reference backend. `transport.NewEpoll(EpollConfig, ...Option)` is introduced explicitly, but P1-6A only provides construction/capability scaffolding; no TCP/UDP native-support claim is made yet. Pure ownership primitives (`SendGate`, `Lifecycle`, `ObserverDispatcher`) move to `internal/runtimecore` behind compatibility wrappers so the existing portable implementation keeps its private call shape and P0 behavior while later native reactors can consume the same semantic owners directly.
+**Architecture:** `transport.New()` remains the portable reference backend. `transport.NewEpoll(EpollConfig, ...Option)` is explicit and never selected automatically. P1-6A introduces only construction/capability scaffolding plus `internal/runtimecore` ownership primitives (`SendGate`, `Lifecycle`, `ObserverDispatcher`) behind compatibility wrappers; native accept/connect/read/write starts only in 6B.
 
-**Tech Stack:** Go 1.25+, standard library, `golang.org/x/sys` as already present, existing `ogrenet` root contracts, existing `transport` package, Go race detector and benchmark gates.
+**Tech Stack:** Go 1.25+, standard library, existing `golang.org/x/sys`, root `ogrenet` contracts, existing `transport` package, race detector and benchmark gates.
 
 **Spec:** `docs/superpowers/specs/2026-08-22-linux-native-engine-design.md`
 
 ## Global Constraints
 
-- `transport.New(opts...)` always remains the portable backend; no backend switch or automatic selection is introduced.
-- P1-6A performs no native socket accept/connect/read/write work and makes no native TCP/UDP support claim.
-- The eventual Linux native backend supports TCP + UDP only; TLS/WS/WSS must never silently fall back to portable I/O.
+- `transport.New(opts...)` always means the portable backend.
+- 6A performs no native socket accept/connect/read/write and makes no native TCP/UDP support claim.
+- The eventual Linux backend supports TCP + UDP first; TLS/WS/WSS never fall back to portable I/O.
 - `internal/runtimecore` must not import `transport`, `epoll`, `kqueue`, `iocp`, TLS, WebSocket, DNS, or own socket syscalls.
-- Existing P0 limits, timeout, graceful lifecycle, typed error, Stats, Observer, allocation, and `Done()` semantics must remain unchanged for `transport.New()`.
-- Do not introduce a generic cross-platform poller abstraction.
-- Do not introduce lock-free queues, pooling, scatter/gather, Happy Eyeballs, proxy, QUIC, or HTTP work in 6A.
-- Every production-code task follows RED -> GREEN -> focused regression/race test -> commit.
-- Existing Linux Go 1.25/1.26, Windows, macOS, FreeBSD runtime, GmSSL, and cross-compile gates remain intact.
+- Existing P0 limits, timeout, graceful lifecycle, typed error, Stats, Observer, allocation, and `Done()` semantics remain unchanged for the portable backend.
+- No fake cross-platform poller abstraction.
+- No lock-free queue, buffer pool, scatter/gather, Happy Eyeballs, proxy, QUIC, or HTTP work in 6A.
+- Every production-code task follows RED -> GREEN -> focused regression/race verification -> commit.
+- Existing Linux Go 1.25/1.26, Windows, macOS, FreeBSD runtime, GmSSL, and cross-compile gates stay intact.
 
----
-
-## File Structure Locked by 6A
+## File Structure
 
 ```text
 internal/runtimecore/
-    gate.go                  pure send-admission close/drain ownership
+    gate.go
     gate_test.go
-    lifecycle.go             protocol-independent graceful/abort state ownership
+    lifecycle.go
     lifecycle_test.go
-    observer.go              bounded best-effort observer dispatcher
+    observer.go
     observer_test.go
+    dependency_test.go
 
 transport/
-    epoll_config.go          cross-platform EpollConfig/default/validation contract
+    epoll_config.go
+    epoll_config_test.go
     epoll_constructor_linux.go
     epoll_constructor_stub.go
     epoll_engine_phase6a_linux.go
-    epoll_config_test.go
     epoll_capability_linux_test.go
-    gate.go                  compatibility wrapper over runtimecore.SendGate
-    lifecycle.go             compatibility wrapper over runtimecore.Lifecycle
-    observer.go              transport options/setup + compatibility wrapper
-    stats.go                 only adjusted to read observer health through wrapper methods
-
-transport_test package files:
-    contract_harness_test.go backend-neutral factory/profile harness
-    contract_tcp_test.go     public TCP reference-contract cases
-    contract_udp_test.go     public UDP reference-contract cases
+    epoll_stub_test.go
+    contract_harness_test.go       // package transport_test
+    contract_tcp_test.go           // package transport_test
+    contract_udp_test.go           // package transport_test
+    contract_native_linux_test.go  // package transport_test
+    gate.go
+    lifecycle.go
+    lifecycle_test.go
+    observer.go
+    stats.go
+    errors.go
 ```
 
-`quota.go`, `limits.go`, admission leases, and Stats counters intentionally remain in `transport` during 6A. They directly encode public `transport` error identities or snapshots; extracting them now would require artificial factories/interfaces. The spec explicitly allows incremental extraction only where the boundary is clean.
+`quota.go`, `limits.go`, admission leases, and Stats counters intentionally remain in `transport` during 6A. They directly encode `transport` error identities/snapshots, and the future epoll implementation also lives in `transport`, so moving them now would create artificial factories/interfaces without a clean dependency benefit.
 
 ---
 
-### Task 1: Freeze the Epoll constructor, config, and capability contract
+### Task 1: Freeze Epoll config, constructor, and capability semantics
 
 **Files:**
 - Create: `transport/epoll_config.go`
 - Create: `transport/epoll_config_test.go`
-- Create: `transport/epoll_constructor_stub.go`
 - Create: `transport/epoll_constructor_linux.go`
+- Create: `transport/epoll_constructor_stub.go`
 - Create: `transport/epoll_engine_phase6a_linux.go`
 - Create: `transport/epoll_capability_linux_test.go`
+- Create: `transport/epoll_stub_test.go`
 - Modify: `transport/errors.go`
 
 **Interfaces:**
-- Consumes: existing `Option`, `config`, `defaultConfig()`, `Limits.validate()`, root `ogrenet.Engine` interfaces.
-- Produces:
 
 ```go
 type EpollConfig struct {
@@ -89,7 +89,7 @@ var ErrProtocolUnsupported error
 var ErrInvalidEpollConfig error
 ```
 
-Package-private resolved config:
+Package-private resolved form:
 
 ```go
 type resolvedEpollConfig struct {
@@ -106,7 +106,7 @@ func resolveEpollConfig(cfg EpollConfig, gomaxprocs int) (resolvedEpollConfig, e
 
 - [ ] **Step 1: Write RED config tests**
 
-In `transport/epoll_config_test.go`, add table-driven tests that lock exact defaults and invalid values:
+`transport/epoll_config_test.go`:
 
 ```go
 func TestResolveEpollConfigDefaults(t *testing.T) {
@@ -123,11 +123,16 @@ func TestResolveEpollConfigDefaults(t *testing.T) {
     if got != want { t.Fatalf("got %+v want %+v", got, want) }
 }
 
+func TestResolveEpollConfigExplicitValues(t *testing.T) {
+    cfg := EpollConfig{Pollers: 2, EventBatch: 33, CallbackWorkers: 3, CallbackQueue: 7, IOBudgetBytes: 4096, IOBudgetOps: 9}
+    got, err := resolveEpollConfig(cfg, 99)
+    if err != nil { t.Fatal(err) }
+    want := resolvedEpollConfig{pollers: 2, eventBatch: 33, callbackWorkers: 3, callbackQueue: 7, ioBudgetBytes: 4096, ioBudgetOps: 9}
+    if got != want { t.Fatalf("got %+v want %+v", got, want) }
+}
+
 func TestResolveEpollConfigRejectsNegativeValues(t *testing.T) {
-    cases := []EpollConfig{
-        {Pollers: -1}, {EventBatch: -1}, {CallbackWorkers: -1},
-        {CallbackQueue: -1}, {IOBudgetBytes: -1}, {IOBudgetOps: -1},
-    }
+    cases := []EpollConfig{{Pollers: -1}, {EventBatch: -1}, {CallbackWorkers: -1}, {CallbackQueue: -1}, {IOBudgetBytes: -1}, {IOBudgetOps: -1}}
     for _, cfg := range cases {
         if _, err := resolveEpollConfig(cfg, 4); !errors.Is(err, ErrInvalidEpollConfig) {
             t.Fatalf("cfg=%+v err=%v", cfg, err)
@@ -136,21 +141,19 @@ func TestResolveEpollConfigRejectsNegativeValues(t *testing.T) {
 }
 ```
 
-Also test `gomaxprocs <= 0` resolves as one worker/poller and explicit positive values override defaults exactly.
+Also assert `gomaxprocs <= 0` resolves to one poller/worker. Add an overflow case using `CallbackWorkers: math.MaxInt` with default `CallbackQueue` and require `ErrInvalidEpollConfig` rather than integer wrap.
 
 - [ ] **Step 2: Run RED config tests**
-
-Run:
 
 ```bash
 go test ./transport -run '^TestResolveEpollConfig' -count=1
 ```
 
-Expected: FAIL because `EpollConfig`, `resolvedEpollConfig`, and `resolveEpollConfig` do not exist.
+Expected: FAIL because the new types/functions do not exist.
 
-- [ ] **Step 3: Implement config + sentinels minimally**
+- [ ] **Step 3: Implement config + sentinels**
 
-Add to `transport/errors.go`:
+Add to the existing `transport/errors.go` var block:
 
 ```go
 ErrBackendUnsupported  = errors.New("transport: backend unsupported on this platform")
@@ -158,11 +161,20 @@ ErrProtocolUnsupported = errors.New("transport: protocol unsupported by backend"
 ErrInvalidEpollConfig  = errors.New("transport: invalid epoll configuration")
 ```
 
-Create `transport/epoll_config.go` with the public struct and deterministic resolver. Use checked arithmetic for `4 * CallbackWorkers`; if multiplication would overflow `int`, return `ErrInvalidEpollConfig`. Clamp only the default callback queue formula to `[64, 1024]`; explicit positive `CallbackQueue` is accepted as-is.
+`resolveEpollConfig` resolves zero values exactly as the spec states:
+
+```text
+Pollers         = max(1, gomaxprocs)
+EventBatch      = 256
+CallbackWorkers = max(1, gomaxprocs)
+CallbackQueue   = min(1024, max(64, 4 * CallbackWorkers))
+IOBudgetBytes   = 256 KiB
+IOBudgetOps     = 64
+```
+
+Check `4 * CallbackWorkers` before multiplying. Explicit positive `CallbackQueue` is accepted as-is; only the default formula is clamped.
 
 - [ ] **Step 4: Run config tests GREEN**
-
-Run:
 
 ```bash
 go test ./transport -run '^TestResolveEpollConfig' -count=1
@@ -170,9 +182,9 @@ go test ./transport -run '^TestResolveEpollConfig' -count=1
 
 Expected: PASS.
 
-- [ ] **Step 5: Write RED cross-platform constructor/capability tests**
+- [ ] **Step 5: Write RED constructor/capability tests**
 
-In `transport/epoll_config_test.go`, verify negative config fails before any backend-specific construction:
+Cross-platform validation in `epoll_config_test.go`:
 
 ```go
 func TestNewEpollRejectsInvalidConfig(t *testing.T) {
@@ -181,11 +193,14 @@ func TestNewEpollRejectsInvalidConfig(t *testing.T) {
 }
 ```
 
-In Linux-only `transport/epoll_capability_linux_test.go`, lock final unsupported-scheme semantics even though TCP/UDP I/O is not implemented yet:
+Linux-only `epoll_capability_linux_test.go`:
 
 ```go
 func TestEpollRejectsTLSWSWSSWithoutFallback(t *testing.T) {
-    e, err := NewEpoll(EpollConfig{Pollers: 1})
+    var observed atomic.Uint64
+    e, err := NewEpoll(EpollConfig{Pollers: 1}, WithObserver(ogrenet.ObserverFunc(func(ogrenet.Event) {
+        observed.Add(1)
+    })))
     if err != nil { t.Fatal(err) }
     t.Cleanup(func() { _ = e.Close() })
 
@@ -195,24 +210,49 @@ func TestEpollRejectsTLSWSWSSWithoutFallback(t *testing.T) {
             t.Fatalf("scheme=%s err=%v", scheme, err)
         }
     }
+    if got := observed.Load(); got != 0 { t.Fatalf("unsupported operations emitted %d events", got) }
+}
+
+func TestEpollMethodProtocolMismatch(t *testing.T) {
+    e, err := NewEpoll(EpollConfig{Pollers: 1})
+    if err != nil { t.Fatal(err) }
+    defer e.Close()
+    if _, err := e.Dial(context.Background(), ogrenet.Endpoint{Scheme: ogrenet.SchemeUDP, Host: "127.0.0.1", Port: 1}, nil); !errors.Is(err, ErrProtocolMismatch) {
+        t.Fatalf("stream/udp mismatch err=%v", err)
+    }
+    if _, err := e.DialPacket(context.Background(), ogrenet.Endpoint{Scheme: ogrenet.SchemeTCP, Host: "127.0.0.1", Port: 1}, nil); !errors.Is(err, ErrProtocolMismatch) {
+        t.Fatalf("packet/tcp mismatch err=%v", err)
+    }
 }
 ```
 
-Add non-Linux build coverage in `epoll_constructor_stub.go` through existing cross-compilation: valid config returns `ErrBackendUnsupported`; options are deliberately not applied on unsupported platforms.
+Non-Linux `epoll_stub_test.go`:
 
-- [ ] **Step 6: Run RED constructor tests**
+```go
+//go:build !linux
 
-Run on Linux:
+package transport
+
+func TestNewEpollUnsupportedPlatformDoesNotApplyOptions(t *testing.T) {
+    applied := false
+    opt := func(*config) error { applied = true; return nil }
+    _, err := NewEpoll(EpollConfig{}, opt)
+    if !errors.Is(err, ErrBackendUnsupported) { t.Fatalf("err=%v", err) }
+    if applied { t.Fatal("option applied on unsupported platform") }
+}
+```
+
+- [ ] **Step 6: Run RED constructor tests on Linux**
 
 ```bash
-go test ./transport -run '^Test(NewEpoll|EpollRejects)' -count=1
+go test ./transport -run '^Test(NewEpoll|Epoll)' -count=1
 ```
 
 Expected: FAIL because `NewEpoll` does not exist.
 
-- [ ] **Step 7: Implement constructor scaffolding without native I/O**
+- [ ] **Step 7: Implement constructors and the phase-6A Engine scaffold**
 
-`transport/epoll_constructor_stub.go`:
+`epoll_constructor_stub.go`:
 
 ```go
 //go:build !linux
@@ -227,40 +267,66 @@ func NewEpoll(cfg EpollConfig, opts ...Option) (ogrenet.Engine, error) {
 }
 ```
 
-`transport/epoll_constructor_linux.go` resolves `runtime.GOMAXPROCS(0)`, applies the same `Option` loop and limits validation as `New`, then returns a phase-6A `epollEngine` scaffold.
+Linux `NewEpoll` must resolve `runtime.GOMAXPROCS(0)`, apply the same `Option` loop as `New`, validate `cfg.limits`, and return `*epollEngine`.
 
-`transport/epoll_engine_phase6a_linux.go` implements the root `Engine` interface with Engine lifecycle/Stats zero-value behavior but no native socket operations. For the temporary 6A scaffold:
+The 6A scaffold implements `ogrenet.Engine` with no socket I/O:
 
-- `tls/ws/wss` from stream methods return `ErrProtocolUnsupported` exactly;
-- stream/packet method mismatch continues to return `ErrProtocolMismatch`;
-- TCP/UDP entry points also return `ErrProtocolUnsupported` **only as a branch-local 6A scaffold**; no release/PR may describe TCP/UDP as supported until 6B/6C replace those paths;
-- `Close` is idempotent, `Done` closes once, `Shutdown(ctx)` respects nil/canceled contexts using existing sentinels/context causes, and `Stats()` returns zero.
+```go
+type epollEngine struct {
+    cfg      config
+    epollCfg resolvedEpollConfig
+    done     chan struct{}
+    once     sync.Once
+}
 
-This temporary scaffold is permitted because `feat/linux-native-engine` is not released at 6A and the #57 definition of done requires 6B/6C before readiness.
-
-- [ ] **Step 8: Run constructor/capability tests GREEN and compile all platforms**
-
-Run:
-
-```bash
-go test ./transport -run '^Test(NewEpoll|EpollRejects)' -count=1
-GOOS=windows GOARCH=amd64 go test ./transport -run '^$'
-GOOS=darwin GOARCH=arm64 go test ./transport -run '^$'
-GOOS=freebsd GOARCH=amd64 go test ./transport -run '^$'
+func (e *epollEngine) Stats() ogrenet.EngineStats { return ogrenet.EngineStats{} }
+func (e *epollEngine) Done() <-chan struct{} { return e.done }
+func (e *epollEngine) Close() error { e.once.Do(func(){ close(e.done) }); return nil }
+func (e *epollEngine) Shutdown(ctx context.Context) error {
+    if ctx == nil { return ErrNilContext }
+    if cause := context.Cause(ctx); cause != nil { return cause }
+    _ = e.Close()
+    select {
+    case <-e.done:
+        return nil
+    case <-ctx.Done():
+        return context.Cause(ctx)
+    }
+}
 ```
 
-Expected: PASS/compile PASS.
+For the branch-local 6A scaffold only:
+
+```text
+Listen/Dial(tls|ws|wss)        -> ErrProtocolUnsupported
+Listen/Dial(udp)               -> ErrProtocolMismatch
+ListenPacket/DialPacket(tcp/...) -> ErrProtocolMismatch unless scheme==udp
+TCP and UDP matching methods   -> ErrProtocolUnsupported until 6B/6C replace the scaffold
+```
+
+Add `var _ ogrenet.Engine = (*epollEngine)(nil)`. No PR/release text may describe TCP/UDP as supported at this checkpoint.
+
+- [ ] **Step 8: Run Linux tests and compile non-Linux test binaries**
+
+```bash
+go test ./transport -run '^Test(NewEpoll|Epoll)' -count=1
+GOOS=windows GOARCH=amd64 go test -c ./transport -o /tmp/ogrenet-transport-windows-amd64.test.exe
+GOOS=darwin GOARCH=arm64 go test -c ./transport -o /tmp/ogrenet-transport-darwin-arm64.test
+GOOS=freebsd GOARCH=amd64 go test -c ./transport -o /tmp/ogrenet-transport-freebsd-amd64.test
+```
+
+Expected: Linux PASS; all cross-compiled test binaries build successfully. Windows/macOS CI later executes `epoll_stub_test.go` natively.
 
 - [ ] **Step 9: Commit**
 
 ```bash
-git add -- transport/errors.go transport/epoll_config.go transport/epoll_config_test.go transport/epoll_constructor_stub.go transport/epoll_constructor_linux.go transport/epoll_engine_phase6a_linux.go transport/epoll_capability_linux_test.go
+git add -- transport/errors.go transport/epoll_config.go transport/epoll_config_test.go transport/epoll_constructor_linux.go transport/epoll_constructor_stub.go transport/epoll_engine_phase6a_linux.go transport/epoll_capability_linux_test.go transport/epoll_stub_test.go
 git commit -m "runtime: define explicit epoll backend contract"
 ```
 
 ---
 
-### Task 2: Add the backend-neutral public contract harness
+### Task 2: Add public-only portable contract characterization harness
 
 **Files:**
 - Create: `transport/contract_harness_test.go`
@@ -268,14 +334,9 @@ git commit -m "runtime: define explicit epoll backend contract"
 - Create: `transport/contract_udp_test.go`
 
 **Interfaces:**
-- Consumes: only public `ogrenet` root interfaces plus public `transport.New`/options.
-- Produces:
 
 ```go
-type contractProfile struct {
-    TCP bool
-    UDP bool
-}
+type contractProfile struct { TCP, UDP bool }
 
 type engineFactory struct {
     name    string
@@ -283,14 +344,14 @@ type engineFactory struct {
     new     func(t *testing.T, opts ...transport.Option) ogrenet.Engine
 }
 
-func runEngineContracts(t *testing.T, factory engineFactory)
+func runEngineContracts(t *testing.T, f engineFactory)
+func runTCPContract(t *testing.T, f engineFactory)
+func runUDPContract(t *testing.T, f engineFactory)
 ```
 
-The files use `package transport_test` so contract tests cannot depend on portable/private implementation details.
+All three files use `package transport_test`; they may import root `ogrenet` and public `transport`, but no private helper from package `transport`.
 
-- [ ] **Step 1: Write the harness and RED reference contract cases**
-
-`contract_harness_test.go` defines only the portable factory initially:
+- [ ] **Step 1: Add the harness and portable factory**
 
 ```go
 func portableFactory() engineFactory {
@@ -307,59 +368,113 @@ func portableFactory() engineFactory {
     }
 }
 
-func TestEnginePublicContracts(t *testing.T) {
-    runEngineContracts(t, portableFactory())
+func runEngineContracts(t *testing.T, f engineFactory) {
+    t.Run(f.name+"/tcp", func(t *testing.T) { if f.profile.TCP { runTCPContract(t, f) } })
+    t.Run(f.name+"/udp", func(t *testing.T) { if f.profile.UDP { runUDPContract(t, f) } })
+}
+
+func TestEnginePublicContracts(t *testing.T) { runEngineContracts(t, portableFactory()) }
+```
+
+This is characterization of already-working public behavior, so it is expected to pass immediately; it is not a production-code RED step.
+
+- [ ] **Step 2: Implement the TCP public contract case**
+
+Use only public APIs. The test shape is fixed:
+
+```go
+func runTCPContract(t *testing.T, f engineFactory) {
+    ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+    defer cancel()
+    e := f.new(t)
+
+    serverSession := make(chan ogrenet.Session, 1)
+    serverClosed := make(chan error, 1)
+    ln, err := e.Listen(ctx, ogrenet.Endpoint{Scheme: ogrenet.SchemeTCP, Host: "127.0.0.1", Port: 0}, ogrenet.HandlerFuncs{
+        Open: func(s ogrenet.Session) { serverSession <- s },
+        Message: func(s ogrenet.Session, m ogrenet.Message) {
+            if err := s.Send(context.Background(), m); err != nil { serverClosed <- err }
+        },
+        Close: func(_ ogrenet.Session, err error) { serverClosed <- err },
+    })
+    if err != nil { t.Fatal(err) }
+    defer ln.Close()
+
+    received := make(chan ogrenet.Message, 1)
+    client, err := e.Dial(ctx, ln.Endpoint(), ogrenet.HandlerFuncs{Message: func(_ ogrenet.Session, m ogrenet.Message) { received <- m }})
+    if err != nil { t.Fatal(err) }
+    peer := <-serverSession
+
+    if err := client.Send(ctx, ogrenet.Text("contract-ping")); err != nil { t.Fatal(err) }
+    select {
+    case msg := <-received:
+        if string(msg.Data) != "contract-ping" { t.Fatalf("payload=%q", msg.Data) }
+    case <-ctx.Done():
+        t.Fatal(context.Cause(ctx))
+    }
+
+    cs := client.Stats()
+    if cs.MessagesTX != 1 || cs.MessagesRX != 1 || cs.BytesTX == 0 || cs.BytesRX == 0 { t.Fatalf("client stats=%+v", cs) }
+
+    _ = client.Close()
+    _ = peer.Close()
+    <-client.Done()
+    <-peer.Done()
+    if client.Err() != nil { t.Fatalf("client err=%v", client.Err()) }
 }
 ```
 
-`contract_tcp_test.go` should include at least one complete public-only TCP lifecycle case with:
+If the existing public API uses the bound endpoint through `ln.Endpoint()` as expected, keep it. If the portable characterization proves `Endpoint()` does not carry the bound ephemeral port, construct the dial endpoint from `ln.Addr()` in the harness only; do not change production semantics merely to suit the fixture.
 
-- loopback listener on port 0;
-- accepted child + outbound Dial;
-- `OnOpen -> OnMessage -> OnClose` order;
-- payload echo;
-- `Stats().BytesRX/TX` and `MessagesRX/TX` nonzero/consistent;
-- `Done()` and stable `Err()` after close.
+- [ ] **Step 3: Implement connected + unconnected UDP public cases**
 
-`contract_udp_test.go` should include both connected and unconnected UDP cases:
-
-- `DialPacket` Send/receive path;
-- `ListenPacket` SendTo/receive path;
-- payload/packet Stats accounting;
-- deterministic Close/Done.
-
-Do not copy portable implementation helpers from package `transport`; build fixtures with public APIs and standard `net` addresses only.
-
-- [ ] **Step 2: Run the contract suite**
-
-Run:
-
-```bash
-go test ./transport -run '^TestEnginePublicContracts$' -count=1
-```
-
-Expected on the first attempt: any failure identifies an assumption in the new public-only harness. Fix the harness/fixture, not production semantics, unless the test demonstrates a real root-contract violation.
-
-- [ ] **Step 3: Add contract-profile skips as explicit capability gates**
-
-Each protocol-specific helper starts with an explicit profile check:
+Representative connected echo:
 
 ```go
-if !factory.profile.TCP { return }
+func runUDPContract(t *testing.T, f engineFactory) {
+    ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+    defer cancel()
+    e := f.new(t)
+
+    serverRecv := make(chan []byte, 1)
+    server, err := e.ListenPacket(ctx, ogrenet.Endpoint{Scheme: ogrenet.SchemeUDP, Host: "127.0.0.1", Port: 0}, ogrenet.PacketHandlerFuncs{
+        Packet: func(pc ogrenet.PacketConn, peer net.Addr, p ogrenet.Packet) {
+            serverRecv <- append([]byte(nil), p.Data...)
+            _ = pc.SendTo(context.Background(), peer, p)
+        },
+    })
+    if err != nil { t.Fatal(err) }
+    defer server.Close()
+
+    clientRecv := make(chan []byte, 1)
+    client, err := e.DialPacket(ctx, server.Endpoint(), ogrenet.PacketHandlerFuncs{
+        Packet: func(_ ogrenet.PacketConn, _ net.Addr, p ogrenet.Packet) { clientRecv <- append([]byte(nil), p.Data...) },
+    })
+    if err != nil { t.Fatal(err) }
+    defer client.Close()
+
+    if err := client.Send(ctx, ogrenet.Packet{Data: []byte("udp-contract")}); err != nil { t.Fatal(err) }
+    select { case <-serverRecv: case <-ctx.Done(): t.Fatal(context.Cause(ctx)) }
+    select { case got := <-clientRecv: if string(got) != "udp-contract" { t.Fatalf("payload=%q", got) }; case <-ctx.Done(): t.Fatal(context.Cause(ctx)) }
+
+    cs := client.Stats()
+    if cs.PacketsTX != 1 || cs.PacketsRX != 1 || cs.BytesTX == 0 || cs.BytesRX == 0 { t.Fatalf("client stats=%+v", cs) }
+
+    if err := client.SendTo(ctx, server.LocalAddr(), ogrenet.Packet{Data: []byte("x")}); !errors.Is(err, transport.ErrPeerMismatch) {
+        t.Fatalf("connected SendTo mismatch err=%v", err)
+    }
+}
 ```
 
-Do not use runtime error probing as capability discovery. In 6B the Linux factory will join with `TCP:true`; in 6C it will become `TCP:true, UDP:true`.
+The server side itself exercises the unconnected `ListenPacket` + `SendTo` path. Add deterministic `Close`/`Done` assertions for both sockets after the echo.
 
-- [ ] **Step 4: Run public contract suite + existing package tests**
-
-Run:
+- [ ] **Step 4: Run characterization repeatedly**
 
 ```bash
 go test ./transport -run '^TestEnginePublicContracts$' -count=5
-go test ./transport -count=1
 ```
 
-Expected: PASS.
+Expected: PASS. If the fixture exposes an incorrect assumption, fix only the public test fixture unless an actual root-contract bug is demonstrated.
 
 - [ ] **Step 5: Commit**
 
@@ -370,7 +485,7 @@ git commit -m "test: add backend-neutral transport contract harness"
 
 ---
 
-### Task 3: Extract SendGate into `internal/runtimecore` without changing portable call sites
+### Task 3: Extract `SendGate` into `internal/runtimecore`
 
 **Files:**
 - Create: `internal/runtimecore/gate.go`
@@ -378,59 +493,66 @@ git commit -m "test: add backend-neutral transport contract harness"
 - Modify: `transport/gate.go`
 
 **Interfaces:**
-- Produces:
 
 ```go
-package runtimecore
-
-type SendGate struct { /* private state */ }
-func NewSendGate() *SendGate
+type SendGate struct { /* private */ }
+func NewSendGate() SendGate
 func (g *SendGate) Enter() bool
 func (g *SendGate) Leave()
 func (g *SendGate) Close() <-chan struct{}
 func (g *SendGate) Done() <-chan struct{}
 ```
 
-- `transport.sendGate` remains package-private and preserves `enter/leave/close/done` call sites through delegation.
+Returning the value keeps the transport wrapper at one heap object per gate rather than allocating a wrapper plus a separately allocated core object.
 
-- [ ] **Step 1: Write RED runtimecore gate tests**
-
-Cover:
+- [ ] **Step 1: Write RED core tests**
 
 ```go
-func TestSendGateCloseWaitsForActiveOwners(t *testing.T)
-func TestSendGateRejectsEnterAfterClose(t *testing.T)
-func TestSendGateCloseIsIdempotent(t *testing.T)
+func TestSendGateCloseWaitsForActiveOwners(t *testing.T) {
+    g := NewSendGate()
+    if !g.Enter() || !g.Enter() { t.Fatal("enter rejected") }
+    done := g.Close()
+    select { case <-done: t.Fatal("closed with active owners"); default: }
+    g.Leave()
+    select { case <-done: t.Fatal("closed with one active owner"); default: }
+    g.Leave()
+    select { case <-done: default: t.Fatal("did not close after final leave") }
+}
+
+func TestSendGateRejectsEnterAfterClose(t *testing.T) {
+    g := NewSendGate(); <-g.Close()
+    if g.Enter() { t.Fatal("enter succeeded after close") }
+}
+
+func TestSendGateCloseIsIdempotent(t *testing.T) {
+    g := NewSendGate()
+    a, b := g.Close(), g.Close()
+    if a != b { t.Fatal("close returned different barriers") }
+}
 ```
 
-The first test must deterministically enter twice, close, assert `Done` is not closed, leave once, assert still open, leave second time, assert closed.
-
-- [ ] **Step 2: Run RED gate tests**
+- [ ] **Step 2: Run RED**
 
 ```bash
 go test ./internal/runtimecore -run '^TestSendGate' -count=1
 ```
 
-Expected: FAIL because package/type does not exist.
+Expected: FAIL because the package/type does not exist.
 
-- [ ] **Step 3: Implement `runtimecore.SendGate`**
+- [ ] **Step 3: Implement exact current gate semantics**
 
-Move the current mutex/active/drained ownership semantics exactly, renaming methods to exported internal-package names. Do not add atomics, contexts, callbacks, or new states.
+Copy the current mutex/closed/active/drained-channel ownership only; no new states, contexts, callbacks, or atomics.
 
-- [ ] **Step 4: Run runtimecore gate tests GREEN**
+- [ ] **Step 4: Run core tests GREEN**
 
 ```bash
 go test ./internal/runtimecore -run '^TestSendGate' -count=1
 ```
 
-Expected: PASS.
-
-- [ ] **Step 5: Replace `transport/gate.go` implementation with compatibility delegation**
-
-Use:
+- [ ] **Step 5: Replace `transport/gate.go` with a compatibility wrapper**
 
 ```go
-type sendGate struct { core *runtimecore.SendGate }
+type sendGate struct { core runtimecore.SendGate }
 func newSendGate() *sendGate { return &sendGate{core: runtimecore.NewSendGate()} }
 func (g *sendGate) enter() bool { return g.core.Enter() }
 func (g *sendGate) leave() { g.core.Leave() }
@@ -440,7 +562,7 @@ func (g *sendGate) done() <-chan struct{} { return g.core.Done() }
 
 Do not touch `conn.go`, `packet.go`, or `websocket.go` call sites.
 
-- [ ] **Step 6: Run focused and race regression**
+- [ ] **Step 6: Verify portable behavior/races**
 
 ```bash
 go test ./transport -run 'Graceful|Send|TrySend' -count=1
@@ -464,9 +586,9 @@ git commit -m "runtime: share send gate ownership core"
 - Create: `internal/runtimecore/lifecycle.go`
 - Create: `internal/runtimecore/lifecycle_test.go`
 - Modify: `transport/lifecycle.go`
+- Modify: `transport/lifecycle_test.go`
 
 **Interfaces:**
-- Produces internal enums and owner:
 
 ```go
 type CloseGoal uint8
@@ -485,12 +607,12 @@ const (
     AbortFailure
 )
 
-type Lifecycle struct { /* private state */ }
-func NewLifecycle() *Lifecycle
-func (l *Lifecycle) Request(goal CloseGoal) bool
-func (l *Lifecycle) RequestWithPrevious(goal CloseGoal) (bool, CloseGoal)
-func (l *Lifecycle) Abort(reason AbortReason) bool
-func (l *Lifecycle) AbortWith(reason AbortReason, publish func()) bool
+type Lifecycle struct { /* private */ }
+func NewLifecycle() Lifecycle
+func (l *Lifecycle) Request(CloseGoal) bool
+func (l *Lifecycle) RequestWithPrevious(CloseGoal) (bool, CloseGoal)
+func (l *Lifecycle) Abort(AbortReason) bool
+func (l *Lifecycle) AbortWith(AbortReason, func()) bool
 func (l *Lifecycle) Reason() AbortReason
 func (l *Lifecycle) WriteRequested() <-chan struct{}
 func (l *Lifecycle) FullRequested() <-chan struct{}
@@ -504,11 +626,9 @@ func (l *Lifecycle) TryMarkTerminal() bool
 func (l *Lifecycle) MarkTerminal()
 ```
 
-`transport/lifecycle.go` retains the existing lower-case enums/methods and maps them to the core, so no session call site changes.
+- [ ] **Step 1: Write RED core lifecycle tests**
 
-- [ ] **Step 1: Write RED lifecycle tests in runtimecore**
-
-Cover at minimum:
+Required deterministic tests:
 
 ```go
 func TestLifecycleWriteThenFullEscalation(t *testing.T)
@@ -518,9 +638,20 @@ func TestLifecycleTerminalClosesReadWriteAndTerminal(t *testing.T)
 func TestLifecycleAbortCannotBeReplacedByTerminalMark(t *testing.T)
 ```
 
-`TestLifecycleAbortPublishesBeforeSignals` must use a publish closure that stores an atomic marker and a waiter on `Aborted()` that asserts the marker is already visible.
+For publish-before-signal:
 
-- [ ] **Step 2: Run RED lifecycle tests**
+```go
+func TestLifecycleAbortPublishesBeforeSignals(t *testing.T) {
+    l := NewLifecycle()
+    var published atomic.Bool
+    seen := make(chan bool, 1)
+    go func() { <-l.Aborted(); seen <- published.Load() }()
+    if !l.AbortWith(AbortFailure, func(){ published.Store(true) }) { t.Fatal("abort lost") }
+    if !<-seen { t.Fatal("abort signal visible before publish") }
+}
+```
+
+- [ ] **Step 2: Run RED**
 
 ```bash
 go test ./internal/runtimecore -run '^TestLifecycle' -count=1
@@ -528,49 +659,62 @@ go test ./internal/runtimecore -run '^TestLifecycle' -count=1
 
 Expected: FAIL because `Lifecycle` does not exist.
 
-- [ ] **Step 3: Implement the lifecycle core by semantic copy, not redesign**
+- [ ] **Step 3: Implement lifecycle by semantic copy, not redesign**
 
-Move current synchronization/`sync.Once` channel-closing behavior exactly. `AbortWith` must keep the winning publish callback inside lifecycle ownership before any completion channel closes; losing aborts cannot observe a partially published terminal cause.
+Preserve current mutex + `sync.Once` signaling exactly. `AbortWith` keeps the winning publish closure serialized before abort/read/write signals become observable; a losing abort cannot return while a winning publish is partially applied.
 
-- [ ] **Step 4: Run runtimecore lifecycle tests GREEN**
+- [ ] **Step 4: Run core lifecycle tests GREEN**
 
 ```bash
 go test ./internal/runtimecore -run '^TestLifecycle' -count=1
 ```
 
-Expected: PASS.
-
-- [ ] **Step 5: Convert `transport/sessionLifecycle` to a compatibility wrapper**
-
-Keep the existing transport names:
+- [ ] **Step 5: Wrap core behind the existing transport-private surface**
 
 ```go
-type sessionLifecycle struct { core *runtimecore.Lifecycle }
+type sessionLifecycle struct { core runtimecore.Lifecycle }
+func newSessionLifecycle() *sessionLifecycle { return &sessionLifecycle{core: runtimecore.NewLifecycle()} }
 ```
 
-Map each `closeGoal`/`abortReason` explicitly with conversion helpers. Do not alias enum integer values implicitly across packages; tests should lock the mapping.
+Use explicit conversion helpers:
 
-- [ ] **Step 6: Run the P0-3/P0-4 ownership regression suite**
+```go
+func coreGoal(g closeGoal) runtimecore.CloseGoal {
+    switch g { case closeGoalWrite: return runtimecore.GoalWrite; case closeGoalFull: return runtimecore.GoalFull; case closeGoalAbort: return runtimecore.GoalAbort; default: return runtimecore.GoalRunning }
+}
+
+func coreReason(r abortReason) runtimecore.AbortReason {
+    switch r { case abortExplicit: return runtimecore.AbortExplicit; case abortCaller: return runtimecore.AbortCaller; case abortFailure: return runtimecore.AbortFailure; default: return runtimecore.AbortNone }
+}
+```
+
+Add `transport/lifecycle_test.go` mapping coverage:
+
+```go
+func TestLifecycleCoreMapping(t *testing.T) {
+    goals := []struct{ local closeGoal; core runtimecore.CloseGoal }{{closeGoalRunning, runtimecore.GoalRunning}, {closeGoalWrite, runtimecore.GoalWrite}, {closeGoalFull, runtimecore.GoalFull}, {closeGoalAbort, runtimecore.GoalAbort}}
+    for _, tc := range goals { if got := coreGoal(tc.local); got != tc.core { t.Fatalf("goal %v -> %v", tc.local, got) } }
+    reasons := []struct{ local abortReason; core runtimecore.AbortReason }{{abortNone, runtimecore.AbortNone}, {abortExplicit, runtimecore.AbortExplicit}, {abortCaller, runtimecore.AbortCaller}, {abortFailure, runtimecore.AbortFailure}}
+    for _, tc := range reasons { if got := coreReason(tc.local); got != tc.core { t.Fatalf("reason %v -> %v", tc.local, got) } }
+}
+```
+
+Keep all existing lower-case lifecycle methods as delegators, so `conn.go`/`websocket.go` do not change.
+
+- [ ] **Step 6: Verify P0-3/P0-4 ownership + allocation**
 
 ```bash
 go test ./transport -run 'Lifecycle|Graceful|HalfClose|Terminal|TypedError|ErrorOwnership' -count=1
 go test -race ./transport -run 'Lifecycle|Graceful|HalfClose|Terminal|TypedError|ErrorOwnership' -count=10
-```
-
-Expected: PASS with no changed terminal owner, callback barrier, or close semantics.
-
-- [ ] **Step 7: Run graceful allocation smoke**
-
-```bash
 go test ./transport -run '^$' -bench 'BenchmarkGraceful(SendRunning|TrySendRunning)' -benchmem -benchtime=1x -count=5
 ```
 
-Expected: remain within the existing repository CI allocation gates; the wrapper must not add per-Send allocation.
+Expected: all tests/races PASS and existing Go-version-specific graceful allocation gates remain satisfied.
 
-- [ ] **Step 8: Commit**
+- [ ] **Step 7: Commit**
 
 ```bash
-git add -- internal/runtimecore/lifecycle.go internal/runtimecore/lifecycle_test.go transport/lifecycle.go
+git add -- internal/runtimecore/lifecycle.go internal/runtimecore/lifecycle_test.go transport/lifecycle.go transport/lifecycle_test.go
 git commit -m "runtime: share session lifecycle ownership core"
 ```
 
@@ -585,23 +729,21 @@ git commit -m "runtime: share session lifecycle ownership core"
 - Modify: `transport/stats.go`
 
 **Interfaces:**
-- Consumes: root `ogrenet.Observer` and `ogrenet.Event` only.
-- Produces:
 
 ```go
-type ObserverDispatcher struct { /* private state */ }
-func NewObserverDispatcher(observer ogrenet.Observer, size int) *ObserverDispatcher
-func (d *ObserverDispatcher) Emit(event ogrenet.Event) bool
+type ObserverDispatcher struct { /* private */ }
+func NewObserverDispatcher(ogrenet.Observer, int) *ObserverDispatcher
+func (d *ObserverDispatcher) Emit(ogrenet.Event) bool
 func (d *ObserverDispatcher) Stop()
 func (d *ObserverDispatcher) Dropped() uint64
 func (d *ObserverDispatcher) Panics() uint64
 ```
 
-The core dispatcher deliberately has no wait/join API because P0-5 requires blocked Observer callbacks to stay outside the Engine `Done()` barrier.
+`NewObserverDispatcher(nil, n)` returns nil. There is deliberately no Wait/Join API: a blocked Observer callback stays outside the Engine `Done()` barrier.
 
-- [ ] **Step 1: Write RED dispatcher tests in runtimecore**
+- [ ] **Step 1: Write RED core dispatcher tests**
 
-Add deterministic tests:
+Required tests:
 
 ```go
 func TestObserverDispatcherOverflowIsNonBlockingAndCounted(t *testing.T)
@@ -610,9 +752,9 @@ func TestObserverDispatcherStopMakesFutureEmitNoop(t *testing.T)
 func TestObserverDispatcherStopDoesNotWaitForBlockedCallback(t *testing.T)
 ```
 
-Use channels for synchronization; do not use sleeps as correctness oracles.
+Use synchronization channels, not sleeps. A blocked observer test should enter `Observe`, signal `entered`, block on `release`, call `Stop`, assert `Stop` returned immediately, then release the callback.
 
-- [ ] **Step 2: Run RED observer tests**
+- [ ] **Step 2: Run RED**
 
 ```bash
 go test ./internal/runtimecore -run '^TestObserverDispatcher' -count=1
@@ -620,42 +762,37 @@ go test ./internal/runtimecore -run '^TestObserverDispatcher' -count=1
 
 Expected: FAIL because dispatcher does not exist.
 
-- [ ] **Step 3: Implement core dispatcher with exact P0-5 semantics**
+- [ ] **Step 3: Implement exact P0-5 dispatcher semantics**
 
-Use one bounded `chan ogrenet.Event`, one worker, atomic stopped/dropped/panics, and a separate stop signal. Never close the event queue. `Emit` is nonblocking and increments Dropped on full queue. Recover around each `Observe` callback and continue. `Stop` marks stopped before closing the stop signal and does not wait for a callback to return.
+Use one bounded event channel, one worker, `stopped/dropped/panics` atomics, and a separate stop channel. Never close the event queue. `Emit` is nonblocking and increments dropped count only for queue saturation; emits after stopped are no-ops. Recover around every Observer callback and continue after panic. `Stop` marks stopped before signaling stop and never waits for user code.
 
-- [ ] **Step 4: Run runtimecore observer tests GREEN**
+- [ ] **Step 4: Run core tests GREEN**
 
 ```bash
 go test ./internal/runtimecore -run '^TestObserverDispatcher' -count=10
 ```
 
-Expected: PASS.
+- [ ] **Step 5: Preserve the transport wrapper and disabled path**
 
-- [ ] **Step 5: Keep the transport wrapper/API stable**
-
-`transport/observer.go` retains:
-
-- `defaultObserverBuffer = 1024`;
-- `WithObserver`;
-- `WithObserverBuffer`;
-- `Engine.observeSetup`;
-- a package-private `observerDispatcher` wrapper used by existing code.
-
-Wrapper shape:
+`transport/observer.go` retains `defaultObserverBuffer`, `WithObserver`, `WithObserverBuffer`, and `Engine.observeSetup`.
 
 ```go
 type observerDispatcher struct { core *runtimecore.ObserverDispatcher }
-func newObserverDispatcher(o ogrenet.Observer, n int) *observerDispatcher { ... }
-func (d *observerDispatcher) emit(e ogrenet.Event) bool { ... }
-func (d *observerDispatcher) stop() { ... }
-func (d *observerDispatcher) droppedCount() uint64 { ... }
-func (d *observerDispatcher) panicCount() uint64 { ... }
+
+func newObserverDispatcher(o ogrenet.Observer, n int) *observerDispatcher {
+    core := runtimecore.NewObserverDispatcher(o, n)
+    if core == nil { return nil }
+    return &observerDispatcher{core: core}
+}
+func (d *observerDispatcher) emit(e ogrenet.Event) bool { return d != nil && d.core.Emit(e) }
+func (d *observerDispatcher) stop() { if d != nil { d.core.Stop() } }
+func (d *observerDispatcher) droppedCount() uint64 { if d == nil { return 0 }; return d.core.Dropped() }
+func (d *observerDispatcher) panicCount() uint64 { if d == nil { return 0 }; return d.core.Panics() }
 ```
 
-Update `transport/stats.go` only from direct field access to `droppedCount()` / `panicCount()`; do not change any public Stats semantics.
+`transport/stats.go` changes only direct dispatcher-field loads to `droppedCount()` / `panicCount()`. Do not change public Stats counting points.
 
-- [ ] **Step 6: Run P0-5 observer/race/alloc regression**
+- [ ] **Step 6: Verify P0-5 semantics/races/allocations**
 
 ```bash
 go test ./transport -run 'Observer|Observability' -count=1
@@ -663,11 +800,7 @@ go test -race ./transport -run '^TestObservabilityRace' -count=20
 go test ./transport -run '^$' -bench 'BenchmarkObserver|Benchmark.*StatsSnapshot' -benchmem -benchtime=100x -count=3
 ```
 
-Expected:
-
-- observer-disabled path remains 0 allocs/op;
-- Session/Packet/Engine Stats snapshots remain 0 allocs/op;
-- saturation and panic/blocked-callback behavior remain unchanged.
+Expected: observer-disabled and Stats snapshot deterministic benchmarks remain 0 allocs/op; saturation, panic isolation, and blocked-observer independence remain unchanged.
 
 - [ ] **Step 7: Commit**
 
@@ -678,86 +811,59 @@ git commit -m "runtime: share bounded observer dispatcher core"
 
 ---
 
-### Task 6: Prove shared-core dependency direction and keep extraction intentionally narrow
+### Task 6: Lock runtimecore dependency direction and prepare the epoll factory seam
 
 **Files:**
 - Create: `internal/runtimecore/dependency_test.go`
-- No production file movement beyond Tasks 3-5.
-
-**Interfaces:**
-- Consumes: package source tree.
-- Produces: a regression test that prevents `internal/runtimecore` from importing backend/transport implementation packages.
-
-- [ ] **Step 1: Write a dependency-boundary test**
-
-In `internal/runtimecore/dependency_test.go`, use `go list -deps -json` or `go/packages` is **not** allowed because it would add a dependency. Prefer invoking the Go tool through `os/exec` in the test:
-
-```go
-func TestRuntimecoreDoesNotDependOnTransportOrNativePollers(t *testing.T) {
-    cmd := exec.Command("go", "list", "-deps", "github.com/qigao/ogrenet/internal/runtimecore")
-    out, err := cmd.Output()
-    if err != nil { t.Fatal(err) }
-    forbidden := []string{
-        "github.com/qigao/ogrenet/transport",
-        "github.com/qigao/ogrenet/epoll",
-        "github.com/qigao/ogrenet/kqueue",
-        "github.com/qigao/ogrenet/iocp",
-    }
-    for _, dep := range forbidden {
-        if bytes.Contains(out, []byte("\n"+dep+"\n")) || strings.TrimSpace(string(out)) == dep {
-            t.Fatalf("runtimecore depends on %s", dep)
-        }
-    }
-}
-```
-
-Allow the root `github.com/qigao/ogrenet` package because Observer/Event types are public contracts, not backend implementation.
-
-- [ ] **Step 2: Run the dependency test**
-
-```bash
-go test ./internal/runtimecore -run '^TestRuntimecoreDoesNotDepend' -count=1
-```
-
-Expected: PASS.
-
-- [ ] **Step 3: Record deliberate non-extractions in the plan/checkpoint, not production comments**
-
-Confirm by inspection that these still live in `transport`:
-
-```text
-transport/quota.go
-transport/limits.go
-transport/stats.go counters/admission snapshots
-```
-
-Reason: quota/admission currently return or compose `transport` public error identities; Stats counters are already directly reusable by the future epoll implementation because that implementation also lives in `transport`. Do not create error factories or generic interfaces solely to move files.
-
-- [ ] **Step 4: Commit**
-
-```bash
-git add -- internal/runtimecore/dependency_test.go
-git commit -m "test: lock runtimecore dependency boundary"
-```
-
----
-
-### Task 7: Add a Linux-native factory registration seam without enabling native parity yet
-
-**Files:**
-- Modify: `transport/contract_harness_test.go`
 - Create: `transport/contract_native_linux_test.go`
 
 **Interfaces:**
-- Produces a Linux-only factory builder that can be switched on protocol-by-protocol in 6B/6C:
 
 ```go
 func epollFactory(profile contractProfile) engineFactory
 ```
 
-- [ ] **Step 1: Add the Linux factory helper**
+- [ ] **Step 1: Add a direct-import boundary test with the Go parser**
 
-`transport/contract_native_linux_test.go` uses only public API:
+Avoid spawning nested `go list` processes and avoid adding `go/packages`. `dependency_test.go` parses only `.go` files in its own directory and rejects direct imports of implementation packages:
+
+```go
+func TestRuntimecoreDoesNotImportTransportOrNativePollers(t *testing.T) {
+    forbidden := map[string]bool{
+        "github.com/qigao/ogrenet/transport": true,
+        "github.com/qigao/ogrenet/epoll": true,
+        "github.com/qigao/ogrenet/kqueue": true,
+        "github.com/qigao/ogrenet/iocp": true,
+    }
+    entries, err := os.ReadDir(".")
+    if err != nil { t.Fatal(err) }
+    fset := token.NewFileSet()
+    for _, ent := range entries {
+        if ent.IsDir() || !strings.HasSuffix(ent.Name(), ".go") { continue }
+        f, err := parser.ParseFile(fset, ent.Name(), nil, parser.ImportsOnly)
+        if err != nil { t.Fatal(err) }
+        for _, imp := range f.Imports {
+            path, err := strconv.Unquote(imp.Path.Value)
+            if err != nil { t.Fatal(err) }
+            if forbidden[path] { t.Fatalf("%s imports forbidden %s", ent.Name(), path) }
+        }
+    }
+}
+```
+
+The root `github.com/qigao/ogrenet` import is allowed for public Observer/Event types.
+
+- [ ] **Step 2: Run the dependency test**
+
+```bash
+go test ./internal/runtimecore -run '^TestRuntimecoreDoesNotImport' -count=1
+```
+
+Expected: PASS.
+
+- [ ] **Step 3: Add the Linux epoll contract factory without enabling TCP/UDP**
+
+`transport/contract_native_linux_test.go`:
 
 ```go
 //go:build linux
@@ -777,44 +883,44 @@ func epollFactory(profile contractProfile) engineFactory {
         },
     }
 }
+
+func TestEpollPhase6AContractProfile(t *testing.T) {
+    f := epollFactory(contractProfile{})
+    if f.profile.TCP || f.profile.UDP { t.Fatalf("6A profile unexpectedly enables TCP/UDP: %+v", f.profile) }
+    e := f.new(t)
+    ep := ogrenet.Endpoint{Scheme: ogrenet.SchemeTLS, Host: "127.0.0.1", Port: 1}
+    if _, err := e.Dial(context.Background(), ep, nil); !errors.Is(err, transport.ErrProtocolUnsupported) {
+        t.Fatalf("TLS capability err=%v", err)
+    }
+}
 ```
 
-Do **not** register this factory with `TCP:true` or `UDP:true` in 6A. The current scaffold has no socket I/O.
+Do not register epoll in `TestEnginePublicContracts` with a true protocol bit during 6A. 6B turns on `TCP:true`; 6C turns on `UDP:true`. Once a bit is true, contract failures must fail the test rather than being dynamically skipped.
 
-- [ ] **Step 2: Add a capability-only 6A invocation**
-
-The harness may instantiate `epollFactory(contractProfile{})` only to verify constructor lifecycle and explicit unsupported TLS/WS/WSS behavior. It must not skip failures after a profile says a protocol is supported.
-
-- [ ] **Step 3: Run Linux contract/capability tests**
+- [ ] **Step 4: Verify contract seam + full core tests**
 
 ```bash
-go test ./transport -run 'EnginePublicContracts|Epoll' -count=5
+go test ./transport -run 'EnginePublicContracts|EpollPhase6A|EpollRejects' -count=5
+go test ./internal/runtimecore -count=5
 ```
 
-Expected: portable TCP/UDP contract cases PASS; epoll capability-only cases PASS; no test claims native TCP/UDP parity.
+Expected: portable contract characterization PASS; epoll capability-only profile PASS.
 
-- [ ] **Step 4: Commit**
+- [ ] **Step 5: Commit**
 
 ```bash
-git add -- transport/contract_harness_test.go transport/contract_native_linux_test.go
-git commit -m "test: prepare epoll contract factory seam"
+git add -- internal/runtimecore/dependency_test.go transport/contract_native_linux_test.go
+git commit -m "test: lock native runtime semantic boundaries"
 ```
 
 ---
 
-### Task 8: Full 6A regression, race, allocation, and cross-platform checkpoint
+### Task 7: Full 6A verification and draft-PR checkpoint
 
 **Files:**
-- No new production files expected.
-- Update only tests if verification exposes a real regression.
+- No expected production changes; only demonstrated verification fixes may be added.
 
-**Interfaces:**
-- Consumes all 6A tasks.
-- Produces the evidence required before beginning native reactor I/O in 6B.
-
-- [ ] **Step 1: Format and module hygiene**
-
-Run:
+- [ ] **Step 1: Format + module hygiene**
 
 ```bash
 gofmt -w internal/runtimecore transport
@@ -823,113 +929,101 @@ go mod tidy
 git diff --exit-code -- go.mod go.sum
 ```
 
-Expected: formatting clean; module files unchanged.
+Expected: formatting clean and module files unchanged. If `go mod tidy` changes them, inspect the cause and either include a justified dependency change (none is expected in 6A) or restore the module files before continuing.
 
-- [ ] **Step 2: Unit/vet full repository**
+- [ ] **Step 2: Full vet/unit/race verification**
 
 ```bash
 go vet ./...
 go test -count=1 ./...
-```
-
-Expected: PASS.
-
-- [ ] **Step 3: Race full repository plus repeated shared-core/observability ownership loops**
-
-```bash
 go test -race -count=1 ./...
 go test -race ./internal/runtimecore -count=20
 go test -race ./transport -run 'ObservabilityRace|TypedError|ErrorOwnership|Graceful' -count=20
 ```
 
-Expected: PASS with no race/deadlock/leak symptom.
+Expected: PASS with no races/deadlocks.
 
-- [ ] **Step 4: Re-run deterministic allocation gates**
+- [ ] **Step 3: Re-run deterministic allocation gates**
 
 ```bash
 go test ./transport -run '^$' -bench 'BenchmarkGraceful(SendRunning|TrySendRunning)|BenchmarkObserverDisabledEmitPath|Benchmark(Session|Packet|Engine)StatsSnapshot' -benchmem -benchtime=1x -count=5
 ```
 
-Expected:
+Expected: existing Go-version-specific graceful Send/TrySend allocation gates remain satisfied; observer-disabled emit and Session/Packet/Engine Stats snapshots remain 0 allocs/op. Do not add a noisy ns/op percentage threshold.
 
-- existing Go-version-specific graceful Send/TrySend CI limits remain satisfied;
-- observer-disabled emit remains 0 allocs/op;
-- Session/Packet/Engine Stats snapshots remain 0 allocs/op.
-
-Do not invent a new ns/op percentage threshold for runtimecore wrappers.
-
-- [ ] **Step 5: Cross-compile the transport package on non-Linux targets**
+- [ ] **Step 4: Cross-compile test binaries**
 
 ```bash
-GOOS=windows GOARCH=amd64 go test ./transport -run '^$'
-GOOS=darwin GOARCH=arm64 go test ./transport -run '^$'
-GOOS=freebsd GOARCH=amd64 go test ./transport -run '^$'
+GOOS=windows GOARCH=amd64 go test -c ./transport -o /tmp/ogrenet-transport-windows-amd64.test.exe
+GOOS=darwin GOARCH=arm64 go test -c ./transport -o /tmp/ogrenet-transport-darwin-arm64.test
+GOOS=freebsd GOARCH=amd64 go test -c ./transport -o /tmp/ogrenet-transport-freebsd-amd64.test
 ```
 
-Expected: compile PASS and no Linux implementation leakage.
+Expected: compile PASS. Native Windows/macOS CI will execute the non-Linux constructor test.
 
-- [ ] **Step 6: Verify branch diff scope**
-
-Run:
+- [ ] **Step 5: Verify narrow diff scope**
 
 ```bash
 git diff --stat master...HEAD
 git diff --name-only master...HEAD
 ```
 
-Expected scope is limited to:
+Allowed scope:
 
-- P1-6 design/plan docs;
-- epoll config/constructor/capability scaffolding;
-- public contract harness;
-- `internal/runtimecore` pure primitives/tests;
-- compatibility wrapper changes in `transport`.
+```text
+docs/superpowers/specs/2026-08-22-linux-native-engine-design.md
+docs/superpowers/plans/2026-08-22-linux-native-engine-6a.md
+internal/runtimecore/*
+transport/epoll_*
+transport/contract_*
+transport/gate.go
+transport/lifecycle.go
+transport/lifecycle_test.go
+transport/observer.go
+transport/stats.go
+transport/errors.go
+```
 
-No native socket I/O file, TLS/WS implementation, kqueue/IOCP high-level implementation, or unrelated refactor is allowed.
+No native socket I/O, TLS/WS implementation, kqueue/IOCP high-level Engine, or unrelated refactor is allowed.
 
-- [ ] **Step 7: Commit any verification-only fixes, if needed**
+- [ ] **Step 6: Create/update one draft PR**
 
-Stage only the exact files changed by a demonstrated failure. If no fixes are needed, create no empty commit.
-
-- [ ] **Step 8: Create/update one draft PR for `feat/linux-native-engine`**
-
-PR title:
+Title:
 
 ```text
 runtime: add Linux epoll native Engine
 ```
 
-Body at the 6A checkpoint must say explicitly:
+Checkpoint body:
 
 ```text
-P1-6A complete: public backend contract, parity harness, and shared semantic core only.
+P1-6A complete: explicit backend contract, public parity harness, and shared semantic ownership core only.
 No native TCP/UDP support claim yet; reactor/socket I/O begins in 6B.
 Refs #57
 Refs #56
 Refs #38
 ```
 
-Keep the PR draft. Do not close #57 or #56.
+Keep it draft. Do not close #57 or #56.
 
-- [ ] **Step 9: Verify exact-head CI before starting 6B**
+- [ ] **Step 7: Require exact-head CI before 6B**
 
-Fetch the feature branch head and require fresh CI on that exact SHA. Existing matrix plus the new package must be green before adding reactor I/O. If CI fails, fix the demonstrated failure first; do not start 6B on a red 6A base.
-
----
+Fetch the branch head SHA after all 6A commits. Require fresh CI for that exact SHA, including Linux Go 1.25/1.26, full race, Windows/macOS, FreeBSD runtime, GmSSL, and existing cross-compiles. Fix demonstrated failures before adding reactor code.
 
 ## 6A Completion Boundary
 
-P1-6A is complete when all of the following are true:
+6A is complete only when:
 
 - `transport.New()` behavior and allocation gates are unchanged;
-- `EpollConfig`/capability errors are stable and cross-platform construction code compiles;
+- `EpollConfig` and capability errors are stable;
+- shared construction code compiles on non-Linux and returns `ErrBackendUnsupported` there;
 - Linux epoll selection is explicit and TLS/WS/WSS never fall back;
-- public TCP/UDP contract tests exist in `package transport_test` and currently run against the portable reference backend;
-- Linux epoll has a factory registration seam but does not claim TCP/UDP support;
-- `SendGate`, Session `Lifecycle`, and bounded `ObserverDispatcher` have one shared semantic implementation under `internal/runtimecore` with compatibility wrappers;
-- `runtimecore` has no dependency on `transport` or native poller packages;
+- public TCP/UDP contract characterization runs through `package transport_test` against the portable reference backend;
+- the Linux epoll factory exists but advertises no TCP/UDP support yet;
+- `SendGate`, Session `Lifecycle`, and bounded `ObserverDispatcher` each have one implementation under `internal/runtimecore` plus compatibility wrappers;
+- `runtimecore` directly imports neither `transport` nor native poller packages;
 - quota/admission/stats extraction was not forced through artificial abstraction;
-- full tests/race/allocation/cross-platform checks are green on the exact feature head;
-- the PR remains draft and #57/#56 remain open.
+- exact-head CI is green;
+- the PR stays draft and #57/#56 stay open.
 
-Only after this checkpoint may 6B introduce the reactor, inbox/wake protocol, deadline heap, callback executor, and native TCP socket I/O.
+Only after that checkpoint may 6B add the reactor, intrusive inbox/wake handshake, deadline heap, callback executor, and native TCP socket I/O.
