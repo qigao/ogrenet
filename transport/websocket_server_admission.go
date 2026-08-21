@@ -16,26 +16,32 @@ const (
 )
 
 type httpConnLease struct {
-	tracker *httpConnTracker
-	lease   *connectionLease
-	mu      sync.Mutex
-	state   httpConnLeaseState
+	tracker  *httpConnTracker
+	lease    *connectionLease
+	physical net.Conn
+	mu       sync.Mutex
+	state    httpConnLeaseState
 }
 
 func (l *httpConnLease) take() *connectionLease {
+	lease, _ := l.takeWithPhysical()
+	return lease
+}
+
+func (l *httpConnLease) takeWithPhysical() (*connectionLease, net.Conn) {
 	if l == nil {
-		return nil
+		return nil, nil
 	}
 	l.mu.Lock()
 	if l.state != httpConnLeaseHeld {
 		l.mu.Unlock()
-		return nil
+		return nil, nil
 	}
 	l.state = httpConnLeaseTransferred
-	lease := l.lease
+	lease, physical := l.lease, l.physical
 	l.mu.Unlock()
 	l.tracker.detachHolder(l)
-	return lease
+	return lease, physical
 }
 
 func (l *httpConnLease) release() {
@@ -68,7 +74,7 @@ func newHTTPConnTracker() *httpConnTracker {
 }
 
 func (t *httpConnTracker) register(conn net.Conn, lease *connectionLease) *httpConnLease {
-	h := &httpConnLease{tracker: t, lease: lease, state: httpConnLeaseHeld}
+	h := &httpConnLease{tracker: t, lease: lease, physical: conn, state: httpConnLeaseHeld}
 	t.mu.Lock()
 	t.leases[conn] = h
 	t.byLease[h] = conn
