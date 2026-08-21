@@ -3,6 +3,8 @@ package transport
 import (
 	"context"
 	"errors"
+	"sync/atomic"
+	"time"
 
 	"github.com/coder/websocket"
 )
@@ -49,7 +51,11 @@ func (s *wsSession) abort(reason abortReason, cause error) bool {
 		s.errMu.Unlock()
 		s.gate.close()
 		close(s.closing)
-		_ = s.ws.CloseNow()
+		if s.physical != nil {
+			_ = s.physical.Close()
+		} else {
+			_ = s.ws.CloseNow()
+		}
 	})
 	return true
 }
@@ -64,6 +70,22 @@ func (s *wsSession) lifecycleResult() error {
 	default:
 		return nil
 	}
+}
+
+func (s *wsSession) runLocalCloseHandshake() {
+	var decided atomic.Bool
+	timer := time.AfterFunc(s.closeTO, func() {
+		if decided.CompareAndSwap(false, true) {
+			s.abort(abortFailure, &TimeoutError{Kind: TimeoutClose, Cause: context.DeadlineExceeded})
+		}
+	})
+	err := s.ws.Close(websocket.StatusNormalClosure, "")
+	if decided.CompareAndSwap(false, true) {
+		timer.Stop()
+		s.finishLocalGraceful(err)
+		return
+	}
+	timer.Stop()
 }
 
 func (s *wsSession) finishLocalGraceful(err error) {
