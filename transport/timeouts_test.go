@@ -142,3 +142,32 @@ func TestTimeoutErrorWithoutCauseStillMatchesSentinel(t *testing.T) {
 		t.Fatalf("Unwrap() = %v, want nil", err.Unwrap())
 	}
 }
+
+func TestWebSocketCloseTimeoutDefaultAndValidation(t *testing.T) {
+	cfg := defaultConfig()
+	if cfg.ws.CloseTimeout != defaultWSCloseTimeout {
+		t.Fatalf("CloseTimeout = %v, want %v", cfg.ws.CloseTimeout, defaultWSCloseTimeout)
+	}
+	ws := cfg.ws
+	ws.CloseTimeout = -time.Second
+	if err := WithWebSocketConfig(ws)(&cfg); !errors.Is(err, ErrInvalidWebSocketConfig) {
+		t.Fatalf("negative CloseTimeout error = %v", err)
+	}
+	ws.CloseTimeout = 0
+	if err := WithWebSocketConfig(ws)(&cfg); err != nil {
+		t.Fatalf("zero CloseTimeout error = %v", err)
+	}
+	if cfg.ws.CloseTimeout != defaultWSCloseTimeout {
+		t.Fatalf("normalized CloseTimeout = %v", cfg.ws.CloseTimeout)
+	}
+}
+
+func TestTimeoutCloseKind(t *testing.T) {
+	err := &TimeoutError{Kind: TimeoutClose}
+	if !errors.Is(err, ErrTimeout) {
+		t.Fatalf("TimeoutClose does not match ErrTimeout: %v", err)
+	}
+	if got := err.Kind.String(); got != "close" {
+		t.Fatalf("TimeoutClose string = %q", got)
+	}
+}
