@@ -157,11 +157,12 @@ func (e *Engine) listenWebSocket(ctx context.Context, endpoint ogrenet.Endpoint,
 		transferred = true
 		s.start()
 	})
+	wsHandshakeTimeout := e.cfg.effectiveWSHandshakeTimeout()
 	l.server = &http.Server{
 		Handler:           mux,
-		ReadHeaderTimeout: e.cfg.ws.HandshakeTimeout,
-		WriteTimeout:      e.cfg.ws.HandshakeTimeout,
-		IdleTimeout:       e.cfg.ws.HandshakeTimeout,
+		ReadHeaderTimeout: wsHandshakeTimeout,
+		WriteTimeout:      wsHandshakeTimeout,
+		IdleTimeout:       wsHandshakeTimeout,
 		MaxHeaderBytes:    32 << 10,
 		ConnContext:       tracker.connContext,
 		ConnState:         tracker.connState,

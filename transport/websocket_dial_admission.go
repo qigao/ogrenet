@@ -47,8 +47,8 @@ func (e *Engine) newWebSocketHTTPTransport(endpoint ogrenet.Endpoint) (*http.Tra
 	transport := http.DefaultTransport.(*http.Transport).Clone()
 	transport.ForceAttemptHTTP2 = false
 	transport.Proxy = nil
-	transport.TLSHandshakeTimeout = e.cfg.tlsHandshakeTimeout
-	transport.ResponseHeaderTimeout = e.cfg.ws.HandshakeTimeout
+	transport.TLSHandshakeTimeout = e.cfg.effectiveTLSHandshakeTimeout()
+	transport.ResponseHeaderTimeout = e.cfg.effectiveWSHandshakeTimeout()
 
 	state := &wsDialAdmission{}
 	dialer := net.Dialer{}
@@ -59,9 +59,11 @@ func (e *Engine) newWebSocketHTTPTransport(endpoint ogrenet.Endpoint) (*http.Tra
 	}
 
 	dialRaw := func(ctx context.Context, network, address string) (net.Conn, *connectionLease, error) {
-		raw, err := dialer.DialContext(ctx, network, address)
+		dctx, cancel := boundedOperationContext(ctx, e.cfg.timeouts.Connect)
+		defer cancel()
+		raw, err := dialer.DialContext(dctx, network, address)
 		if err != nil {
-			return nil, nil, err
+			return nil, nil, mapOperationTimeout(ctx, dctx, TimeoutConnect, err)
 		}
 		if tcp, ok := raw.(*net.TCPConn); ok {
 			if err := e.configureTCP(tcp); err != nil {

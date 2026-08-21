@@ -34,6 +34,9 @@ type wsSession struct {
 	cipher     secure.Cipher
 	maxMessage int
 	writeTO    time.Duration
+	readIdle   time.Duration
+	activity   *activityClock
+	writeState wsWriteState
 	pingEvery  time.Duration
 	pongTO     time.Duration
 	queue      chan wsOutbound
@@ -122,7 +125,7 @@ func (s *wsSession) Send(ctx context.Context, msg ogrenet.Message) error {
 		case err := <-ack:
 			return err
 		default:
-			return ErrClosed
+			return s.writeTimeoutOrClosed()
 		}
 	}
 }
@@ -178,6 +181,9 @@ func (s *wsSession) start() {
 	if s.pingEvery > 0 {
 		loopCount++
 	}
+	if s.activity != nil {
+		loopCount++
+	}
 	s.loops.Add(loopCount)
 	go func() {
 		defer s.loops.Done()
@@ -191,6 +197,14 @@ func (s *wsSession) start() {
 		go func() {
 			defer s.loops.Done()
 			s.pingLoop()
+		}()
+	}
+	if s.activity != nil {
+		go func() {
+			defer s.loops.Done()
+			s.activity.run(s.closing, func(kind TimeoutKind) {
+				s.initiateClose(&TimeoutError{Kind: kind})
+			})
 		}()
 	}
 	go func() {
@@ -210,19 +224,32 @@ func (s *wsSession) writerLoop() {
 			return
 		case req := <-s.queue:
 			ctx, cancel := context.WithTimeout(context.Background(), s.writeTO)
+			s.writeState.begin(ctx)
 			err := s.ws.Write(ctx, req.typ, req.payload)
 			cancel()
+			if err == nil {
+				s.writeState.end()
+				if s.activity != nil {
+					s.activity.touch()
+				}
+			}
+			if err != nil && isTimeoutFailure(err) {
+				err = &TimeoutError{Kind: TimeoutWrite, Cause: err}
+			} else if err != nil {
+				err = fmt.Errorf("transport: websocket write: %w", err)
+			}
 			s.quota.release(req.bytes)
 			s.releaseFrameSlot()
 			sendErr := err
-			if err != nil && s.isClosing() {
+			if err != nil && s.isClosing() && !errors.Is(err, ErrTimeout) {
 				sendErr = ErrClosed
 			}
 			if req.ack != nil {
 				req.ack <- sendErr
 			}
 			if err != nil {
-				s.initiateClose(fmt.Errorf("transport: websocket write: %w", err))
+				s.initiateClose(err)
+				s.writeState.end()
 				return
 			}
 		}
@@ -250,10 +277,25 @@ func (s *wsSession) readerLoop() {
 		return
 	}
 	for {
-		typ, payload, err := s.ws.Read(context.Background())
+		readCtx := context.Background()
+		cancel := func() {}
+		if s.readIdle > 0 {
+			readCtx, cancel = context.WithTimeout(context.Background(), s.readIdle)
+		}
+		typ, payload, err := s.ws.Read(readCtx)
+		cancel()
 		if err != nil {
-			s.initiateClose(normalizeWSError(err))
+			if s.readIdle > 0 && isTimeoutFailure(err) && !s.isClosing() {
+				s.initiateClose(&TimeoutError{Kind: TimeoutReadIdle, Cause: err})
+			} else if cause := s.writeState.timeoutCause(); cause != nil {
+				s.initiateClose(&TimeoutError{Kind: TimeoutWrite, Cause: cause})
+			} else {
+				s.initiateClose(normalizeWSError(err))
+			}
 			return
+		}
+		if s.activity != nil {
+			s.activity.touch()
 		}
 		msg, err := s.decode(typ, payload)
 		if err != nil {

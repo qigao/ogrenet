@@ -50,13 +50,15 @@ func enforceTLS13(cfg *tls.Config) error {
 }
 
 func (c config) handshakeClient(ctx context.Context, raw *tls.Conn) error {
-	hctx, cancel := context.WithTimeout(ctx, c.tlsHandshakeTimeout)
+	hctx, cancel := boundedOperationContext(ctx, c.effectiveTLSHandshakeTimeout())
 	defer cancel()
-	return raw.HandshakeContext(hctx)
+	err := raw.HandshakeContext(hctx)
+	return mapOperationTimeout(ctx, hctx, TimeoutHandshake, err)
 }
 
 func (c config) handshakeServer(ctx context.Context, raw *tls.Conn) error {
-	hctx, cancel := context.WithTimeout(ctx, c.tlsHandshakeTimeout)
+	hctx, cancel := boundedOperationContext(ctx, c.effectiveTLSHandshakeTimeout())
 	defer cancel()
-	return raw.HandshakeContext(hctx)
+	err := raw.HandshakeContext(hctx)
+	return mapOperationTimeout(ctx, hctx, TimeoutHandshake, err)
 }

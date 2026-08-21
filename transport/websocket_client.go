@@ -15,8 +15,6 @@ func (e *Engine) dialWebSocket(ctx context.Context, endpoint ogrenet.Endpoint, h
 	if e.cfg.framerFactory != nil {
 		return nil, ErrFramerNotSupported
 	}
-	hctx, cancel := context.WithTimeout(ctx, e.cfg.ws.HandshakeTimeout)
-	defer cancel()
 
 	upgrade, err := e.acquireUpgrade()
 	if err != nil {
@@ -31,8 +29,18 @@ func (e *Engine) dialWebSocket(ctx context.Context, endpoint ogrenet.Endpoint, h
 	defer transport.CloseIdleConnections()
 	defer state.release()
 	client := &http.Client{Transport: transport, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
-	ws, _, err := websocket.Dial(hctx, endpoint.URL(), &websocket.DialOptions{HTTPClient: client, Subprotocols: e.cfg.ws.Subprotocols, CompressionMode: websocket.CompressionDisabled})
+	ws, _, err := websocket.Dial(ctx, endpoint.URL(), &websocket.DialOptions{HTTPClient: client, Subprotocols: e.cfg.ws.Subprotocols, CompressionMode: websocket.CompressionDisabled})
 	if err != nil {
+		if cause := context.Cause(ctx); cause != nil {
+			return nil, cause
+		}
+		var timeoutErr *TimeoutError
+		if errors.As(err, &timeoutErr) {
+			return nil, err
+		}
+		if isTimeoutFailure(err) {
+			return nil, &TimeoutError{Kind: TimeoutHandshake, Cause: err}
+		}
 		return nil, err
 	}
 	ws.SetReadLimit(int64(e.cfg.maxMessageBytes))
@@ -80,7 +88,9 @@ func (e *Engine) newWSSession(ws *websocket.Conn, endpoint ogrenet.Endpoint, loc
 		handler:    h,
 		cipher:     cipher,
 		maxMessage: e.cfg.maxMessageBytes,
-		writeTO:    e.cfg.ws.WriteTimeout,
+		writeTO:    e.cfg.effectiveWSWriteTimeout(),
+		readIdle:   e.cfg.timeouts.ReadIdle,
+		activity:   newActivityClock(e.cfg.timeouts.ConnectionIdle, e.cfg.timeouts.MaxLifetime),
 		pingEvery:  e.cfg.ws.PingInterval,
 		pongTO:     e.cfg.ws.PongTimeout,
 		queue:      make(chan wsOutbound, e.cfg.writeQueue),
