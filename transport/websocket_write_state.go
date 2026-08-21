@@ -29,6 +29,13 @@ func (s *wsWriteState) end() {
 	s.mu.Unlock()
 }
 
+func (s *wsWriteState) active() bool {
+	s.mu.RLock()
+	active := s.ctx != nil
+	s.mu.RUnlock()
+	return active
+}
+
 func (s *wsWriteState) timeoutCause() error {
 	s.mu.RLock()
 	ctx := s.ctx
