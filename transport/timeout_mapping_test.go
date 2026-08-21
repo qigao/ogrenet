@@ -5,6 +5,8 @@ import (
 	"errors"
 	"testing"
 	"time"
+
+	"github.com/qigao/ogrenet"
 )
 
 func TestMapOperationTimeoutConnectRuntimeTimeout(t *testing.T) {
@@ -40,25 +42,29 @@ func TestMapOperationTimeoutConnectCallerCancelWins(t *testing.T) {
 	}
 }
 
-func TestMapWebSocketWriteErrorTimeout(t *testing.T) {
-	err := mapWebSocketWriteError(context.DeadlineExceeded, false)
+func TestWebSocketWriteTimeoutIsTyped(t *testing.T) {
+	listener, closeServer := startTimeoutWSServer(t, ogrenet.SchemeWS, false)
+	defer closeServer()
+
+	client, err := New(WithTimeouts(Timeouts{Write: time.Nanosecond}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer client.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	s, err := client.Dial(ctx, listener.Endpoint(), ogrenet.HandlerFuncs{})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	sendCtx, sendCancel := context.WithTimeout(context.Background(), time.Second)
+	err = s.Send(sendCtx, ogrenet.Text("timeout"))
+	sendCancel()
 	var te *TimeoutError
 	if !errors.As(err, &te) || te.Kind != TimeoutWrite {
-		t.Fatalf("mapWebSocketWriteError = %#v, want TimeoutWrite", err)
+		t.Fatalf("Send error = %#v, want TimeoutWrite", err)
 	}
-	if !errors.Is(err, context.DeadlineExceeded) {
-		t.Fatalf("mapped write timeout lost root cause: %v", err)
-	}
-}
-
-func TestMapWebSocketWriteErrorNonTimeoutPreservesCause(t *testing.T) {
-	root := errors.New("write failed")
-	err := mapWebSocketWriteError(root, false)
-	if !errors.Is(err, root) {
-		t.Fatalf("mapped websocket write lost root cause: %v", err)
-	}
-	var te *TimeoutError
-	if errors.As(err, &te) {
-		t.Fatalf("non-timeout write was classified as timeout: %#v", te)
-	}
+	waitSessionTimeoutKind(t, s, TimeoutWrite)
 }
