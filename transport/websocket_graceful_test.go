@@ -128,6 +128,52 @@ func TestWebSocketShutdownCallerDeadlineWinsCloseTimeout(t *testing.T) {
 	}
 }
 
+func TestWebSocketServerCloseTimeoutUsesPhysicalTransport(t *testing.T) {
+	server, err := New(WithWebSocketConfig(testWebSocketCloseConfig(50 * time.Millisecond)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer server.Close()
+
+	accepted := make(chan ogrenet.Session, 1)
+	ln, err := server.Listen(context.Background(), ogrenet.Endpoint{Scheme: ogrenet.SchemeWS, Host: "127.0.0.1", Port: 0, Path: "/"}, ogrenet.HandlerFuncs{
+		Open: func(s ogrenet.Session) { accepted <- s },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ln.Close()
+
+	peer, _, err := websocket.Dial(context.Background(), ln.Endpoint().URL(), &websocket.DialOptions{CompressionMode: websocket.CompressionDisabled})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer peer.CloseNow()
+
+	var session ogrenet.Session
+	select {
+	case session = <-accepted:
+	case <-time.After(2 * time.Second):
+		t.Fatal("server WebSocket session did not open")
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 750*time.Millisecond)
+	defer cancel()
+	result := make(chan error, 1)
+	go func() { result <- requireGracefulShutdown(t, session).Shutdown(ctx) }()
+
+	select {
+	case err := <-result:
+		var te *TimeoutError
+		if !errors.As(err, &te) || te.Kind != TimeoutClose {
+			t.Fatalf("server Shutdown = %#v, want TimeoutClose", err)
+		}
+	case <-time.After(750 * time.Millisecond):
+		t.Fatal("server Shutdown did not physically abort stalled close handshake")
+	}
+	waitClosed(t, session.Done(), "server timeout-closed WebSocket session")
+}
+
 func testWebSocketCloseConfig(closeTimeout time.Duration) WebSocketConfig {
 	return WebSocketConfig{
 		HandshakeTimeout: time.Second,
