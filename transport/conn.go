@@ -69,6 +69,22 @@ func (c *conn) Err() error {
 	return c.err
 }
 
+func (c *conn) observe(kind ogrenet.EventKind, bytes uint64, err error) {
+	if c == nil || c.engine == nil || c.engine.observer == nil {
+		return
+	}
+	c.engine.observer.emit(ogrenet.Event{
+		Kind:       kind,
+		Resource:   ogrenet.ResourceSession,
+		ResourceID: c.id,
+		Protocol:   c.protocol,
+		Local:      c.LocalAddr(),
+		Remote:     c.RemoteAddr(),
+		Bytes:      bytes,
+		Err:        err,
+	})
+}
+
 func (c *conn) operationalError(op Op, cause error, hint classifyHint) error {
 	return classifyOperational(op, c.protocol, c.LocalAddr(), c.RemoteAddr(), cause, hint)
 }
@@ -161,10 +177,14 @@ func (c *conn) TrySend(msg ogrenet.Message) error {
 
 	frame, err := c.prepareTrySend(msg)
 	if err != nil {
-		if c.stats != nil && errors.Is(err, ErrWouldBlock) {
-			c.stats.backpressure.Add(1)
+		opErr := c.operationalError(OpSend, err, hintNone)
+		if errors.Is(err, ErrWouldBlock) {
+			if c.stats != nil {
+				c.stats.backpressure.Add(1)
+			}
+			c.observe(ogrenet.EventBackpressure, 0, opErr)
 		}
-		return c.operationalError(OpSend, err, hintNone)
+		return opErr
 	}
 	req := outbound{frame: frame, bytes: len(frame), payloadBytes: len(msg.Data)}
 	select {
@@ -177,10 +197,12 @@ func (c *conn) TrySend(msg ogrenet.Message) error {
 	default:
 		c.quota.release(req.bytes)
 		c.releaseFrameSlot()
+		opErr := c.operationalError(OpSend, ErrWouldBlock, hintNone)
 		if c.stats != nil {
 			c.stats.backpressure.Add(1)
 		}
-		return c.operationalError(OpSend, ErrWouldBlock, hintNone)
+		c.observe(ogrenet.EventBackpressure, 0, opErr)
+		return opErr
 	}
 }
 
@@ -293,6 +315,7 @@ func (c *conn) handleOutbound(req outbound) bool {
 			c.stats.bytesTX.Add(uint64(req.payloadBytes))
 			c.stats.messagesTX.Add(1)
 		}
+		c.observe(ogrenet.EventWrite, uint64(req.payloadBytes), nil)
 		if req.ack != nil {
 			req.ack <- nil
 		}
@@ -395,14 +418,23 @@ func (c *conn) readerLoop() {
 					if c.wireFramer {
 						hint = hintWireDecode
 					}
+					if c.stats != nil {
+						c.stats.decodeErrors.Add(1)
+					}
 					c.initiateClose(c.operationalError(OpRead, fmt.Errorf("transport: decode frame: %w", err), hint))
 					return
 				}
 				if consumed <= 0 || consumed > len(remaining) {
+					if c.stats != nil {
+						c.stats.decodeErrors.Add(1)
+					}
 					c.initiateClose(c.operationalError(OpRead, ErrInvalidFramer, hintNone))
 					return
 				}
 				if err := msg.Validate(); err != nil {
+					if c.stats != nil {
+						c.stats.decodeErrors.Add(1)
+					}
 					c.initiateClose(c.operationalError(OpRead, fmt.Errorf("transport: invalid message: %w", err), hintMessageDecode))
 					return
 				}
@@ -411,6 +443,7 @@ func (c *conn) readerLoop() {
 					c.stats.bytesRX.Add(uint64(len(msg.Data)))
 					c.stats.messagesRX.Add(1)
 				}
+				c.observe(ogrenet.EventRead, uint64(len(msg.Data)), nil)
 				c.handler.OnMessage(c, msg)
 				consumedTotal += consumed
 				if c.isClosing() {
@@ -428,6 +461,9 @@ func (c *conn) readerLoop() {
 			}
 
 			if len(pending) > c.maxRead {
+				if c.stats != nil {
+					c.stats.decodeErrors.Add(1)
+				}
 				c.initiateClose(c.operationalError(OpRead, ErrReadBufferFull, hintNone))
 				return
 			}
@@ -472,6 +508,10 @@ func (c *conn) finalize() {
 			}
 			c.life.markTerminal()
 		}
+		if c.stats != nil {
+			c.stats.age.freeze()
+		}
+		c.observe(ogrenet.EventClose, 0, c.Err())
 		defer func() {
 			close(c.done)
 			c.engine.removeStream(c)
