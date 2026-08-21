@@ -1,8 +1,10 @@
 package transport
 
 import (
+	"net"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/qigao/ogrenet"
 )
@@ -73,6 +75,23 @@ func (d *observerDispatcher) observe(event ogrenet.Event) {
 		}
 	}()
 	d.observer.Observe(event)
+}
+
+func (e *Engine) observeSetup(kind ogrenet.EventKind, resourceID, parentID uint64, protocol ogrenet.Scheme, local, remote net.Addr, duration time.Duration, err error) {
+	if e == nil || e.observer == nil {
+		return
+	}
+	e.observer.emit(ogrenet.Event{
+		Kind:       kind,
+		Resource:   ogrenet.ResourceSession,
+		ResourceID: resourceID,
+		ParentID:   parentID,
+		Protocol:   protocol,
+		Local:      local,
+		Remote:     remote,
+		Duration:   duration,
+		Err:        err,
+	})
 }
 
 func WithObserver(observer ogrenet.Observer) Option {
