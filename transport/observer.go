@@ -2,11 +2,10 @@ package transport
 
 import (
 	"net"
-	"sync"
-	"sync/atomic"
 	"time"
 
 	"github.com/qigao/ogrenet"
+	"github.com/qigao/ogrenet/internal/runtimecore"
 )
 
 const defaultObserverBuffer = 1024
@@ -14,67 +13,42 @@ const defaultObserverBuffer = 1024
 type configuredObserver = ogrenet.Observer
 
 type observerDispatcher struct {
-	observer ogrenet.Observer
-	queue    chan ogrenet.Event
-	stopCh   chan struct{}
-	stopped  atomic.Bool
-	stopOnce sync.Once
-	dropped  atomic.Uint64
-	panics   atomic.Uint64
+	core *runtimecore.ObserverDispatcher
 }
 
 func newObserverDispatcher(observer ogrenet.Observer, size int) *observerDispatcher {
-	if observer == nil {
+	core := runtimecore.NewObserverDispatcher(observer, size)
+	if core == nil {
 		return nil
 	}
-	d := &observerDispatcher{
-		observer: observer,
-		queue:    make(chan ogrenet.Event, size),
-		stopCh:   make(chan struct{}),
-	}
-	go d.run()
-	return d
+	return &observerDispatcher{core: core}
 }
 
 func (d *observerDispatcher) emit(event ogrenet.Event) bool {
-	if d == nil || d.stopped.Load() {
+	if d == nil {
 		return false
 	}
-	select {
-	case d.queue <- event:
-		return true
-	default:
-		d.dropped.Add(1)
-		return false
-	}
+	return d.core.Emit(event)
 }
 
 func (d *observerDispatcher) stop() {
+	if d != nil {
+		d.core.Stop()
+	}
+}
+
+func (d *observerDispatcher) droppedCount() uint64 {
 	if d == nil {
-		return
+		return 0
 	}
-	d.stopped.Store(true)
-	d.stopOnce.Do(func() { close(d.stopCh) })
+	return d.core.Dropped()
 }
 
-func (d *observerDispatcher) run() {
-	for {
-		select {
-		case <-d.stopCh:
-			return
-		case event := <-d.queue:
-			d.observe(event)
-		}
+func (d *observerDispatcher) panicCount() uint64 {
+	if d == nil {
+		return 0
 	}
-}
-
-func (d *observerDispatcher) observe(event ogrenet.Event) {
-	defer func() {
-		if recover() != nil {
-			d.panics.Add(1)
-		}
-	}()
-	d.observer.Observe(event)
+	return d.core.Panics()
 }
 
 func (e *Engine) observeSetup(kind ogrenet.EventKind, resourceID, parentID uint64, protocol ogrenet.Scheme, local, remote net.Addr, duration time.Duration, err error) {
