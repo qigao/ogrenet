@@ -14,7 +14,7 @@ func (e *Engine) Stats() ogrenet.EngineStats {
 		return ogrenet.EngineStats{}
 	}
 	s := e.admission.snapshot()
-	return ogrenet.EngineStats{
+	out := ogrenet.EngineStats{
 		OpeningConnections:  nonNegativeUint64(s.OpeningConnections),
 		ActiveConnections:   nonNegativeUint64(s.ActiveConnections),
 		DrainingConnections: nonNegativeUint64(s.DrainingConnections),
@@ -28,6 +28,11 @@ func (e *Engine) Stats() ogrenet.EngineStats {
 		RejectedUpgrades:    s.RejectedUpgrades,
 		RejectedQueuedBytes: s.RejectedQueuedBytes,
 	}
+	if e.observer != nil {
+		out.ObserverDroppedEvents = e.observer.dropped.Load()
+		out.ObserverPanics = e.observer.panics.Load()
+	}
+	return out
 }
 
 func (c *conn) Stats() ogrenet.SessionStats {
