@@ -100,7 +100,6 @@ func (e *Engine) newWSSession(ws *websocket.Conn, endpoint ogrenet.Endpoint, loc
 		cipher:        cipher,
 		maxMessage:    e.cfg.maxMessageBytes,
 		writeTO:       e.cfg.effectiveWSWriteTimeout(),
-		closeTO:       e.cfg.ws.CloseTimeout,
 		readIdle:      e.cfg.timeouts.ReadIdle,
 		activity:      newActivityClock(e.cfg.timeouts.ConnectionIdle, e.cfg.timeouts.MaxLifetime),
 		pingEvery:     e.cfg.ws.PingInterval,
