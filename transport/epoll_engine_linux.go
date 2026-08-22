@@ -116,7 +116,10 @@ func (e *epollEngine) Listen(ctx context.Context, endpoint ogrenet.Endpoint, h o
 	if !endpoint.Scheme.IsSession() {
 		return nil, ErrProtocolMismatch
 	}
-	return nil, ErrProtocolUnsupported
+	if endpoint.Scheme != ogrenet.SchemeTCP {
+		return nil, ErrProtocolUnsupported
+	}
+	return e.listenNativeTCP(ctx, endpoint, h)
 }
 
 func (e *epollEngine) Dial(ctx context.Context, endpoint ogrenet.Endpoint, h ogrenet.Handler) (ogrenet.Session, error) {
@@ -129,7 +132,10 @@ func (e *epollEngine) Dial(ctx context.Context, endpoint ogrenet.Endpoint, h ogr
 	if !endpoint.Scheme.IsSession() {
 		return nil, ErrProtocolMismatch
 	}
-	return nil, ErrProtocolUnsupported
+	if endpoint.Scheme != ogrenet.SchemeTCP {
+		return nil, ErrProtocolUnsupported
+	}
+	return e.dialNativeTCP(ctx, endpoint, h, nil)
 }
 
 func (e *epollEngine) ListenPacket(ctx context.Context, endpoint ogrenet.Endpoint, h ogrenet.PacketHandler) (ogrenet.PacketConn, error) {
