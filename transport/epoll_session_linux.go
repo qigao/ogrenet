@@ -170,9 +170,24 @@ func (s *epollSession) requestEngineAbort(reason abortReason) {
 	}
 }
 
+func (s *epollSession) replayEstablishedEngineLifecycle() {
+	if s == nil || !s.established.Load() {
+		return
+	}
+	if reason := abortReason(s.engineAbort.Swap(uint32(abortNone))); reason != abortNone {
+		s.publishNativeAbort(reason, nil)
+	}
+	if s.shutdownRequested.Swap(false) {
+		s.requestNativeShutdown()
+	}
+}
+
 func (s *epollSession) onReactorInbox(r *epollReactor) {
 	if s == nil || r == nil || s.state == epollSessionClosed {
 		return
+	}
+	if s.established.Load() {
+		s.replayEstablishedEngineLifecycle()
 	}
 	if !s.established.Load() && s.engineAbort.Load() != uint32(abortNone) {
 		if s.dial != nil {
