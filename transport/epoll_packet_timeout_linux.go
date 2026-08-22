@@ -18,6 +18,13 @@ func (p *epollPacketConn) onEpollReactorRegistered(r *epollReactor) {
 	if timeout := p.engine.cfg.timeouts.ConnectionIdle; timeout > 0 {
 		r.scheduleDeadline(p.id, epollDeadlineConnectionIdle, p.nativePacketConnectionIdleGeneration(), now.Add(timeout))
 	}
+	if timeout := p.engine.cfg.timeouts.MaxLifetime; timeout > 0 {
+		deadline := now.Add(timeout)
+		if p.stats != nil && !p.stats.age.started.IsZero() {
+			deadline = p.stats.age.started.Add(timeout)
+		}
+		r.scheduleDeadline(p.id, epollDeadlineMaxLifetime, 1, deadline)
+	}
 }
 
 func (p *epollPacketConn) nativePacketReadIdleGeneration() uint64 {
@@ -73,6 +80,11 @@ func (p *epollPacketConn) currentRuntimeDeadlineGeneration(kind epollDeadlineKin
 			return 0
 		}
 		return p.nativePacketConnectionIdleGeneration()
+	case epollDeadlineMaxLifetime:
+		if p.engine.cfg.timeouts.MaxLifetime <= 0 {
+			return 0
+		}
+		return 1
 	default:
 		return 0
 	}
@@ -88,6 +100,8 @@ func (p *epollPacketConn) onRuntimeReactorDeadline(r *epollReactor, kind epollDe
 		timeout = &TimeoutError{Kind: TimeoutReadIdle, Cause: context.DeadlineExceeded}
 	case epollDeadlineConnectionIdle:
 		timeout = &TimeoutError{Kind: TimeoutConnectionIdle, Cause: context.DeadlineExceeded}
+	case epollDeadlineMaxLifetime:
+		timeout = &TimeoutError{Kind: TimeoutMaxLifetime, Cause: context.DeadlineExceeded}
 	default:
 		return
 	}
