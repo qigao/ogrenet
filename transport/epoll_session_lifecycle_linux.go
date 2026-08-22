@@ -317,6 +317,7 @@ func (s *epollSession) finalizeNativeEstablished(r *epollReactor) {
 		}
 		s.releaseNativeWriteOwnership(pendingErr)
 		s.writeGen++
+		s.invalidateNativeRuntimeDeadlines()
 
 		if s.registered {
 			_ = r.poller.Del(s.fd)

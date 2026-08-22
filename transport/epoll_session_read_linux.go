@@ -108,6 +108,7 @@ func (s *epollSession) driveNativeRead(r *epollReactor) {
 				s.compactNativeRead(consumed)
 				s.releaseCodec()
 				codecHeld = false
+				s.disarmNativeReadIdle()
 				if s.stats != nil {
 					s.stats.bytesRX.Add(uint64(len(msg.Data)))
 					s.stats.messagesRX.Add(1)
@@ -130,6 +131,7 @@ func (s *epollSession) driveNativeRead(r *epollReactor) {
 			return
 		}
 		if opsUsed >= opBudget || bytesUsed >= byteBudget {
+			s.ensureNativeReadIdleDeadline(r)
 			s.releaseNativeReadAttempt(codecHeld, reservationHeld)
 			r.requeue(s)
 			return
@@ -139,6 +141,7 @@ func (s *epollSession) driveNativeRead(r *epollReactor) {
 		opsUsed++
 		if n > 0 {
 			bytesUsed += n
+			s.disarmNativeReadIdle()
 			if s.activity != nil {
 				s.activity.touch()
 			}
@@ -156,6 +159,7 @@ func (s *epollSession) driveNativeRead(r *epollReactor) {
 			}
 			if errors.Is(err, unix.EAGAIN) || errors.Is(err, unix.EWOULDBLOCK) {
 				s.readReady = false
+				s.ensureNativeReadIdleDeadline(r)
 				s.releaseNativeReadAttempt(codecHeld, reservationHeld)
 				return
 			}

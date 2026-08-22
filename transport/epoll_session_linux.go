@@ -61,6 +61,7 @@ type epollSession struct {
 	readScratch       []byte
 	readReady         bool
 	terminalPrepared  bool
+	runtimeDeadlines  epollSessionRuntimeDeadlines
 
 	writeCurrent    outbound
 	writeOffset     int

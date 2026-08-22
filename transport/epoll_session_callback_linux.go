@@ -141,14 +141,18 @@ func (s *epollSession) driveNativeEstablished(r *epollReactor) {
 	if s == nil || r == nil || s.state == epollSessionClosed || s.state == epollSessionTerminal {
 		return
 	}
+	s.reconcileNativeActivityDeadlines(r)
 	s.driveNativeLifecycle(r)
+	s.reconcileNativeActivityDeadlines(r)
 	if s.state == epollSessionClosed || s.state == epollSessionTerminal {
 		return
 	}
 	if !s.driveNativeCallbackState(r) {
 		return
 	}
+	s.ensureNativeReadIdleDeadline(r)
 	if s.state == epollSessionActive && s.readReady && !s.nativeReadHalfClosed() {
 		s.driveNativeRead(r)
+		s.reconcileNativeActivityDeadlines(r)
 	}
 }

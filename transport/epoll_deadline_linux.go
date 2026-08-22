@@ -22,6 +22,11 @@ type epollDeadlineTarget interface {
 	onReactorDeadline(*epollReactor, epollDeadlineKind, uint64)
 }
 
+type epollRuntimeDeadlineTarget interface {
+	currentRuntimeDeadlineGeneration(epollDeadlineKind) uint64
+	onRuntimeReactorDeadline(*epollReactor, epollDeadlineKind, uint64)
+}
+
 type epollDeadlineEntry struct {
 	at         time.Time
 	resourceID uint64
@@ -70,12 +75,33 @@ func (r *epollReactor) scheduleDeadline(resourceID uint64, kind epollDeadlineKin
 	})
 }
 
+func epollDeadlineGeneration(target epollDeadlineTarget, kind epollDeadlineKind) uint64 {
+	if runtimeTarget, ok := target.(epollRuntimeDeadlineTarget); ok {
+		switch kind {
+		case epollDeadlineReadIdle, epollDeadlineConnectionIdle, epollDeadlineMaxLifetime:
+			return runtimeTarget.currentRuntimeDeadlineGeneration(kind)
+		}
+	}
+	return target.currentDeadlineGeneration(kind)
+}
+
+func dispatchEpollDeadline(r *epollReactor, target epollDeadlineTarget, kind epollDeadlineKind, generation uint64) {
+	if runtimeTarget, ok := target.(epollRuntimeDeadlineTarget); ok {
+		switch kind {
+		case epollDeadlineReadIdle, epollDeadlineConnectionIdle, epollDeadlineMaxLifetime:
+			runtimeTarget.onRuntimeReactorDeadline(r, kind, generation)
+			return
+		}
+	}
+	target.onReactorDeadline(r, kind, generation)
+}
+
 func (r *epollReactor) liveDeadlineHead() (epollDeadlineEntry, epollDeadlineTarget, bool) {
 	for len(r.deadlines) != 0 {
 		entry := r.deadlines[0]
 		resource := r.resources[entry.resourceID]
 		target, ok := resource.(epollDeadlineTarget)
-		if !ok || target == nil || target.currentDeadlineGeneration(entry.kind) != entry.generation {
+		if !ok || target == nil || epollDeadlineGeneration(target, entry.kind) != entry.generation {
 			heap.Pop(&r.deadlines)
 			continue
 		}
@@ -102,6 +128,6 @@ func (r *epollReactor) runExpiredDeadlines(now time.Time) {
 			return
 		}
 		heap.Pop(&r.deadlines)
-		target.onReactorDeadline(r, entry.kind, entry.generation)
+		dispatchEpollDeadline(r, target, entry.kind, entry.generation)
 	}
 }
