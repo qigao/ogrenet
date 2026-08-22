@@ -4,7 +4,6 @@ package transport
 
 import (
 	"context"
-	"net"
 	"testing"
 	"time"
 
@@ -50,12 +49,8 @@ func TestEpollNativePacketBindDialAndAffinity(t *testing.T) {
 	if err != nil {
 		t.Fatalf("listenNativeUDP: %v", err)
 	}
-	local, ok := server.LocalAddr().(*net.UDPAddr)
-	if !ok || local.Port == 0 {
-		t.Fatalf("server LocalAddr=%T %v, want bound UDP port", server.LocalAddr(), server.LocalAddr())
-	}
-	if server.Endpoint().Port != uint16(local.Port) {
-		t.Fatalf("server Endpoint=%+v local=%v", server.Endpoint(), local)
+	if server.LocalAddr() == nil || server.Endpoint().Port == 0 {
+		t.Fatalf("server endpoint/local not bound: endpoint=%+v local=%v", server.Endpoint(), server.LocalAddr())
 	}
 	if server.RemoteAddr() != nil {
 		t.Fatalf("unconnected RemoteAddr=%v, want nil", server.RemoteAddr())
@@ -64,16 +59,13 @@ func TestEpollNativePacketBindDialAndAffinity(t *testing.T) {
 		t.Fatal("server packet resource not registered on owning reactor")
 	}
 
-	endpoint := ogrenet.Endpoint{Scheme: ogrenet.SchemeUDP, Host: "127.0.0.1", Port: uint16(local.Port)}
+	endpoint := ogrenet.Endpoint{Scheme: ogrenet.SchemeUDP, Host: "127.0.0.1", Port: server.Endpoint().Port}
 	client, err := e.dialNativeUDP(ctx, endpoint, ogrenet.PacketHandlerFuncs{})
 	if err != nil {
 		t.Fatalf("dialNativeUDP: %v", err)
 	}
-	if client.RemoteAddr() == nil {
-		t.Fatal("connected RemoteAddr=nil")
-	}
-	if got := client.RemoteAddr().String(); got != local.String() {
-		t.Fatalf("client RemoteAddr=%s, want %s", got, local)
+	if client.RemoteAddr() == nil || client.RemoteAddr().String() != server.LocalAddr().String() {
+		t.Fatalf("client RemoteAddr=%v, want %v", client.RemoteAddr(), server.LocalAddr())
 	}
 	if client.LocalAddr() == nil {
 		t.Fatal("connected LocalAddr=nil")
