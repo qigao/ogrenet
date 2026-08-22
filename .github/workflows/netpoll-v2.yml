@@ -123,6 +123,15 @@ jobs:
       - name: Native epoll TCP parity race loop
         if: matrix.go == '1.26.x'
         run: go test -race ./transport -run '^TestEpoll.*(Parity|Graceful|Observer|Stats|Limit|Timeout|Error)' -count=20
+      - name: Native epoll Engine shutdown race loop
+        if: matrix.go == '1.26.x'
+        run: >-
+          go test -race ./transport
+          -run '^TestEpoll(EngineShutdown|EngineClose|EngineBlockedObserver|EngineDone|ListenerCloseRacesAcceptFlood|NativeReadableEdgeDuringCodecSetupIsPreserved)'
+          -count=20
+      - name: Native epoll 2000-session stress loop
+        if: matrix.go == '1.26.x'
+        run: go test ./transport -run '^TestEpollNativeShortLivedConnections$' -count=10
       - name: Test with race detector
         run: go test -race -count=1 ./...
 
