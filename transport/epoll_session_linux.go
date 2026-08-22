@@ -45,6 +45,22 @@ type epollSession struct {
 	framer     wire.Framer
 	wireFramer bool
 
+	queue         chan outbound
+	quota         *byteQuota
+	gate          *sendGate
+	frameSlots    chan struct{}
+	codecSlot     chan struct{}
+	stats         *sessionCounters
+	activity      *activityClock
+	decodeWaiting atomic.Bool
+
+	writeCurrent    outbound
+	writeOffset     int
+	writeActive     bool
+	writeBlocked    bool
+	writeInterested bool
+	writeGen        uint64
+
 	setupMu        sync.Mutex
 	setupDone      bool
 	setupSubmitted bool
@@ -55,6 +71,12 @@ type epollSession struct {
 	shutdownRequested atomic.Bool
 	done              chan struct{}
 	doneOnce          sync.Once
+
+	// Package tests set these before publishing send work. The first hook runs
+	// on the sending caller after queue ownership transfer; the second runs only
+	// on the owning reactor after a positive partial write.
+	testAfterSendQueueTransfer func()
+	testAfterWriteProgress     func(*epollSession)
 }
 
 func newEpollBootstrapSession(
@@ -166,6 +188,8 @@ func (s *epollSession) onReactorInbox(r *epollReactor) {
 		if s.codecSetupComplete() {
 			s.applyCodecSetup(r)
 		}
+	case epollSessionOpening, epollSessionActive:
+		s.driveNativeWrite(r)
 	case epollSessionTerminal:
 		s.finalizeReactor(r)
 	}
@@ -177,6 +201,13 @@ func (s *epollSession) onReactorEvent(r *epollReactor, events epoll.Events) {
 	}
 	if s.state == epollSessionConnecting {
 		s.onNativeConnectEvent(r, events)
+		return
+	}
+	if s.state != epollSessionOpening && s.state != epollSessionActive {
+		return
+	}
+	if events&(epoll.Writable|epoll.Error|epoll.Hangup|epoll.PeerClosed) != 0 {
+		s.onNativeWritable(r)
 	}
 }
 
@@ -189,6 +220,8 @@ func (s *epollSession) onReactorRunnable(r *epollReactor) {
 		s.driveNativeConnect(r)
 	case epollSessionCodecSetup:
 		s.startCodecSetup(r)
+	case epollSessionOpening, epollSessionActive:
+		s.driveNativeWrite(r)
 	case epollSessionTerminal:
 		s.finalizeReactor(r)
 	}
@@ -312,6 +345,7 @@ func (s *epollSession) applyCodecSetup(r *epollReactor) {
 
 	s.framer = framer
 	_, s.wireFramer = framer.(*wire.Codec)
+	s.initNativeSendState()
 	s.state = epollSessionOpening
 	if s.parent != nil {
 		if s.parent.stats != nil {
@@ -340,6 +374,10 @@ func (s *epollSession) finalizeReactor(r *epollReactor) {
 	if s == nil || s.state == epollSessionClosed || s.codecSetupOutstanding() {
 		return
 	}
+	if s.gate != nil {
+		s.gate.close()
+	}
+	s.releaseNativeWriteOwnership(s.nativeOperationalError(OpSend, ErrClosed))
 	if s.registered {
 		_ = r.poller.Del(s.fd)
 		if r.resources[s.id] == s {
