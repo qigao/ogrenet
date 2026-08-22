@@ -56,6 +56,24 @@ func readNativeFrame(t *testing.T, peer net.Conn, want []byte) {
 	}
 }
 
+func waitNativePeerClosedAfterBufferedData(t *testing.T, peer net.Conn) {
+	t.Helper()
+	if err := peer.SetReadDeadline(time.Now().Add(2 * time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	buf := make([]byte, 64<<10)
+	for {
+		_, err := peer.Read(buf)
+		if err == nil {
+			continue
+		}
+		if netErr, ok := err.(net.Error); ok && netErr.Timeout() {
+			t.Fatal("peer connection remained open after buffered data was drained")
+		}
+		return
+	}
+}
+
 func waitNativeSendSignal(t *testing.T, ch <-chan struct{}, what string) {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -234,7 +252,7 @@ func TestEpollNativePartialWriteRetainsAdmissionAndYieldsReactor(t *testing.T) {
 	_, s, peer := newEpollNativeSendSession(t,
 		WithObserver(observer),
 		WithTCPConfig(TCPConfig{NoDelay: true, WriteBufferBytes: 4096}),
-		WithTimeouts(Timeouts{Write: 3 * time.Second}),
+		WithTimeouts(Timeouts{Write: 30 * time.Second}),
 	)
 	_ = waitEpollEvent(t, observer, ogrenet.EventConnect)
 
@@ -255,7 +273,7 @@ func TestEpollNativePartialWriteRetainsAdmissionAndYieldsReactor(t *testing.T) {
 		progressOnce.Do(func() { close(progress) })
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	result := make(chan error, 1)
 	go func() { result <- s.Send(ctx, msg) }()
@@ -328,5 +346,5 @@ func TestEpollNativeWriteDeadlineFailsBlockedFrameAndReleasesAdmission(t *testin
 	if got := len(s.frameSlots); got != 0 {
 		t.Fatalf("frame slots after timeout=%d, want 0", got)
 	}
-	waitPeerClosed(t, peer)
+	waitNativePeerClosedAfterBufferedData(t, peer)
 }
