@@ -51,7 +51,7 @@ func TestEpollNativePacketSendMethodLegalityAndOversize(t *testing.T) {
 		t.Fatalf("TrySendTo nil peer error=%v, want ErrPeerRequired", err)
 	}
 
-	wrongPeer := &net.UDPAddr{IP: net.ParseIP("127.0.0.1"), Port: server.Endpoint().Port + 1}
+	wrongPeer := &net.UDPAddr{IP: net.ParseIP("127.0.0.1"), Port: int(server.Endpoint().Port) + 1}
 	if err := client.TrySendTo(wrongPeer, packet); !errors.Is(err, ErrPeerMismatch) {
 		t.Fatalf("connected TrySendTo wrong peer error=%v, want ErrPeerMismatch", err)
 	}
@@ -68,6 +68,10 @@ func TestEpollNativePacketSendMethodLegalityAndOversize(t *testing.T) {
 	stats := client.Stats()
 	if stats.QueuedPackets != 0 || stats.QueuedBytes != 0 {
 		t.Fatalf("oversize acquired queue ownership: %+v", stats)
+	}
+
+	if err := client.TrySendTo(client.RemoteAddr(), packet); err != nil {
+		t.Fatalf("connected TrySendTo same peer: %v", err)
 	}
 }
 
