@@ -59,7 +59,7 @@ type epollNativeRetainHandler struct {
 	count    int
 }
 
-func (h *epollNativeRetainHandler) OnOpen(ogrenet.Session) {}
+func (h *epollNativeRetainHandler) OnOpen(ogrenet.Session)         {}
 func (h *epollNativeRetainHandler) OnClose(ogrenet.Session, error) {}
 func (h *epollNativeRetainHandler) OnMessage(_ ogrenet.Session, msg ogrenet.Message) {
 	h.count++
@@ -97,7 +97,7 @@ type epollNativeStatsObserverHandler struct {
 	result       chan error
 }
 
-func (h *epollNativeStatsObserverHandler) OnOpen(ogrenet.Session) {}
+func (h *epollNativeStatsObserverHandler) OnOpen(ogrenet.Session)         {}
 func (h *epollNativeStatsObserverHandler) OnClose(ogrenet.Session, error) {}
 func (h *epollNativeStatsObserverHandler) OnMessage(s ogrenet.Session, msg ogrenet.Message) {
 	stats := s.Stats()
@@ -147,7 +147,7 @@ type epollNativeBlockingMessageHandler struct {
 	once    sync.Once
 }
 
-func (h *epollNativeBlockingMessageHandler) OnOpen(ogrenet.Session) {}
+func (h *epollNativeBlockingMessageHandler) OnOpen(ogrenet.Session)         {}
 func (h *epollNativeBlockingMessageHandler) OnClose(ogrenet.Session, error) {}
 func (h *epollNativeBlockingMessageHandler) OnMessage(ogrenet.Session, ogrenet.Message) {
 	h.once.Do(func() { close(h.entered) })
@@ -158,7 +158,7 @@ type epollNativeEchoHandler struct {
 	result chan error
 }
 
-func (h *epollNativeEchoHandler) OnOpen(ogrenet.Session) {}
+func (h *epollNativeEchoHandler) OnOpen(ogrenet.Session)         {}
 func (h *epollNativeEchoHandler) OnClose(ogrenet.Session, error) {}
 func (h *epollNativeEchoHandler) OnMessage(s ogrenet.Session, msg ogrenet.Message) {
 	h.result <- s.Send(context.Background(), msg)
