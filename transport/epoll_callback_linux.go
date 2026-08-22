@@ -75,6 +75,15 @@ func (x *epollCallbackExecutor) tryReserve() bool {
 	return true
 }
 
+func (x *epollCallbackExecutor) hasCapacity() bool {
+	if x == nil {
+		return false
+	}
+	x.mu.Lock()
+	defer x.mu.Unlock()
+	return !x.stopped && x.reserved < x.limit
+}
+
 func (x *epollCallbackExecutor) submitReserved(task epollWorkerTask) {
 	if x == nil || task == nil {
 		panic("transport: invalid epoll callback task")
