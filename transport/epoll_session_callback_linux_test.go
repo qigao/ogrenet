@@ -115,8 +115,9 @@ type epollNativeCloseBarrierHandler struct {
 	releaseClose chan struct{}
 }
 
-func (h *epollNativeCloseBarrierHandler) OnOpen(ogrenet.Session)              {}
-func (h *epollNativeCloseBarrierHandler) OnMessage(ogrenet.Session, ogrenet.Message) {}
+func (h *epollNativeCloseBarrierHandler) OnOpen(ogrenet.Session) {}
+func (h *epollNativeCloseBarrierHandler) OnMessage(ogrenet.Session, ogrenet.Message) {
+}
 func (h *epollNativeCloseBarrierHandler) OnClose(ogrenet.Session, error) {
 	close(h.closeEntered)
 	<-h.releaseClose
