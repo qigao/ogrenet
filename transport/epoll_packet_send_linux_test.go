@@ -171,24 +171,21 @@ func TestEpollNativePacketSendCancellationAfterPublicationRetainsOwnership(t *te
 
 func TestEpollNativePacketAdmissionCopiesPayloadBeforePublication(t *testing.T) {
 	_, _, client := newEpollPacketPair(t, WithWriteQueue(2), WithMaxQueuedBytes(64))
+	retained := make(chan []byte, 1)
+	client.testAfterPacketQueueTransfer = func(req packetOutbound) {
+		retained <- req.data
+	}
 	data := []byte("copy-owned")
 	want := append([]byte(nil), data...)
 	if err := client.TrySend(ogrenet.Packet{Data: data}); err != nil {
 		t.Fatalf("TrySend: %v", err)
 	}
+	owned := <-retained
 
 	for i := range data {
 		data[i] = 'x'
 	}
-
-	select {
-	case req := <-client.queue:
-		if string(req.data) != string(want) {
-			client.queue <- req
-			t.Fatalf("retained datagram mutated with caller buffer: got=%q want=%q", req.data, want)
-		}
-		client.queue <- req
-	default:
-		t.Fatal("published datagram missing from retained queue")
+	if string(owned) != string(want) {
+		t.Fatalf("retained datagram mutated with caller buffer: got=%q want=%q", owned, want)
 	}
 }

@@ -6,9 +6,12 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 
 	"github.com/qigao/ogrenet"
+	"github.com/qigao/ogrenet/epoll"
+	"golang.org/x/sys/unix"
 )
 
 func (p *epollPacketConn) initNativePacketSendState() {
@@ -124,6 +127,9 @@ func (p *epollPacketConn) sendNativePacket(ctx context.Context, peer *net.UDPAdd
 		}
 		return p.operationalError(OpSend, ErrClosed, peer)
 	case p.queue <- req:
+		if p.testAfterPacketQueueTransfer != nil {
+			p.testAfterPacketQueueTransfer(req)
+		}
 		if p.reactor != nil {
 			p.reactor.signal(p)
 		}
@@ -182,6 +188,9 @@ func (p *epollPacketConn) trySendNativePacket(peer *net.UDPAddr, packet ogrenet.
 		}
 		return p.operationalError(OpSend, ErrClosed, peer)
 	case p.queue <- req:
+		if p.testAfterPacketQueueTransfer != nil {
+			p.testAfterPacketQueueTransfer(req)
+		}
 		if p.reactor != nil {
 			p.reactor.signal(p)
 		}
@@ -293,6 +302,159 @@ func (p *epollPacketConn) observeNativePacket(kind ogrenet.EventKind, bytes uint
 		Bytes:      bytes,
 		Err:        err,
 	})
+}
+
+func (p *epollPacketConn) driveNativePacketWrite(r *epollReactor) {
+	if p == nil || r == nil || p.state != epollPacketActive || p.fd < 0 || p.writeBlocked {
+		return
+	}
+	opsBudget := r.cfg.ioBudgetOps
+	if opsBudget <= 0 {
+		opsBudget = 1
+	}
+	byteBudget := r.cfg.ioBudgetBytes
+	if byteBudget <= 0 {
+		byteBudget = 1
+	}
+	opsUsed := 0
+	bytesUsed := 0
+
+	for opsUsed < opsBudget && bytesUsed < byteBudget {
+		if !p.writeActive {
+			select {
+			case p.writeCurrent = <-p.queue:
+				p.writeActive = true
+				p.writeGen++
+			default:
+				return
+			}
+		}
+
+		req := p.writeCurrent
+		n, err := p.writeNativePacketDatagram(req)
+		opsUsed++
+		if err == nil && n == len(req.data) {
+			bytesUsed += n
+			if p.writeInterested && !p.disableNativePacketWriteInterest(r) {
+				return
+			}
+			p.completeNativePacketWrite()
+			continue
+		}
+		if errors.Is(err, unix.EINTR) {
+			continue
+		}
+		if errors.Is(err, unix.EAGAIN) || errors.Is(err, unix.EWOULDBLOCK) {
+			p.writeBlocked = true
+			p.enableNativePacketWriteInterest(r)
+			return
+		}
+		if err == nil && n != len(req.data) {
+			err = io.ErrShortWrite
+		}
+		if err == nil {
+			err = io.ErrUnexpectedEOF
+		}
+		p.failNativePacketWrite(r, p.operationalError(OpWrite, err, req.peer))
+		return
+	}
+	if p.writeActive || len(p.queue) != 0 {
+		r.requeue(p)
+	}
+}
+
+func (p *epollPacketConn) writeNativePacketDatagram(req packetOutbound) (int, error) {
+	var to unix.Sockaddr
+	if req.peer != nil {
+		sa, _, err := nativeUDPAddrToSockaddr(req.peer)
+		if err != nil {
+			return 0, err
+		}
+		to = sa
+	}
+	return unix.SendmsgN(p.fd, req.data, nil, to, 0)
+}
+
+func (p *epollPacketConn) enableNativePacketWriteInterest(r *epollReactor) {
+	if p == nil || r == nil || p.writeInterested || !p.registered || p.fd < 0 {
+		return
+	}
+	if err := r.poller.Mod(p.fd, epoll.Readable|epoll.Writable|epoll.Error|epoll.EdgeTriggered, p.id); err != nil {
+		p.failNativePacketWrite(r, p.operationalError(OpWrite, err, p.writeCurrent.peer))
+		return
+	}
+	p.writeInterested = true
+}
+
+func (p *epollPacketConn) disableNativePacketWriteInterest(r *epollReactor) bool {
+	if p == nil || r == nil || !p.writeInterested || !p.registered || p.fd < 0 {
+		return true
+	}
+	if err := r.poller.Mod(p.fd, epoll.Readable|epoll.Error|epoll.EdgeTriggered, p.id); err != nil {
+		p.failNativePacketWrite(r, p.operationalError(OpWrite, err, p.writeCurrent.peer))
+		return false
+	}
+	p.writeInterested = false
+	p.writeBlocked = false
+	return true
+}
+
+func (p *epollPacketConn) completeNativePacketWrite() {
+	req := p.writeCurrent
+	p.writeCurrent = packetOutbound{}
+	p.writeActive = false
+	p.writeBlocked = false
+	p.writeGen++
+	if p.quota != nil {
+		p.quota.release(req.bytes)
+	}
+	p.releaseNativePacketSlot()
+	if p.stats != nil {
+		p.stats.bytesTX.Add(uint64(len(req.data)))
+		p.stats.packetsTX.Add(1)
+	}
+	p.observeNativePacket(ogrenet.EventWrite, uint64(len(req.data)), req.peer, nil)
+	if req.ack != nil {
+		req.ack <- nil
+	}
+}
+
+func (p *epollPacketConn) failNativePacketWrite(r *epollReactor, err error) {
+	if p == nil || r == nil || p.state == epollPacketClosed {
+		return
+	}
+	p.setTerminalError(err)
+	p.closeNativePacketAdmission()
+	p.closeRequested.Store(true)
+	p.state = epollPacketTerminal
+	p.releaseNativePacketWriteOwnership(err)
+	p.finalizeReactor(r)
+}
+
+func (p *epollPacketConn) releaseNativePacketWriteOwnership(cause error) {
+	if p == nil || p.queue == nil {
+		return
+	}
+	if p.writeActive {
+		req := p.writeCurrent
+		p.writeCurrent = packetOutbound{}
+		p.writeActive = false
+		p.writeBlocked = false
+		p.writeInterested = false
+		p.writeGen++
+		if p.quota != nil {
+			p.quota.release(req.bytes)
+		}
+		p.releaseNativePacketSlot()
+		if req.ack != nil {
+			pendingErr := p.Err()
+			if pendingErr == nil {
+				pendingErr = p.operationalError(OpSend, cause, req.peer)
+			}
+			req.ack <- pendingErr
+		}
+	}
+	p.releaseNativePacketPendingOwnership(cause)
 }
 
 func (p *epollPacketConn) releaseNativePacketPendingOwnership(cause error) {

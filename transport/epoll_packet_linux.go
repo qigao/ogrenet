@@ -47,6 +47,12 @@ type epollPacketConn struct {
 	closing   chan struct{}
 	closeOnce sync.Once
 
+	writeCurrent    packetOutbound
+	writeActive     bool
+	writeBlocked    bool
+	writeInterested bool
+	writeGen        uint64
+
 	result     chan error
 	resultOnce sync.Once
 
@@ -61,9 +67,10 @@ type epollPacketConn struct {
 	done     chan struct{}
 	doneOnce sync.Once
 
-	// Package tests set this before publishing Close. It is invoked only by the
-	// owning reactor immediately before the physical close(2).
-	testBeforePhysicalClose func(*epollPacketConn)
+	// Package tests set these only before publishing work. Caller hooks run at
+	// queue ownership transfer; reactor hooks stay on the owning reactor.
+	testAfterPacketQueueTransfer func(packetOutbound)
+	testBeforePhysicalClose      func(*epollPacketConn)
 }
 
 func (e *epollEngine) listenNativeUDP(ctx context.Context, endpoint ogrenet.Endpoint, handler ogrenet.PacketHandler) (*epollPacketConn, error) {
@@ -393,21 +400,37 @@ func (p *epollPacketConn) onReactorInbox(r *epollReactor) {
 	}
 	if p.closeRequested.Load() {
 		p.finalizeReactor(r)
+		return
+	}
+	if p.state == epollPacketActive {
+		p.driveNativePacketWrite(r)
 	}
 }
 
-func (p *epollPacketConn) onReactorEvent(r *epollReactor, _ epoll.Events) {
+func (p *epollPacketConn) onReactorEvent(r *epollReactor, events epoll.Events) {
 	if p == nil || r == nil || p.state != epollPacketActive {
+		return
+	}
+	if events&(epoll.Writable|epoll.Error|epoll.Hangup) != 0 {
+		p.writeBlocked = false
+	}
+	if p.closeRequested.Load() {
+		p.finalizeReactor(r)
+		return
+	}
+	p.driveNativePacketWrite(r)
+}
+
+func (p *epollPacketConn) onReactorRunnable(r *epollReactor) {
+	if p == nil || r == nil || p.state == epollPacketClosed {
 		return
 	}
 	if p.closeRequested.Load() {
 		p.finalizeReactor(r)
+		return
 	}
-}
-
-func (p *epollPacketConn) onReactorRunnable(r *epollReactor) {
-	if p != nil && p.closeRequested.Load() {
-		p.finalizeReactor(r)
+	if p.state == epollPacketActive {
+		p.driveNativePacketWrite(r)
 	}
 }
 
@@ -494,7 +517,7 @@ func (p *epollPacketConn) finalizeReactor(r *epollReactor) {
 	if p.gate != nil && !isClosedSignal(p.gate.done()) {
 		return
 	}
-	p.releaseNativePacketPendingOwnership(ErrClosed)
+	p.releaseNativePacketWriteOwnership(ErrClosed)
 	if p.registered {
 		_ = r.poller.Del(p.fd)
 		if r.resources[p.id] == p {
