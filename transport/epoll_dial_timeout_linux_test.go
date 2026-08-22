@@ -12,6 +12,39 @@ import (
 	"github.com/qigao/ogrenet/wire"
 )
 
+func TestEpollNativeDialConnectReactorDeadlineExcludesCallerDeadline(t *testing.T) {
+	parent, parentCancel := context.WithDeadline(context.Background(), time.Now().Add(time.Hour))
+	defer parentCancel()
+	dctx, cancel := boundedOperationContext(parent, 2*time.Hour)
+	defer cancel()
+
+	if deadline, ok := nativeConnectReactorDeadline(parent, dctx, 2*time.Hour); ok {
+		t.Fatalf("reactor scheduled caller-owned deadline %v", deadline)
+	}
+
+	noInternal, noInternalCancel := boundedOperationContext(parent, 0)
+	defer noInternalCancel()
+	if deadline, ok := nativeConnectReactorDeadline(parent, noInternal, 0); ok {
+		t.Fatalf("reactor scheduled deadline without internal timeout: %v", deadline)
+	}
+}
+
+func TestEpollNativeDialConnectReactorDeadlineUsesInternalTimeout(t *testing.T) {
+	parent, parentCancel := context.WithDeadline(context.Background(), time.Now().Add(2*time.Hour))
+	defer parentCancel()
+	dctx, cancel := boundedOperationContext(parent, time.Hour)
+	defer cancel()
+
+	want, ok := dctx.Deadline()
+	if !ok {
+		t.Fatal("bounded connect context has no deadline")
+	}
+	got, ok := nativeConnectReactorDeadline(parent, dctx, time.Hour)
+	if !ok || !got.Equal(want) {
+		t.Fatalf("reactor deadline=%v ok=%v, want internal %v", got, ok, want)
+	}
+}
+
 func TestEpollNativeDialConnectTimeoutDuringCodecSetupDoesNotReadReactorStateOrAdopt(t *testing.T) {
 	_, endpoint, accepted := newNativeDialTarget(t)
 	observer := newEpollTestObserver()
