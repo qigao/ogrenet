@@ -92,6 +92,9 @@ func (r *epollReactor) registerResource(resource epollEventResource) error {
 		return errEpollDuplicateResourceID
 	}
 	r.resources[id] = resource
+	if registered, ok := resource.(interface{ onEpollReactorRegistered(*epollReactor) }); ok {
+		registered.onEpollReactorRegistered(r)
+	}
 	return nil
 }
 
