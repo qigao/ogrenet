@@ -227,16 +227,33 @@ func (e *epollEngine) removeManaged(id uint64) {
 	e.mu.Unlock()
 }
 
-func (e *epollEngine) beginOpSnapshot() (engineState, int) {
-	e.mu.Lock()
-	defer e.mu.Unlock()
-	return e.state, e.activeOps
+func (e *epollEngine) snapshotManagedLocked() []epollManagedResource {
+	out := make([]epollManagedResource, 0, len(e.managed))
+	for _, resource := range e.managed {
+		out = append(out, resource)
+	}
+	return out
+}
+
+func (e *epollEngine) maybeQuiescentLocked() {
+	if e.state == engineRunning || e.activeOps != 0 || len(e.managed) != 0 || !e.admission.idle() {
+		return
+	}
+	e.quiescentOnce.Do(func() { close(e.quiescent) })
+}
+
+func (e *epollEngine) selectReactor() *epollReactor {
+	if e == nil || len(e.reactors) == 0 {
+		return nil
+	}
+	index := e.nextReactor.Add(1) - 1
+	return e.reactors[index%uint64(len(e.reactors))]
 }
 
 func (e *epollEngine) nextResourceID() (uint64, error) {
 	for {
 		current := e.nextID.Load()
-		if current == math.MaxUint64 {
+		if current >= math.MaxUint64-1 {
 			return 0, errNativeResourceIDExhausted
 		}
 		if e.nextID.CompareAndSwap(current, current+1) {
@@ -245,22 +262,68 @@ func (e *epollEngine) nextResourceID() (uint64, error) {
 	}
 }
 
-func (e *epollEngine) selectReactor() *epollReactor {
-	if e == nil || len(e.reactors) == 0 {
-		return nil
-	}
-	idx := e.nextReactor.Add(1) - 1
-	return e.reactors[idx%uint64(len(e.reactors))]
-}
-
 func (e *epollEngine) wakeAll() {
+	if e == nil {
+		return
+	}
 	for _, reactor := range e.reactors {
-		reactor.wake()
+		_ = reactor.poller.Wake()
 	}
 }
 
 func (e *epollEngine) wakeWorkerWaiters() {
-	for _, reactor := range e.reactors {
-		reactor.wakeWorkerBlocked()
+	if e == nil {
+		return
 	}
+	for _, reactor := range e.reactors {
+		if reactor.hasWorkerBlocked.Load() {
+			reactor.signalControl(epollControlWorkerCapacity)
+		}
+	}
+}
+
+func (e *epollEngine) onReactorFatal(err error) {
+	if e == nil || err == nil {
+		return
+	}
+	e.mu.Lock()
+	if e.state == engineDone {
+		e.mu.Unlock()
+		return
+	}
+	if e.shutdownErr == nil {
+		e.shutdownErr = err
+	} else {
+		e.shutdownErr = errors.Join(e.shutdownErr, err)
+	}
+	e.state = engineAborting
+	if e.shutdownReason == abortNone {
+		e.shutdownReason = abortFailure
+	}
+	managed := e.snapshotManagedLocked()
+	e.maybeQuiescentLocked()
+	e.mu.Unlock()
+
+	for _, resource := range managed {
+		resource.requestEngineAbort(abortFailure)
+	}
+	e.wakeAll()
+}
+
+func (e *epollEngine) finalize() {
+	<-e.quiescent
+	for _, reactor := range e.reactors {
+		reactor.signalControl(epollControlStop)
+	}
+	e.reactorWG.Wait()
+	for _, reactor := range e.reactors {
+		_ = reactor.poller.Close()
+	}
+	e.callbacks.stopIdle()
+	e.observer.stop()
+
+	e.mu.Lock()
+	e.state = engineDone
+	e.mu.Unlock()
+	e.doneOnce.Do(func() { close(e.done) })
 }
