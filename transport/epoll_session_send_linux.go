@@ -213,6 +213,16 @@ func (s *epollSession) recordNativeBackpressure(err error) error {
 	return opErr
 }
 
+func (s *epollSession) leaveNativeSendGate() {
+	if s == nil || s.gate == nil {
+		return
+	}
+	s.gate.leave()
+	if s.life != nil && isClosedSignal(s.life.writeRequested()) {
+		s.signalNativeLifecycle()
+	}
+}
+
 // Send performs validation/admission/encoding on the caller, then transfers the
 // encoded frame to the owning reactor. Caller cancellation after queue transfer
 // does not revoke reactor ownership of the admitted frame.
@@ -229,7 +239,7 @@ func (s *epollSession) Send(ctx context.Context, msg ogrenet.Message) error {
 		}
 		return s.nativeOperationalError(OpSend, ErrClosed)
 	}
-	defer s.gate.leave()
+	defer s.leaveNativeSendGate()
 	if err := msg.Validate(); err != nil {
 		return err
 	}
@@ -293,7 +303,7 @@ func (s *epollSession) TrySend(msg ogrenet.Message) error {
 		}
 		return s.nativeOperationalError(OpSend, ErrClosed)
 	}
-	defer s.gate.leave()
+	defer s.leaveNativeSendGate()
 	if err := msg.Validate(); err != nil {
 		return err
 	}
@@ -450,9 +460,7 @@ func (s *epollSession) failNativeWrite(r *epollReactor, err error) {
 	if s == nil || s.state == epollSessionClosed || s.state == epollSessionTerminal {
 		return
 	}
-	s.releaseNativeWriteOwnership(err)
-	s.state = epollSessionTerminal
-	s.finalizeReactor(r)
+	s.failNativeLifecycle(r, err)
 }
 
 func (s *epollSession) releaseNativeWriteOwnership(err error) {
@@ -503,7 +511,7 @@ func (s *epollSession) onNativeWritable(r *epollReactor) {
 		return
 	}
 	s.writeBlocked = false
-	s.driveNativeWrite(r)
+	s.driveNativeLifecycle(r)
 }
 
 func (s *epollSession) onNativeWriteDeadline(r *epollReactor, generation uint64) {
