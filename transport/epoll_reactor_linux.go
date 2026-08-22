@@ -19,7 +19,10 @@ type epollEventResource interface {
 	onReactorRunnable(*epollReactor)
 }
 
-const epollControlStop uint32 = 1 << 0
+const (
+	epollControlStop           uint32 = 1 << 0
+	epollControlWorkerCapacity uint32 = 1 << 1
+)
 
 var (
 	errEpollNilResource         = errors.New("transport: nil epoll resource")
@@ -43,9 +46,13 @@ type epollReactor struct {
 	wakePending bool
 
 	controlFlags atomic.Uint32
-	runnable     []*epollInboxNode
-	runnableHead int
-	onFatal      func(error)
+	stopRequested bool
+	runnable      []*epollInboxNode
+	runnableHead  int
+	workerBlocked []*epollInboxNode
+	hasWorkerBlocked atomic.Bool
+	workerCapacityAvailable func() bool
+	onFatal func(error)
 
 	// Package tests use this nil-by-default hook to synchronize on the exact
 	// lost-wake boundary after waiting=true is committed and before Wait starts.
@@ -113,9 +120,59 @@ func (r *epollReactor) drainRunnable() {
 	r.runnableHead = 0
 }
 
+func (r *epollReactor) blockOnWorker(resource epollEventResource) {
+	if resource == nil {
+		return
+	}
+	n := resource.inboxNode()
+	if n == nil || n.owner == nil {
+		panic("transport: epoll worker-blocked resource has no owner")
+	}
+	if !n.workerBlocked {
+		n.workerBlocked = true
+		r.workerBlocked = append(r.workerBlocked, n)
+		r.hasWorkerBlocked.Store(true)
+	}
+	// Close the release-before-registration race: if capacity became available
+	// just before workerBlocked was published, the executor callback could not
+	// have observed this reactor. Recheck after publication and self-signal.
+	if r.workerCapacityAvailable != nil && r.workerCapacityAvailable() {
+		r.signalControl(epollControlWorkerCapacity)
+	}
+}
+
+func (r *epollReactor) drainControl() {
+	flags := r.controlFlags.Swap(0)
+	if flags&epollControlStop != 0 {
+		r.stopRequested = true
+	}
+	if flags&epollControlWorkerCapacity == 0 {
+		return
+	}
+
+	blocked := r.workerBlocked
+	r.workerBlocked = nil
+	r.hasWorkerBlocked.Store(false)
+	for _, n := range blocked {
+		if n == nil {
+			continue
+		}
+		n.workerBlocked = false
+		resource, ok := n.owner.(epollEventResource)
+		if !ok || resource == nil {
+			continue
+		}
+		if r.resources[resource.resourceID()] != resource {
+			continue
+		}
+		r.requeue(resource)
+	}
+}
+
 func (r *epollReactor) run() {
 	for {
 		r.drainInbox()
+		r.drainControl()
 		r.runExpiredDeadlines(time.Now())
 		r.drainRunnable()
 		if r.shouldStop() {
@@ -146,7 +203,7 @@ func (r *epollReactor) run() {
 }
 
 func (r *epollReactor) shouldStop() bool {
-	if r.controlFlags.Load()&epollControlStop == 0 {
+	if !r.stopRequested {
 		return false
 	}
 	r.inboxMu.Lock()
