@@ -27,7 +27,7 @@ const (
 var (
 	errEpollNilResource         = errors.New("transport: nil epoll resource")
 	errEpollInvalidResourceID   = errors.New("transport: invalid epoll resource id")
-	errEpollDuplicateResourceID = errors.New("transport: duplicate epoll resource id")
+	errEpollDuplicateResourceID = errors.New("transport: duplicate epoll managed resource id")
 )
 
 type epollReactor struct {
@@ -59,6 +59,7 @@ type epollReactor struct {
 	testWaitArmed              func()
 	testPollerAdd              func(int, epoll.Events, uint64) error
 	testAfterConnectRegistered func(*epollSession)
+	testAfterDialResult        func(*epollSession)
 }
 
 func (r *epollReactor) addFD(fd int, events epoll.Events, data uint64) error {
