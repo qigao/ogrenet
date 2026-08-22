@@ -15,7 +15,7 @@ type epollEngineInvariantSnapshot struct {
 	OpeningConnections  uint64
 	ActiveConnections   uint64
 	DrainingConnections uint64
-	GlobalQueuedBytes    uint64
+	GlobalQueuedBytes   uint64
 }
 
 func snapshotEpollEngineInvariants(e *epollEngine) epollEngineInvariantSnapshot {
