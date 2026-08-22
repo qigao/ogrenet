@@ -10,6 +10,9 @@ import (
 func TestEpollReactorWorkerCapacityHandshakeCannotLoseRelease(t *testing.T) {
 	r := newTestEpollReactor(t)
 	res := newTestEventResource(11, -1, 1)
+	if err := r.registerResource(res); err != nil {
+		t.Fatal(err)
+	}
 	var capacity atomic.Bool
 	capacity.Store(true) // release happened before blocked registration became visible
 	r.workerCapacityAvailable = capacity.Load
