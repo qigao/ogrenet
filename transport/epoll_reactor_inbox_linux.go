@@ -2,17 +2,37 @@
 
 package transport
 
+import "github.com/qigao/ogrenet/epoll"
+
 type epollInboxItem interface {
 	inboxNode() *epollInboxNode
 	onReactorInbox(*epollReactor)
 }
 
 type epollInboxNode struct {
-	owner          epollInboxItem
-	next           *epollInboxNode
-	queued         bool
+	owner         epollInboxItem
+	next          *epollInboxNode
+	queued        bool
 	runnableQueued bool
-	workerBlocked  bool
+	workerBlocked bool
+}
+
+type epollTestInboxItem struct {
+	node epollInboxNode
+	fn   func(*epollReactor)
+}
+
+func newTestInboxItem(fn func(*epollReactor)) *epollTestInboxItem {
+	item := &epollTestInboxItem{fn: fn}
+	item.node.owner = item
+	return item
+}
+
+func (i *epollTestInboxItem) inboxNode() *epollInboxNode { return &i.node }
+func (i *epollTestInboxItem) onReactorInbox(r *epollReactor) {
+	if i != nil && i.fn != nil {
+		i.fn(r)
+	}
 }
 
 func (r *epollReactor) signal(item epollInboxItem) {
@@ -35,15 +55,46 @@ func (r *epollReactor) signal(item epollInboxItem) {
 		}
 		r.inboxTail = n
 	}
-	wake := r.waiting && !r.wakePending
-	if wake {
+	shouldWake := r.waiting && !r.wakePending
+	if shouldWake {
 		r.wakePending = true
 	}
 	r.inboxMu.Unlock()
 
-	if wake {
+	if shouldWake {
 		_ = r.poller.Wake()
 	}
+}
+
+func (r *epollReactor) signalControl(flag uint32) {
+	r.controlFlags.Or(flag)
+
+	r.inboxMu.Lock()
+	shouldWake := r.waiting && !r.wakePending
+	if shouldWake {
+		r.wakePending = true
+	}
+	r.inboxMu.Unlock()
+	if shouldWake {
+		_ = r.poller.Wake()
+	}
+}
+
+func (r *epollReactor) armWait() bool {
+	r.inboxMu.Lock()
+	defer r.inboxMu.Unlock()
+	if r.inboxHead != nil || r.controlFlags.Load() != 0 || r.hasRunnable() {
+		return false
+	}
+	r.waiting = true
+	return true
+}
+
+func (r *epollReactor) disarmWait() {
+	r.inboxMu.Lock()
+	r.waiting = false
+	r.wakePending = false
+	r.inboxMu.Unlock()
 }
 
 func (r *epollReactor) drainInbox() {
@@ -66,39 +117,4 @@ func (r *epollReactor) drainInbox() {
 	}
 }
 
-func (r *epollReactor) signalControl(mask uint32) {
-	for {
-		old := r.controlFlags.Load()
-		if old&mask == mask || r.controlFlags.CompareAndSwap(old, old|mask) {
-			break
-		}
-	}
-
-	r.inboxMu.Lock()
-	wake := r.waiting && !r.wakePending
-	if wake {
-		r.wakePending = true
-	}
-	r.inboxMu.Unlock()
-	if wake {
-		_ = r.poller.Wake()
-	}
-}
-
-func (r *epollReactor) armWait() bool {
-	r.inboxMu.Lock()
-	defer r.inboxMu.Unlock()
-	if r.inboxHead != nil || r.hasRunnable() || r.controlFlags.Load() != 0 {
-		return false
-	}
-	r.waiting = true
-	r.wakePending = false
-	return true
-}
-
-func (r *epollReactor) disarmWait() {
-	r.inboxMu.Lock()
-	r.waiting = false
-	r.wakePending = false
-	r.inboxMu.Unlock()
-}
+var _ = epoll.Readable
