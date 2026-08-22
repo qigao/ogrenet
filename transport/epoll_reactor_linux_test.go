@@ -47,10 +47,10 @@ func newTestEventResource(id uint64, fd int, runUntil int32) *testEventResource 
 	return x
 }
 
-func (x *testEventResource) inboxNode() *epollInboxNode { return &x.node }
+func (x *testEventResource) inboxNode() *epollInboxNode   { return &x.node }
 func (x *testEventResource) onReactorInbox(*epollReactor) {}
-func (x *testEventResource) resourceID() uint64 { return x.id }
-func (x *testEventResource) resourceFD() int { return x.fd }
+func (x *testEventResource) resourceID() uint64           { return x.id }
+func (x *testEventResource) resourceFD() int              { return x.fd }
 func (x *testEventResource) onReactorEvent(*epollReactor, epoll.Events) {
 	x.events.Add(1)
 }
