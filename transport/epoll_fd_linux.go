@@ -25,7 +25,7 @@ func (netNativeIPResolver) LookupIPAddr(ctx context.Context, host string) ([]net
 var (
 	errNativeInvalidTCPAddress = errors.New("transport: invalid native tcp address")
 	errNativeNoResolvedAddress = errors.New("transport: native tcp address resolved to no addresses")
-	errNativeSockaddrType       = errors.New("transport: unsupported native socket address")
+	errNativeSockaddrType      = errors.New("transport: unsupported native socket address")
 )
 
 func resolveNativeListenTCP(ctx context.Context, endpoint ogrenet.Endpoint, resolver nativeIPResolver) (*net.TCPAddr, error) {
