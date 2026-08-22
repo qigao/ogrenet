@@ -43,19 +43,23 @@ func TestEpollNativeDialResultPublishesOpeningStateBeforeReturn(t *testing.T) {
 	var session *epollSession
 	select {
 	case err := <-errs:
+		close(release)
 		t.Fatalf("native dial error: %v", err)
 	case session = <-result:
 	case <-waitCtx.Done():
+		close(release)
 		t.Fatalf("caller did not receive native Session after result publication: %v", context.Cause(waitCtx))
 	}
 	if session == nil {
+		close(release)
 		t.Fatal("native dial returned nil Session")
 	}
-	if session.state != epollSessionOpening {
-		t.Fatalf("published Session state=%v, want Opening", session.state)
+	state := session.state
+	close(release)
+	if state != epollSessionOpening {
+		t.Fatalf("published Session state=%v, want Opening", state)
 	}
 
-	close(release)
 	if err := e.Close(); err != nil {
 		t.Fatal(err)
 	}
