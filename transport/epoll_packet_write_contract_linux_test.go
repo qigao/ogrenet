@@ -146,6 +146,56 @@ func TestEpollNativePacketEAGAINYieldsThenReadinessRetriesWithoutReadmission(t *
 	}
 }
 
+func TestEpollNativePacketRuntimeGenerationDoesNotRefreshCurrentWriteDeadline(t *testing.T) {
+	_, client := newEpollBlockedPacketWriter(t, 120*time.Millisecond)
+	firstAttempt := make(chan uint64, 1)
+	client.testWriteDatagram = func(packetOutbound) (int, error) {
+		select {
+		case firstAttempt <- client.writeGen:
+		default:
+		}
+		return 0, unix.EAGAIN
+	}
+
+	result := make(chan error, 1)
+	go func() {
+		result <- client.Send(context.Background(), ogrenet.Packet{Data: []byte("fixed-write-deadline")})
+	}()
+	firstWriteGen := <-firstAttempt
+	if firstWriteGen == 0 {
+		t.Fatal("current datagram did not acquire write generation")
+	}
+
+	type generations struct {
+		beforeRuntime uint64
+		afterRuntime  uint64
+		write         uint64
+	}
+	snapshot := make(chan generations, 1)
+	client.reactor.signal(newTestInboxItem(func(*epollReactor) {
+		before := client.nativePacketConnectionIdleGeneration()
+		client.stats.bytesRX.Add(1)
+		after := client.nativePacketConnectionIdleGeneration()
+		snapshot <- generations{beforeRuntime: before, afterRuntime: after, write: client.writeGen}
+	}))
+	got := <-snapshot
+	if got.afterRuntime == got.beforeRuntime {
+		t.Fatalf("runtime deadline generation did not advance: before=%d after=%d", got.beforeRuntime, got.afterRuntime)
+	}
+	if got.write != firstWriteGen {
+		t.Fatalf("runtime generation changed current write generation: first=%d after-runtime=%d", firstWriteGen, got.write)
+	}
+
+	err := waitNativeSendResult(t, result, "fixed datagram write deadline after runtime generation change")
+	if !errors.Is(err, ErrTimeout) {
+		t.Fatalf("Send error=%v, want fixed write timeout", err)
+	}
+	var timeoutErr *TimeoutError
+	if !errors.As(err, &timeoutErr) || timeoutErr.Kind != TimeoutWrite {
+		t.Fatalf("Send timeout=%T %v, want TimeoutWrite", err, err)
+	}
+}
+
 func TestEpollNativePacketPositiveShortWriteIsTerminalWithoutContinuation(t *testing.T) {
 	_, _, client := newEpollPacketPair(t)
 	var calls atomic.Int32
