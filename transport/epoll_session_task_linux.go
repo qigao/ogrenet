@@ -12,9 +12,16 @@ func (t *epollCodecSetupTask) runEpollWorkerTask() {
 	}
 	s := t.session
 	if s.engine == nil {
-		s.publishCodecSetup(nil, ErrClosed)
+		s.storeCodecSetup(nil, ErrClosed)
 		return
 	}
 	framer, err := s.engine.cfg.newFramer()
-	s.publishCodecSetup(framer, err)
+	s.storeCodecSetup(framer, err)
+}
+
+func (t *epollCodecSetupTask) onEpollWorkerComplete() {
+	if t == nil || t.session == nil {
+		return
+	}
+	t.session.notifyCodecSetup()
 }
