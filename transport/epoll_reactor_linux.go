@@ -43,6 +43,7 @@ type epollReactor struct {
 
 	controlFlags atomic.Uint32
 	runnable     []*epollInboxNode
+	runnableHead int
 	onFatal      func(error)
 
 	// Package tests use this nil-by-default hook to synchronize on the exact
@@ -91,12 +92,15 @@ func (r *epollReactor) requeue(resource epollEventResource) {
 	r.runnable = append(r.runnable, n)
 }
 
+func (r *epollReactor) hasRunnable() bool {
+	return r.runnableHead < len(r.runnable)
+}
+
 func (r *epollReactor) drainRunnable() {
-	for len(r.runnable) != 0 {
-		n := r.runnable[0]
-		copy(r.runnable, r.runnable[1:])
-		r.runnable[len(r.runnable)-1] = nil
-		r.runnable = r.runnable[:len(r.runnable)-1]
+	for r.hasRunnable() {
+		n := r.runnable[r.runnableHead]
+		r.runnable[r.runnableHead] = nil
+		r.runnableHead++
 		n.runnableQueued = false
 		resource, ok := n.owner.(epollEventResource)
 		if !ok || resource == nil {
@@ -104,6 +108,8 @@ func (r *epollReactor) drainRunnable() {
 		}
 		resource.onReactorRunnable(r)
 	}
+	r.runnable = r.runnable[:0]
+	r.runnableHead = 0
 }
 
 func (r *epollReactor) run() {
@@ -141,7 +147,7 @@ func (r *epollReactor) shouldStop() bool {
 		return false
 	}
 	r.inboxMu.Lock()
-	idle := r.inboxHead == nil && len(r.runnable) == 0
+	idle := r.inboxHead == nil && !r.hasRunnable()
 	r.inboxMu.Unlock()
 	return idle && len(r.resources) == 0
 }
