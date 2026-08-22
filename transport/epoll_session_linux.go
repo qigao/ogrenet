@@ -67,14 +67,14 @@ type epollSession struct {
 	setupErr       error
 	setupFramer    wire.Framer
 
-	life                *sessionLifecycle
-	established         atomic.Bool
-	engineAbort         atomic.Uint32
-	shutdownRequested   atomic.Bool
-	done                chan struct{}
-	doneOnce            sync.Once
-	errMu               sync.RWMutex
-	err                 error
+	life              *sessionLifecycle
+	established       atomic.Bool
+	engineAbort       atomic.Uint32
+	shutdownRequested atomic.Bool
+	done              chan struct{}
+	doneOnce          sync.Once
+	errMu             sync.RWMutex
+	err               error
 
 	// Package tests set these before publishing work. Caller hooks run only at
 	// documented ownership-transfer points; reactor hooks run only on the owning
