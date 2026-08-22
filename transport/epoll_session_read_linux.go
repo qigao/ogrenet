@@ -11,7 +11,7 @@ import (
 	"golang.org/x/sys/unix"
 )
 
-func (s *epollSession) nativeReadError(cause error, hint errorHint) error {
+func (s *epollSession) nativeReadError(cause error, hint classifyHint) error {
 	return classifyOperational(OpRead, ogrenet.SchemeTCP, cloneTCPAddr(s.local), cloneTCPAddr(s.remote), cause, hint)
 }
 
@@ -24,7 +24,7 @@ func (s *epollSession) releaseNativeReadAttempt(codecHeld, reservationHeld bool)
 	}
 }
 
-func (s *epollSession) failNativeDecode(r *epollReactor, cause error, hint errorHint) {
+func (s *epollSession) failNativeDecode(r *epollReactor, cause error, hint classifyHint) {
 	if s.stats != nil {
 		s.stats.decodeErrors.Add(1)
 	}
