@@ -116,8 +116,11 @@ jobs:
         run: go test ./transport -run '^TestEpollNativeShortLivedConnections$' -count=10
       - name: Native TCP benchmark smoke
         if: matrix.go == '1.26.x'
+        run: go test ./transport -run '^$' -bench 'BenchmarkTCPBackend|BenchmarkEpoll' -benchmem -benchtime=1x
+      - name: Native TCP allocation gate
+        if: matrix.go == '1.26.x'
         run: |
-          output="$(go test ./transport -run '^$' -bench 'BenchmarkTCPBackend|BenchmarkEpoll' -benchmem -benchtime=1x)"
+          output="$(go test ./transport -run '^$' -bench 'BenchmarkEpoll(SessionStatsSnapshot|ObserverDisabledEmitPath)$' -benchmem -benchtime=100x -count=3)"
           printf '%s\n' "$output"
           printf '%s\n' "$output" | awk '
             /BenchmarkEpollSessionStatsSnapshot/ {
@@ -137,8 +140,8 @@ jobs:
               }
             }
             END {
-              if (seen_stats != 1 || seen_observer != 1) {
-                printf "expected one native Stats and Observer allocation sample, got %d and %d\n", seen_stats, seen_observer > "/dev/stderr"
+              if (seen_stats != 3 || seen_observer != 3) {
+                printf "expected three native Stats and Observer allocation samples, got %d and %d\n", seen_stats, seen_observer > "/dev/stderr"
                 bad = 1
               }
               exit bad
