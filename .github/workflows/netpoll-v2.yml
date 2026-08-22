@@ -120,6 +120,9 @@ jobs:
       - name: Native TCP benchmark smoke
         if: matrix.go == '1.26.x'
         run: go test ./transport -run '^$' -bench 'BenchmarkTCPBackend|BenchmarkEpoll' -benchmem -benchtime=1x
+      - name: Native UDP benchmark smoke
+        if: matrix.go == '1.26.x'
+        run: go test ./transport -run '^$' -bench 'BenchmarkUDPBackend|BenchmarkEpollUDP' -benchmem -benchtime=1x
       - name: Native TCP allocation gate
         if: matrix.go == '1.26.x'
         run: |
