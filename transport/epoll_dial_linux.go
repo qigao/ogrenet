@@ -162,7 +162,10 @@ func (e *epollEngine) dialNativeTCP(ctx context.Context, endpoint ogrenet.Endpoi
 			resultErr = cause
 		} else {
 			mapped := mapOperationTimeout(ctx, dctx, TimeoutConnect, context.Cause(dctx))
-			resultErr = classifyOperational(OpDial, ogrenet.SchemeTCP, s.local, s.remote, mapped, hintNone)
+			// The caller owns the operation context but not Session socket state.
+			// Local/remote addresses are published only by the owning reactor, so a
+			// caller-side timeout envelope must not read them before result sync.
+			resultErr = classifyOperational(OpDial, ogrenet.SchemeTCP, nil, nil, mapped, hintNone)
 		}
 		s.dial.publishCancel(resultErr)
 		reactor.signal(s)
