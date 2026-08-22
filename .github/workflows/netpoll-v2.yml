@@ -111,6 +111,9 @@ jobs:
       - name: Native epoll dial race loop
         if: matrix.go == '1.26.x'
         run: go test -race ./transport -run '^TestEpollNativeDial' -count=20
+      - name: Native epoll send race loop
+        if: matrix.go == '1.26.x'
+        run: go test -race ./transport -run '^TestEpollNative(Send|TrySend|Partial|Write)' -count=20
       - name: Test with race detector
         run: go test -race -count=1 ./...
 
