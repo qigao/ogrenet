@@ -62,10 +62,18 @@ type epollReactor struct {
 }
 
 func (r *epollReactor) addFD(fd int, events epoll.Events, data uint64) error {
+	var err error
 	if r.testPollerAdd != nil {
-		return r.testPollerAdd(fd, events, data)
+		err = r.testPollerAdd(fd, events, data)
+	} else {
+		err = r.poller.Add(fd, events, data)
 	}
-	return r.poller.Add(fd, events, data)
+	if err == nil && events&epoll.Writable != 0 && r.testAfterConnectRegistered != nil {
+		if session, ok := r.resources[data].(*epollSession); ok && session != nil && session.state == epollSessionConnecting {
+			r.testAfterConnectRegistered(session)
+		}
+	}
+	return err
 }
 
 func (r *epollReactor) registerResource(resource epollEventResource) error {
