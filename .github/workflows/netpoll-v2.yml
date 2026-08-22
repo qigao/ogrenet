@@ -123,12 +123,35 @@ jobs:
       - name: Native UDP benchmark smoke
         if: matrix.go == '1.26.x'
         run: go test ./transport -run '^$' -bench 'BenchmarkUDPBackend|BenchmarkEpollUDP' -benchmem -benchtime=1x
-      - name: Native UDP allocation samples
+      - name: Native UDP allocation gate
         if: matrix.go == '1.26.x'
-        run: >-
-          go test ./transport -run '^$'
-          -bench 'BenchmarkEpollUDP(PacketStatsSnapshot|ObserverDisabledEmitPath)$'
-          -benchmem -benchtime=100x -count=3
+        run: |
+          output="$(go test ./transport -run '^$' -bench 'BenchmarkEpollUDP(PacketStatsSnapshot|ObserverDisabledEmitPath)$' -benchmem -benchtime=100x -count=3)"
+          printf '%s\n' "$output"
+          printf '%s\n' "$output" | awk '
+            /BenchmarkEpollUDPPacketStatsSnapshot/ {
+              alloc = $(NF-1) + 0
+              seen_stats++
+              if (alloc > 4) {
+                printf "Epoll UDP PacketStats allocation regression: %d > 4 allocs/op\n", alloc > "/dev/stderr"
+                bad = 1
+              }
+            }
+            /BenchmarkEpollUDPObserverDisabledEmitPath/ {
+              alloc = $(NF-1) + 0
+              seen_observer++
+              if (alloc != 0) {
+                printf "Epoll UDP disabled Observer allocation regression: %d allocs/op, want 0\n", alloc > "/dev/stderr"
+                bad = 1
+              }
+            }
+            END {
+              if (seen_stats != 3 || seen_observer != 3) {
+                printf "expected three native UDP Stats and Observer allocation samples, got %d and %d\n", seen_stats, seen_observer > "/dev/stderr"
+                bad = 1
+              }
+              exit bad
+            }'
       - name: Native TCP allocation gate
         if: matrix.go == '1.26.x'
         run: |
