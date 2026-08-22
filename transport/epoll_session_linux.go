@@ -150,6 +150,12 @@ func (s *epollSession) onReactorInbox(r *epollReactor) {
 		}
 		s.state = epollSessionTerminal
 	}
+	if s.dial != nil && (s.state == epollSessionConnecting || s.state == epollSessionCodecSetup) {
+		if cancelErr := s.dial.cancelCause(); cancelErr != nil {
+			s.failNativeDial(r, cancelErr, s.dial.connected)
+			return
+		}
+	}
 
 	switch s.state {
 	case epollSessionHandoff:
