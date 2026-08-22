@@ -26,10 +26,10 @@ func epollFactory(profile contractProfile) engineFactory {
 	}
 }
 
-func TestEpollFactoryPhase6AConstruction(t *testing.T) {
-	factory := epollFactory(contractProfile{})
-	if factory.profile.TCP || factory.profile.UDP {
-		t.Fatalf("6A epoll profile must advertise no native protocol support: %+v", factory.profile)
+func TestEpollFactoryConstruction(t *testing.T) {
+	factory := epollFactory(contractProfile{TCP: true, UDP: true})
+	if !factory.profile.TCP || !factory.profile.UDP {
+		t.Fatalf("epoll profile must advertise native TCP and UDP support: %+v", factory.profile)
 	}
 
 	e := factory.new(t)
@@ -39,7 +39,7 @@ func TestEpollFactoryPhase6AConstruction(t *testing.T) {
 	select {
 	case <-e.Done():
 	case <-time.After(time.Second):
-		t.Fatal("epoll 6A engine did not close its Done barrier")
+		t.Fatal("epoll engine did not close its Done barrier")
 	}
 }
 
