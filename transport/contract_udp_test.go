@@ -95,4 +95,10 @@ func runUDPContract(t *testing.T, f engineFactory) {
 	if err := server.Err(); err != nil {
 		t.Fatalf("server terminal err=%v", err)
 	}
+
+	t.Run("method-legality", func(t *testing.T) { runUDPMethodLegalityContract(t, f) })
+	t.Run("limits", func(t *testing.T) { runUDPQuotaContract(t, f) })
+	t.Run("observer", func(t *testing.T) { runUDPObserverContract(t, f) })
+	t.Run("timeout-error", func(t *testing.T) { runUDPTimeoutErrorContract(t, f) })
+	t.Run("graceful", func(t *testing.T) { runUDPGracefulContract(t, f) })
 }
