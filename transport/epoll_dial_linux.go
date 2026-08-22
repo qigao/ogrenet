@@ -221,6 +221,9 @@ func (d *epollDialState) finish(session *epollSession, err error) {
 	}
 	d.once.Do(func() {
 		d.result <- epollDialResult{session: session, err: err}
+		if session != nil && session.reactor != nil && session.reactor.testAfterDialResult != nil {
+			session.reactor.testAfterDialResult(session)
+		}
 	})
 }
 
