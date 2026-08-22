@@ -46,3 +46,7 @@ func TestEpollFactoryPhase6AConstruction(t *testing.T) {
 func TestEpollPublicTCPContracts(t *testing.T) {
 	runEngineContracts(t, epollFactory(contractProfile{TCP: true}))
 }
+
+func TestEpollPublicUDPContracts(t *testing.T) {
+	runEngineContracts(t, epollFactory(contractProfile{UDP: true}))
+}
