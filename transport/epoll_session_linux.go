@@ -323,6 +323,6 @@ func (s *epollSession) finalizeReactor(r *epollReactor) {
 	s.state = epollSessionClosed
 	s.doneOnce.Do(func() { close(s.done) })
 	if s.engine != nil {
-		s.engine.removeManaged(s)
+		s.engine.removeManaged(s.id)
 	}
 }
