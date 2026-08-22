@@ -259,6 +259,10 @@ func TestEpollAcceptCodecSetupFailureReleasesOwnership(t *testing.T) {
 	if got := callbacks.Load(); got != 0 {
 		t.Fatalf("handler callbacks=%d, want 0", got)
 	}
+	if err := e.Close(); err != nil {
+		t.Fatal(err)
+	}
+	waitTestSignal(t, e.Done(), "engine barrier after codec setup failure")
 	assertNoEpollEvent(t, observer, ogrenet.EventAccept)
 	stats := l.Stats()
 	if stats.AcceptedConnections != 0 || stats.CurrentConnections != 0 {
