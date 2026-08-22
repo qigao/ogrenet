@@ -87,30 +87,37 @@ func nonNegativeUint64[T ~int | ~int64](v T) uint64 {
 	return uint64(v)
 }
 
-func (e *Engine) Stats() ogrenet.EngineStats {
-	if e == nil || e.admission == nil {
-		return ogrenet.EngineStats{}
+func engineStatsSnapshot(admission *admissionController, observer *observerDispatcher) ogrenet.EngineStats {
+	var out ogrenet.EngineStats
+	if admission != nil {
+		s := admission.snapshot()
+		out = ogrenet.EngineStats{
+			OpeningConnections:  nonNegativeUint64(s.OpeningConnections),
+			ActiveConnections:   nonNegativeUint64(s.ActiveConnections),
+			DrainingConnections: nonNegativeUint64(s.DrainingConnections),
+			ActiveHandshakes:    nonNegativeUint64(s.ActiveHandshakes),
+			PendingUpgrades:     nonNegativeUint64(s.PendingUpgrades),
+			GlobalQueuedBytes:   nonNegativeUint64(s.GlobalQueuedBytes),
+			RejectedConnections: s.RejectedConnections,
+			RejectedPeers:       s.RejectedPeers,
+			RejectedListeners:   s.RejectedListeners,
+			RejectedHandshakes:  s.RejectedHandshakes,
+			RejectedUpgrades:    s.RejectedUpgrades,
+			RejectedQueuedBytes: s.RejectedQueuedBytes,
+		}
 	}
-	s := e.admission.snapshot()
-	out := ogrenet.EngineStats{
-		OpeningConnections:  nonNegativeUint64(s.OpeningConnections),
-		ActiveConnections:   nonNegativeUint64(s.ActiveConnections),
-		DrainingConnections: nonNegativeUint64(s.DrainingConnections),
-		ActiveHandshakes:    nonNegativeUint64(s.ActiveHandshakes),
-		PendingUpgrades:     nonNegativeUint64(s.PendingUpgrades),
-		GlobalQueuedBytes:   nonNegativeUint64(s.GlobalQueuedBytes),
-		RejectedConnections: s.RejectedConnections,
-		RejectedPeers:       s.RejectedPeers,
-		RejectedListeners:   s.RejectedListeners,
-		RejectedHandshakes:  s.RejectedHandshakes,
-		RejectedUpgrades:    s.RejectedUpgrades,
-		RejectedQueuedBytes: s.RejectedQueuedBytes,
-	}
-	if e.observer != nil {
-		out.ObserverDroppedEvents = e.observer.dropped.Load()
-		out.ObserverPanics = e.observer.panics.Load()
+	if observer != nil {
+		out.ObserverDroppedEvents = observer.droppedCount()
+		out.ObserverPanics = observer.panicCount()
 	}
 	return out
+}
+
+func (e *Engine) Stats() ogrenet.EngineStats {
+	if e == nil {
+		return ogrenet.EngineStats{}
+	}
+	return engineStatsSnapshot(e.admission, e.observer)
 }
 
 func sessionStatsSnapshot(id uint64, protocol ogrenet.Scheme, local, remote net.Addr, counters *sessionCounters) ogrenet.SessionStats {

@@ -1,0 +1,201 @@
+//go:build linux
+
+package transport
+
+import (
+	"context"
+	"errors"
+	"testing"
+	"time"
+
+	"github.com/qigao/ogrenet"
+)
+
+func TestEpollNativePacketReadIdleClosesConnectedPacket(t *testing.T) {
+	_, _, client := newEpollPacketPair(t, WithTimeouts(Timeouts{ReadIdle: 40 * time.Millisecond}))
+
+	select {
+	case <-client.Done():
+	case <-time.After(750 * time.Millisecond):
+		t.Fatal("connected UDP PacketConn did not close on ReadIdle timeout")
+	}
+
+	err := client.Err()
+	var timeoutErr *TimeoutError
+	if !errors.As(err, &timeoutErr) || timeoutErr.Kind != TimeoutReadIdle {
+		t.Fatalf("PacketConn Err=%T %v, want TimeoutReadIdle", err, err)
+	}
+	var opErr *Error
+	if !errors.As(err, &opErr) || opErr.Op != OpReceive {
+		t.Fatalf("PacketConn operational Err=%#v, want OpReceive", opErr)
+	}
+}
+
+func TestEpollNativePacketReadProgressRefreshesReadIdle(t *testing.T) {
+	_, server, client := newEpollPacketPair(t, WithTimeouts(Timeouts{ReadIdle: 120 * time.Millisecond}))
+
+	time.Sleep(70 * time.Millisecond)
+	if err := server.SendTo(context.Background(), client.LocalAddr(), ogrenet.Packet{Data: []byte("refresh-read-idle")}); err != nil {
+		t.Fatalf("server SendTo: %v", err)
+	}
+	deadline := time.Now().Add(500 * time.Millisecond)
+	for client.Stats().PacketsRX == 0 && time.Now().Before(deadline) {
+		time.Sleep(time.Millisecond)
+	}
+	if client.Stats().PacketsRX == 0 {
+		t.Fatal("connected UDP client did not observe read progress")
+	}
+
+	select {
+	case <-client.Done():
+		t.Fatalf("connected UDP closed at original ReadIdle deadline after real read progress: %v", client.Err())
+	case <-time.After(70 * time.Millisecond):
+	}
+
+	select {
+	case <-client.Done():
+	case <-time.After(200 * time.Millisecond):
+		t.Fatal("connected UDP did not close at refreshed ReadIdle deadline")
+	}
+	var timeoutErr *TimeoutError
+	if err := client.Err(); !errors.As(err, &timeoutErr) || timeoutErr.Kind != TimeoutReadIdle {
+		t.Fatalf("PacketConn Err=%T %v, want refreshed TimeoutReadIdle", err, err)
+	}
+}
+
+func TestEpollNativePacketConnectionIdleClosesConnectedPacket(t *testing.T) {
+	_, _, client := newEpollPacketPair(t, WithTimeouts(Timeouts{ConnectionIdle: 40 * time.Millisecond}))
+
+	select {
+	case <-client.Done():
+	case <-time.After(750 * time.Millisecond):
+		t.Fatal("connected UDP PacketConn did not close on ConnectionIdle timeout")
+	}
+
+	err := client.Err()
+	var timeoutErr *TimeoutError
+	if !errors.As(err, &timeoutErr) || timeoutErr.Kind != TimeoutConnectionIdle {
+		t.Fatalf("PacketConn Err=%T %v, want TimeoutConnectionIdle", err, err)
+	}
+	var opErr *Error
+	if !errors.As(err, &opErr) || opErr.Op != OpReceive {
+		t.Fatalf("PacketConn operational Err=%#v, want OpReceive", opErr)
+	}
+}
+
+func TestEpollNativePacketWriteProgressRefreshesConnectionIdle(t *testing.T) {
+	_, _, client := newEpollPacketPair(t, WithTimeouts(Timeouts{ConnectionIdle: 120 * time.Millisecond}))
+
+	time.Sleep(70 * time.Millisecond)
+	if err := client.Send(context.Background(), ogrenet.Packet{Data: []byte("refresh-connection-idle")}); err != nil {
+		t.Fatalf("client Send: %v", err)
+	}
+	if client.Stats().PacketsTX == 0 {
+		t.Fatal("connected UDP client did not observe physical write progress")
+	}
+
+	select {
+	case <-client.Done():
+		t.Fatalf("connected UDP closed at original ConnectionIdle deadline after physical write: %v", client.Err())
+	case <-time.After(70 * time.Millisecond):
+	}
+
+	select {
+	case <-client.Done():
+	case <-time.After(200 * time.Millisecond):
+		t.Fatal("connected UDP did not close at refreshed ConnectionIdle deadline")
+	}
+	var timeoutErr *TimeoutError
+	if err := client.Err(); !errors.As(err, &timeoutErr) || timeoutErr.Kind != TimeoutConnectionIdle {
+		t.Fatalf("PacketConn Err=%T %v, want refreshed TimeoutConnectionIdle", err, err)
+	}
+}
+
+func TestEpollNativePacketMaxLifetimeIsFixedDespiteTraffic(t *testing.T) {
+	_, _, client := newEpollPacketPair(t, WithTimeouts(Timeouts{MaxLifetime: 160 * time.Millisecond}))
+
+	time.Sleep(50 * time.Millisecond)
+	if err := client.Send(context.Background(), ogrenet.Packet{Data: []byte("lifetime-one")}); err != nil {
+		t.Fatalf("first client Send: %v", err)
+	}
+	time.Sleep(50 * time.Millisecond)
+	if err := client.Send(context.Background(), ogrenet.Packet{Data: []byte("lifetime-two")}); err != nil {
+		t.Fatalf("second client Send: %v", err)
+	}
+
+	select {
+	case <-client.Done():
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("connected UDP MaxLifetime was absent or refreshed by traffic")
+	}
+	var timeoutErr *TimeoutError
+	if err := client.Err(); !errors.As(err, &timeoutErr) || timeoutErr.Kind != TimeoutMaxLifetime {
+		t.Fatalf("PacketConn Err=%T %v, want TimeoutMaxLifetime", err, err)
+	}
+}
+
+func TestEpollNativeUnconnectedPacketIgnoresRuntimeIdleAndLifetime(t *testing.T) {
+	_, server, _ := newEpollPacketPair(t, WithTimeouts(Timeouts{
+		ReadIdle:       35 * time.Millisecond,
+		ConnectionIdle: 35 * time.Millisecond,
+		MaxLifetime:    35 * time.Millisecond,
+	}))
+
+	select {
+	case <-server.Done():
+		t.Fatalf("unconnected ListenPacket auto-closed from connected-only runtime timeout: %v", server.Err())
+	case <-time.After(125 * time.Millisecond):
+	}
+	if err := server.Close(); err != nil {
+		t.Fatalf("server Close: %v", err)
+	}
+	waitEpollPacketDone(t, server.Done(), "unconnected UDP close after timeout immunity check")
+}
+
+func TestEpollNativePacketExplicitCloseWinsOverRuntimeDeadlines(t *testing.T) {
+	e := newEpollPacketTestEngine(t, 1, WithTimeouts(Timeouts{
+		ReadIdle:       45 * time.Millisecond,
+		ConnectionIdle: 45 * time.Millisecond,
+		MaxLifetime:    45 * time.Millisecond,
+	}))
+	server, err := e.listenNativeUDP(context.Background(), ogrenet.Endpoint{
+		Scheme: ogrenet.SchemeUDP,
+		Host:   "127.0.0.1",
+		Port:   0,
+	}, ogrenet.PacketHandlerFuncs{})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	closed := make(chan error, 1)
+	client, err := e.dialNativeUDP(context.Background(), ogrenet.Endpoint{
+		Scheme: ogrenet.SchemeUDP,
+		Host:   "127.0.0.1",
+		Port:   server.Endpoint().Port,
+	}, ogrenet.PacketHandlerFuncs{Close: func(_ ogrenet.PacketConn, err error) {
+		closed <- err
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := client.Close(); err != nil {
+		t.Fatalf("client Close: %v", err)
+	}
+	waitEpollPacketDone(t, client.Done(), "explicit UDP close before runtime deadlines")
+	select {
+	case err := <-closed:
+		if err != nil {
+			t.Fatalf("OnClose error=%v, want nil for explicit Close owner", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("missing UDP OnClose after explicit Close")
+	}
+	if err := client.Err(); err != nil {
+		t.Fatalf("PacketConn Err=%v, want nil after explicit Close", err)
+	}
+
+	time.Sleep(80 * time.Millisecond)
+	if err := client.Err(); err != nil {
+		t.Fatalf("stale runtime deadline replaced explicit Close owner: %v", err)
+	}
+}

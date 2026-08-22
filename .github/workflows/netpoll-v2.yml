@@ -105,6 +105,82 @@ jobs:
       - name: Observability race loop
         if: matrix.go == '1.26.x'
         run: go test -race ./transport -run '^TestObservabilityRace' -count=20
+      - name: Runtimecore ownership race loop
+        if: matrix.go == '1.26.x'
+        run: go test -race ./internal/runtimecore -count=20
+      - name: Native TCP race loop
+        if: matrix.go == '1.26.x'
+        run: go test -race ./transport -run '^TestEpoll' -count=20
+      - name: Native epoll 2000-session stress loop
+        if: matrix.go == '1.26.x'
+        run: go test ./transport -run '^TestEpollNativeShortLivedConnections$' -count=10
+      - name: Native UDP stress loop
+        if: matrix.go == '1.26.x'
+        run: go test ./transport -run '^TestEpollNativeUDPStress$' -count=3
+      - name: Native TCP benchmark smoke
+        if: matrix.go == '1.26.x'
+        run: go test ./transport -run '^$' -bench 'BenchmarkTCPBackend|BenchmarkEpoll' -benchmem -benchtime=1x
+      - name: Native UDP benchmark smoke
+        if: matrix.go == '1.26.x'
+        run: go test ./transport -run '^$' -bench 'BenchmarkUDPBackend|BenchmarkEpollUDP' -benchmem -benchtime=1x
+      - name: Native UDP allocation gate
+        if: matrix.go == '1.26.x'
+        run: |
+          output="$(go test ./transport -run '^$' -bench 'BenchmarkEpollUDP(PacketStatsSnapshot|ObserverDisabledEmitPath)$' -benchmem -benchtime=100x -count=3)"
+          printf '%s\n' "$output"
+          printf '%s\n' "$output" | awk '
+            /BenchmarkEpollUDPPacketStatsSnapshot/ {
+              alloc = $(NF-1) + 0
+              seen_stats++
+              if (alloc > 4) {
+                printf "Epoll UDP PacketStats allocation regression: %d > 4 allocs/op\n", alloc > "/dev/stderr"
+                bad = 1
+              }
+            }
+            /BenchmarkEpollUDPObserverDisabledEmitPath/ {
+              alloc = $(NF-1) + 0
+              seen_observer++
+              if (alloc != 0) {
+                printf "Epoll UDP disabled Observer allocation regression: %d allocs/op, want 0\n", alloc > "/dev/stderr"
+                bad = 1
+              }
+            }
+            END {
+              if (seen_stats != 3 || seen_observer != 3) {
+                printf "expected three native UDP Stats and Observer allocation samples, got %d and %d\n", seen_stats, seen_observer > "/dev/stderr"
+                bad = 1
+              }
+              exit bad
+            }'
+      - name: Native TCP allocation gate
+        if: matrix.go == '1.26.x'
+        run: |
+          output="$(go test ./transport -run '^$' -bench 'BenchmarkEpoll(SessionStatsSnapshot|ObserverDisabledEmitPath)$' -benchmem -benchtime=100x -count=3)"
+          printf '%s\n' "$output"
+          printf '%s\n' "$output" | awk '
+            /BenchmarkEpollSessionStatsSnapshot/ {
+              alloc = $(NF-1) + 0
+              seen_stats++
+              if (alloc > 4) {
+                printf "Epoll SessionStats allocation regression: %d > 4 allocs/op\n", alloc > "/dev/stderr"
+                bad = 1
+              }
+            }
+            /BenchmarkEpollObserverDisabledEmitPath/ {
+              alloc = $(NF-1) + 0
+              seen_observer++
+              if (alloc != 0) {
+                printf "Epoll disabled Observer allocation regression: %d allocs/op, want 0\n", alloc > "/dev/stderr"
+                bad = 1
+              }
+            }
+            END {
+              if (seen_stats != 3 || seen_observer != 3) {
+                printf "expected three native Stats and Observer allocation samples, got %d and %d\n", seen_stats, seen_observer > "/dev/stderr"
+                bad = 1
+              }
+              exit bad
+            }'
       - name: Test with race detector
         run: go test -race -count=1 ./...
 
@@ -185,6 +261,22 @@ jobs:
       fail-fast: false
       matrix:
         include:
+          - goos: linux
+            goarch: amd64
+            package: ./transport
+            output: transport-linux-amd64.test
+          - goos: linux
+            goarch: arm64
+            package: ./transport
+            output: transport-linux-arm64.test
+          - goos: windows
+            goarch: arm64
+            package: ./transport
+            output: transport-windows-arm64.test.exe
+          - goos: darwin
+            goarch: arm64
+            package: ./transport
+            output: transport-darwin-arm64.test
           - goos: linux
             goarch: arm64
             package: ./epoll

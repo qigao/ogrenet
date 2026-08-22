@@ -61,7 +61,7 @@ func TestObserverQueueOverflowDoesNotBlockProducer(t *testing.T) {
 	if time.Since(start) > 100*time.Millisecond {
 		t.Fatal("overflow emission blocked producer")
 	}
-	if got := d.dropped.Load(); got != 1 {
+	if got := d.droppedCount(); got != 1 {
 		t.Fatalf("dropped=%d, want 1", got)
 	}
 }
@@ -88,7 +88,7 @@ func TestObserverPanicIsRecoveredAndCounted(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("observer worker did not continue after panic")
 	}
-	if got := d.panics.Load(); got != 1 {
+	if got := d.panicCount(); got != 1 {
 		t.Fatalf("panics=%d, want 1", got)
 	}
 }
