@@ -70,6 +70,7 @@ type epollPacketConn struct {
 	// Package tests set these only before publishing work. Caller hooks run at
 	// queue ownership transfer; reactor hooks stay on the owning reactor.
 	testAfterPacketQueueTransfer func(packetOutbound)
+	testWriteDatagram            func(packetOutbound) (int, error)
 	testBeforePhysicalClose      func(*epollPacketConn)
 }
 
