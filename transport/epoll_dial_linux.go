@@ -414,17 +414,35 @@ func (s *epollSession) failNativeDial(r *epollReactor, err error, transportConne
 }
 
 func (s *epollSession) currentDeadlineGeneration(kind epollDeadlineKind) uint64 {
-	if s == nil || s.dial == nil || kind != epollDeadlineConnect {
+	if s == nil {
 		return 0
 	}
-	return s.dial.connectGen
+	switch kind {
+	case epollDeadlineConnect:
+		if s.dial == nil {
+			return 0
+		}
+		return s.dial.connectGen
+	case epollDeadlineWrite:
+		return s.writeGen
+	default:
+		return 0
+	}
 }
 
 func (s *epollSession) onReactorDeadline(r *epollReactor, kind epollDeadlineKind, generation uint64) {
-	if s == nil || s.dial == nil || kind != epollDeadlineConnect || s.state != epollSessionConnecting || generation != s.dial.connectGen {
+	if s == nil {
 		return
 	}
-	mapped := &TimeoutError{Kind: TimeoutConnect, Cause: context.DeadlineExceeded}
-	opErr := classifyOperational(OpDial, ogrenet.SchemeTCP, cloneTCPAddr(s.local), cloneTCPAddr(s.remote), mapped, hintNone)
-	s.failNativeDial(r, opErr, false)
+	switch kind {
+	case epollDeadlineConnect:
+		if s.dial == nil || s.state != epollSessionConnecting || generation != s.dial.connectGen {
+			return
+		}
+		mapped := &TimeoutError{Kind: TimeoutConnect, Cause: context.DeadlineExceeded}
+		opErr := classifyOperational(OpDial, ogrenet.SchemeTCP, cloneTCPAddr(s.local), cloneTCPAddr(s.remote), mapped, hintNone)
+		s.failNativeDial(r, opErr, false)
+	case epollDeadlineWrite:
+		s.onNativeWriteDeadline(r, generation)
+	}
 }
