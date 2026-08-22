@@ -3,7 +3,6 @@
 package transport
 
 import (
-	"context"
 	"net"
 	"sync"
 	"sync/atomic"
