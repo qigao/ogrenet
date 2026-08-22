@@ -45,14 +45,14 @@ type epollReactor struct {
 	waiting     bool
 	wakePending bool
 
-	controlFlags atomic.Uint32
-	stopRequested bool
-	runnable      []*epollInboxNode
-	runnableHead  int
-	workerBlocked []*epollInboxNode
-	hasWorkerBlocked atomic.Bool
+	controlFlags            atomic.Uint32
+	stopRequested           bool
+	runnable                []*epollInboxNode
+	runnableHead            int
+	workerBlocked           []*epollInboxNode
+	hasWorkerBlocked        atomic.Bool
 	workerCapacityAvailable func() bool
-	onFatal func(error)
+	onFatal                 func(error)
 
 	// Package tests use this nil-by-default hook to synchronize on the exact
 	// lost-wake boundary after waiting=true is committed and before Wait starts.
