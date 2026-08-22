@@ -306,43 +306,49 @@ func (s *epollSession) finalizeNativeEstablished(r *epollReactor) {
 	if s == nil || r == nil || s.state == epollSessionClosed || s.codecSetupOutstanding() {
 		return
 	}
-	s.state = epollSessionTerminal
-	if s.gate != nil {
-		s.gate.close()
-	}
-	pendingErr := s.Err()
-	if pendingErr == nil {
-		pendingErr = s.nativeOperationalError(OpSend, ErrClosed)
-	}
-	s.releaseNativeWriteOwnership(pendingErr)
-	s.writeGen++
-
-	if s.registered {
-		_ = r.poller.Del(s.fd)
-		if r.resources[s.id] == s {
-			delete(r.resources, s.id)
+	if !s.terminalPrepared {
+		s.state = epollSessionTerminal
+		if s.gate != nil {
+			s.gate.close()
 		}
-		s.registered = false
-	} else if r.resources[s.id] == s {
+		pendingErr := s.Err()
+		if pendingErr == nil {
+			pendingErr = s.nativeOperationalError(OpSend, ErrClosed)
+		}
+		s.releaseNativeWriteOwnership(pendingErr)
+		s.writeGen++
+
+		if s.registered {
+			_ = r.poller.Del(s.fd)
+			s.registered = false
+		}
+		if s.fd >= 0 {
+			if s.testBeforePhysicalClose != nil {
+				s.testBeforePhysicalClose(s)
+			}
+			_ = unix.Close(s.fd)
+			s.fd = -1
+		}
+		if s.life != nil {
+			s.life.markReadClosed()
+			s.life.markWriteClosed()
+			s.life.markTerminal()
+		}
+		if s.stats != nil {
+			s.stats.age.freeze()
+		}
+		s.observeNative(ogrenet.EventClose, 0, s.Err())
+		s.terminalPrepared = true
+	}
+
+	s.driveNativeCallbackState(r)
+	if s.callbackState != epollCallbackClosed {
+		return
+	}
+	if r.resources[s.id] == s {
 		delete(r.resources, s.id)
 	}
-	if s.fd >= 0 {
-		if s.testBeforePhysicalClose != nil {
-			s.testBeforePhysicalClose(s)
-		}
-		_ = unix.Close(s.fd)
-		s.fd = -1
-	}
-	if s.life != nil {
-		s.life.markReadClosed()
-		s.life.markWriteClosed()
-		s.life.markTerminal()
-	}
-	if s.stats != nil {
-		s.stats.age.freeze()
-	}
 	s.state = epollSessionClosed
-	s.observeNative(ogrenet.EventClose, 0, s.Err())
 	s.doneOnce.Do(func() { close(s.done) })
 	if s.lease != nil {
 		s.lease.release()

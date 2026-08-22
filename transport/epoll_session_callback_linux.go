@@ -94,6 +94,9 @@ func (s *epollSession) driveNativeCallbackState(r *epollReactor) bool {
 		return false
 	}
 	for {
+		if s.terminalPrepared && s.callbackState == epollCallbackIdle {
+			s.callbackState = epollCallbackNeedClose
+		}
 		switch s.callbackState {
 		case epollCallbackNeedOpen:
 			if s.handler == nil {
