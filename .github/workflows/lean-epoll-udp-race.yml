@@ -1,0 +1,35 @@
+name: Lean epoll UDP race proofs
+
+on:
+  push:
+    branches:
+      - lean/epoll-udp-race-v1
+  pull_request:
+    paths:
+      - "formal/epoll_udp_race/**"
+      - ".github/workflows/lean-epoll-udp-race.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  proof:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+      - name: Build Lean race model and proofs
+        uses: leanprover/lean-action@v1
+        with:
+          lake-package-directory: formal/epoll_udp_race
+          auto-config: false
+          build: true
+          build-args: "--wfail"
+          test: false
+          lint: false
+          use-mathlib-cache: false
+          nanoda: false
+      - name: Execute proof smoke target
+        working-directory: formal/epoll_udp_race
+        run: lake exe epoll-udp-race-check

@@ -1,0 +1,10 @@
+name = "ogrenet_epoll_udp_race"
+version = "0.1.0"
+defaultTargets = ["epoll-udp-race-check"]
+
+[[lean_lib]]
+name = "EpollUdpRace"
+
+[[lean_exe]]
+name = "epoll-udp-race-check"
+root = "Main"
