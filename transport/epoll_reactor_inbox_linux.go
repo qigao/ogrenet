@@ -87,7 +87,7 @@ func (r *epollReactor) signalControl(mask uint32) {
 func (r *epollReactor) armWait() bool {
 	r.inboxMu.Lock()
 	defer r.inboxMu.Unlock()
-	if r.inboxHead != nil || len(r.runnable) != 0 || r.controlFlags.Load() != 0 {
+	if r.inboxHead != nil || r.hasRunnable() || r.controlFlags.Load() != 0 {
 		return false
 	}
 	r.waiting = true
