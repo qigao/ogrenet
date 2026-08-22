@@ -238,9 +238,9 @@ func TestEpollAcceptCodecSetupFailureReleasesOwnership(t *testing.T) {
 	observer := newEpollTestObserver()
 	var callbacks atomic.Int32
 	handler := ogrenet.HandlerFuncs{
-		Open: func(ogrenet.Session) { callbacks.Add(1) },
+		Open:    func(ogrenet.Session) { callbacks.Add(1) },
 		Message: func(ogrenet.Session, ogrenet.Message) { callbacks.Add(1) },
-		Close: func(ogrenet.Session, error) { callbacks.Add(1) },
+		Close:   func(ogrenet.Session, error) { callbacks.Add(1) },
 	}
 	e := newEpollTestEngine(t, 1,
 		WithObserver(observer),
