@@ -61,8 +61,8 @@ func (e *epollEngine) listenNativeTCP(ctx context.Context, endpoint ogrenet.Endp
 	if cause := context.Cause(ctx); cause != nil {
 		return nil, cause
 	}
-	if !e.beginOp() {
-		return nil, ErrClosed
+	if err := e.beginOp(); err != nil {
+		return nil, err
 	}
 	defer e.endOp()
 
@@ -98,8 +98,8 @@ func (e *epollEngine) listenNativeTCP(ctx context.Context, endpoint ogrenet.Endp
 		done:     make(chan struct{}),
 	}
 	l.node.owner = l
-	if !e.addManaged(l) {
-		return nil, ErrClosed
+	if err := e.addManaged(l); err != nil {
+		return nil, err
 	}
 	reactor.signal(l)
 
@@ -391,7 +391,7 @@ func (l *epollListener) adoptAcceptedFD(fd int, peer unix.Sockaddr) {
 	}
 	session := newEpollBootstrapSession(l.engine, target, id, fd, l.endpoint, local, remote, l.handler, lease, l)
 	session.state = epollSessionHandoff
-	if !l.engine.addManaged(session) {
+	if err := l.engine.addManaged(session); err != nil {
 		lease.release()
 		_ = unix.Close(fd)
 		return
@@ -437,6 +437,6 @@ func (l *epollListener) finalizeReactor(r *epollReactor) {
 	}
 	l.doneOnce.Do(func() { close(l.done) })
 	if l.engine != nil {
-		l.engine.removeManaged(l)
+		l.engine.removeManaged(l.id)
 	}
 }
