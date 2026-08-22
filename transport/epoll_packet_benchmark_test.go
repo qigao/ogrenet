@@ -356,10 +356,10 @@ func benchmarkEpollUDPWrite(b *testing.B, connected, try bool) {
 	benchmarkReportLatency(b, samples)
 }
 
-func BenchmarkEpollUDPSend(b *testing.B)       { benchmarkEpollUDPWrite(b, true, false) }
-func BenchmarkEpollUDPTrySend(b *testing.B)    { benchmarkEpollUDPWrite(b, true, true) }
-func BenchmarkEpollUDPSendTo(b *testing.B)     { benchmarkEpollUDPWrite(b, false, false) }
-func BenchmarkEpollUDPTrySendTo(b *testing.B)  { benchmarkEpollUDPWrite(b, false, true) }
+func BenchmarkEpollUDPSend(b *testing.B)      { benchmarkEpollUDPWrite(b, true, false) }
+func BenchmarkEpollUDPTrySend(b *testing.B)   { benchmarkEpollUDPWrite(b, true, true) }
+func BenchmarkEpollUDPSendTo(b *testing.B)    { benchmarkEpollUDPWrite(b, false, false) }
+func BenchmarkEpollUDPTrySendTo(b *testing.B) { benchmarkEpollUDPWrite(b, false, true) }
 
 func BenchmarkEpollUDPEngineShutdownFanout(b *testing.B) {
 	const connections = 64
