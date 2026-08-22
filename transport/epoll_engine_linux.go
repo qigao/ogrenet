@@ -173,45 +173,9 @@ func (e *epollEngine) Stats() ogrenet.EngineStats {
 
 func (e *epollEngine) Done() <-chan struct{} { return e.done }
 
-func (e *epollEngine) Shutdown(ctx context.Context) error {
-	if ctx == nil {
-		return ErrNilContext
-	}
-	if cause := context.Cause(ctx); cause != nil {
-		return cause
-	}
-	_ = e.Close()
-	select {
-	case <-e.done:
-		return nil
-	case <-ctx.Done():
-		return context.Cause(ctx)
-	}
-}
+func (e *epollEngine) Shutdown(ctx context.Context) error { return e.shutdownNative(ctx) }
 
-func (e *epollEngine) Close() error {
-	if e == nil {
-		return nil
-	}
-	e.mu.Lock()
-	if e.state == engineDone || e.state == engineAborting {
-		e.mu.Unlock()
-		return nil
-	}
-	e.state = engineAborting
-	if e.shutdownReason == abortNone {
-		e.shutdownReason = abortExplicit
-	}
-	managed := e.snapshotManagedLocked()
-	e.maybeQuiescentLocked()
-	e.mu.Unlock()
-
-	for _, resource := range managed {
-		resource.requestEngineAbort(abortExplicit)
-	}
-	e.wakeAll()
-	return nil
-}
+func (e *epollEngine) Close() error { return e.closeNative() }
 
 func (e *epollEngine) beginOp() error {
 	e.mu.Lock()
