@@ -108,30 +108,41 @@ jobs:
       - name: Runtimecore ownership race loop
         if: matrix.go == '1.26.x'
         run: go test -race ./internal/runtimecore -count=20
-      - name: Native epoll dial race loop
+      - name: Native TCP race loop
         if: matrix.go == '1.26.x'
-        run: go test -race ./transport -run '^TestEpollNativeDial' -count=20
-      - name: Native epoll send race loop
-        if: matrix.go == '1.26.x'
-        run: go test -race ./transport -run '^TestEpollNative(Send|TrySend|Partial|Write)' -count=20
-      - name: Native epoll lifecycle race loop
-        if: matrix.go == '1.26.x'
-        run: go test -race ./transport -run '^TestEpollNative(Close|Shutdown|PeerFIN|Lifecycle)' -count=20
-      - name: Native epoll read/callback race loop
-        if: matrix.go == '1.26.x'
-        run: go test -race ./transport -run '^TestEpollNative(OnOpen|Decoded|StatsAndObserverRead|BlockedHandler|OneSession|DoneWaits|Callback)|^TestEpollPublicTCPContracts' -count=20
-      - name: Native epoll TCP parity race loop
-        if: matrix.go == '1.26.x'
-        run: go test -race ./transport -run '^TestEpoll.*(Parity|Graceful|Observer|Stats|Limit|Timeout|Error)' -count=20
-      - name: Native epoll Engine shutdown race loop
-        if: matrix.go == '1.26.x'
-        run: >-
-          go test -race ./transport
-          -run '^TestEpoll(EngineShutdown|EngineClose|EngineBlockedObserver|EngineDone|ListenerCloseRacesAcceptFlood|NativeReadableEdgeDuringCodecSetupIsPreserved)'
-          -count=20
+        run: go test -race ./transport -run '^TestEpoll' -count=20
       - name: Native epoll 2000-session stress loop
         if: matrix.go == '1.26.x'
         run: go test ./transport -run '^TestEpollNativeShortLivedConnections$' -count=10
+      - name: Native TCP benchmark smoke
+        if: matrix.go == '1.26.x'
+        run: |
+          output="$(go test ./transport -run '^$' -bench 'BenchmarkTCPBackend|BenchmarkEpoll' -benchmem -benchtime=1x)"
+          printf '%s\n' "$output"
+          printf '%s\n' "$output" | awk '
+            /BenchmarkEpollSessionStatsSnapshot/ {
+              alloc = $(NF-1) + 0
+              seen_stats++
+              if (alloc > 4) {
+                printf "Epoll SessionStats allocation regression: %d > 4 allocs/op\n", alloc > "/dev/stderr"
+                bad = 1
+              }
+            }
+            /BenchmarkEpollObserverDisabledEmitPath/ {
+              alloc = $(NF-1) + 0
+              seen_observer++
+              if (alloc != 0) {
+                printf "Epoll disabled Observer allocation regression: %d allocs/op, want 0\n", alloc > "/dev/stderr"
+                bad = 1
+              }
+            }
+            END {
+              if (seen_stats != 1 || seen_observer != 1) {
+                printf "expected one native Stats and Observer allocation sample, got %d and %d\n", seen_stats, seen_observer > "/dev/stderr"
+                bad = 1
+              }
+              exit bad
+            }'
       - name: Test with race detector
         run: go test -race -count=1 ./...
 
@@ -212,6 +223,22 @@ jobs:
       fail-fast: false
       matrix:
         include:
+          - goos: linux
+            goarch: amd64
+            package: ./transport
+            output: transport-linux-amd64.test
+          - goos: linux
+            goarch: arm64
+            package: ./transport
+            output: transport-linux-arm64.test
+          - goos: windows
+            goarch: arm64
+            package: ./transport
+            output: transport-windows-arm64.test.exe
+          - goos: darwin
+            goarch: arm64
+            package: ./transport
+            output: transport-darwin-arm64.test
           - goos: linux
             goarch: arm64
             package: ./epoll
