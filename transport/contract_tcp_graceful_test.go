@@ -7,7 +7,6 @@ import (
 	"reflect"
 	"sync/atomic"
 	"testing"
-	"time"
 
 	"github.com/qigao/ogrenet"
 	"github.com/qigao/ogrenet/transport"
