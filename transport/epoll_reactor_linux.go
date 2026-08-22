@@ -54,9 +54,17 @@ type epollReactor struct {
 	workerCapacityAvailable func() bool
 	onFatal                 func(error)
 
-	// Package tests use this nil-by-default hook to synchronize on the exact
-	// lost-wake boundary after waiting=true is committed and before Wait starts.
+	// Package tests use these nil-by-default hooks only through reactor-owned
+	// callbacks so race tests preserve the same single-owner discipline.
 	testWaitArmed func()
+	testPollerAdd func(int, epoll.Events, uint64) error
+}
+
+func (r *epollReactor) addFD(fd int, events epoll.Events, data uint64) error {
+	if r.testPollerAdd != nil {
+		return r.testPollerAdd(fd, events, data)
+	}
+	return r.poller.Add(fd, events, data)
 }
 
 func (r *epollReactor) registerResource(resource epollEventResource) error {
