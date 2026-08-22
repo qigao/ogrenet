@@ -32,6 +32,34 @@ func (x *testInboxItem) onReactorInbox(r *epollReactor) {
 	}
 }
 
+type testEventResource struct {
+	node     epollInboxNode
+	id       uint64
+	fd       int
+	events   atomic.Int32
+	runs     atomic.Int32
+	runUntil int32
+}
+
+func newTestEventResource(id uint64, fd int, runUntil int32) *testEventResource {
+	x := &testEventResource{id: id, fd: fd, runUntil: runUntil}
+	x.node.owner = x
+	return x
+}
+
+func (x *testEventResource) inboxNode() *epollInboxNode { return &x.node }
+func (x *testEventResource) onReactorInbox(*epollReactor) {}
+func (x *testEventResource) resourceID() uint64 { return x.id }
+func (x *testEventResource) resourceFD() int { return x.fd }
+func (x *testEventResource) onReactorEvent(*epollReactor, epoll.Events) {
+	x.events.Add(1)
+}
+func (x *testEventResource) onReactorRunnable(r *epollReactor) {
+	if n := x.runs.Add(1); n < x.runUntil {
+		r.requeue(x)
+	}
+}
+
 func newTestEpollReactor(t *testing.T) *epollReactor {
 	t.Helper()
 	p, err := epoll.Open()
@@ -108,4 +136,38 @@ func TestEpollReactorControlWakeCannotBeLost(t *testing.T) {
 	waitTestSignal(t, waitArmed, "reactor wait arm")
 	r.signalControl(epollControlStop)
 	waitTestSignal(t, done, "reactor control stop")
+}
+
+func TestEpollReactorIgnoresStaleEventData(t *testing.T) {
+	r := newTestEpollReactor(t)
+	res := newTestEventResource(42, -1, 1)
+	r.dispatch(epoll.Event{Data: 42, Events: epoll.Readable})
+	if got := res.events.Load(); got != 0 {
+		t.Fatalf("stale event dispatched: %d", got)
+	}
+}
+
+func TestEpollReactorResourceIDRegistryRejectsDuplicate(t *testing.T) {
+	r := newTestEpollReactor(t)
+	a := newTestEventResource(7, -1, 1)
+	b := newTestEventResource(7, -1, 1)
+	if err := r.registerResource(a); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.registerResource(b); err == nil {
+		t.Fatal("duplicate resource ID replaced owner")
+	}
+	if got := r.resources[7]; got != a {
+		t.Fatal("duplicate registration changed existing owner")
+	}
+}
+
+func TestEpollReactorRunnableContinuesWithoutSecondEdge(t *testing.T) {
+	r := newTestEpollReactor(t)
+	res := newTestEventResource(9, -1, 3)
+	r.requeue(res)
+	r.drainRunnable()
+	if got := res.runs.Load(); got != 3 {
+		t.Fatalf("runs=%d, want 3", got)
+	}
 }
