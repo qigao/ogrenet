@@ -147,10 +147,22 @@ func runTCPTimeoutErrorContracts(t *testing.T, f engineFactory) {
 		if tcp, ok := p.peer.(*net.TCPConn); ok {
 			_ = tcp.SetReadBuffer(1024)
 		}
-		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
-		err := p.session.Send(ctx, ogrenet.Bin(make([]byte, 12<<20)))
-		requireTimeoutKind(t, err, transport.TimeoutWrite)
+		payload := ogrenet.Bin(make([]byte, 1<<20))
+		var timeoutErr error
+		for i := 0; i < 256; i++ {
+			err := p.session.Send(ctx, payload)
+			if err == nil {
+				continue
+			}
+			timeoutErr = err
+			break
+		}
+		if timeoutErr == nil {
+			t.Fatal("socket never reached write backpressure after 256 MiB without peer reads")
+		}
+		requireTimeoutKind(t, timeoutErr, transport.TimeoutWrite)
 		waitContractDone(t, ctx, p.session.Done(), "write-timeout Session Done")
 		requireTimeoutKind(t, p.session.Err(), transport.TimeoutWrite)
 	})
