@@ -110,3 +110,44 @@ func TestEpollNativePacketWriteProgressRefreshesConnectionIdle(t *testing.T) {
 		t.Fatalf("PacketConn Err=%T %v, want refreshed TimeoutConnectionIdle", err, err)
 	}
 }
+
+func TestEpollNativePacketMaxLifetimeIsFixedDespiteTraffic(t *testing.T) {
+	_, _, client := newEpollPacketPair(t, WithTimeouts(Timeouts{MaxLifetime: 160 * time.Millisecond}))
+
+	time.Sleep(50 * time.Millisecond)
+	if err := client.Send(context.Background(), ogrenet.Packet{Data: []byte("lifetime-one")}); err != nil {
+		t.Fatalf("first client Send: %v", err)
+	}
+	time.Sleep(50 * time.Millisecond)
+	if err := client.Send(context.Background(), ogrenet.Packet{Data: []byte("lifetime-two")}); err != nil {
+		t.Fatalf("second client Send: %v", err)
+	}
+
+	select {
+	case <-client.Done():
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("connected UDP MaxLifetime was absent or refreshed by traffic")
+	}
+	var timeoutErr *TimeoutError
+	if err := client.Err(); !errors.As(err, &timeoutErr) || timeoutErr.Kind != TimeoutMaxLifetime {
+		t.Fatalf("PacketConn Err=%T %v, want TimeoutMaxLifetime", err, err)
+	}
+}
+
+func TestEpollNativeUnconnectedPacketIgnoresRuntimeIdleAndLifetime(t *testing.T) {
+	_, server, _ := newEpollPacketPair(t, WithTimeouts(Timeouts{
+		ReadIdle:       35 * time.Millisecond,
+		ConnectionIdle: 35 * time.Millisecond,
+		MaxLifetime:    35 * time.Millisecond,
+	}))
+
+	select {
+	case <-server.Done():
+		t.Fatalf("unconnected ListenPacket auto-closed from connected-only runtime timeout: %v", server.Err())
+	case <-time.After(125 * time.Millisecond):
+	}
+	if err := server.Close(); err != nil {
+		t.Fatalf("server Close: %v", err)
+	}
+	waitEpollPacketDone(t, server.Done(), "unconnected UDP close after timeout immunity check")
+}
