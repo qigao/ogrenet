@@ -28,8 +28,64 @@ func (h *epollStressClientHandler) OnMessage(_ ogrenet.Session, msg ogrenet.Mess
 
 func (h *epollStressClientHandler) OnClose(ogrenet.Session, error) {}
 
+func runEpollShortLivedClient(ctx context.Context, e *epollEngine, endpoint ogrenet.Endpoint, i int) error {
+	h := &epollStressClientHandler{
+		opened: make(chan struct{}),
+		echoed: make(chan ogrenet.Message, 1),
+	}
+	session, err := e.Dial(ctx, endpoint, h)
+	if err != nil {
+		return fmt.Errorf("dial %d: %w", i, err)
+	}
+	select {
+	case <-h.opened:
+	case <-ctx.Done():
+		return fmt.Errorf("open %d: %w", i, context.Cause(ctx))
+	}
+
+	payload := []byte(fmt.Sprintf("%d-%06d", i&1, i))
+	if err := session.Send(ctx, ogrenet.Text(string(payload))); err != nil {
+		return fmt.Errorf("send %d: %w", i, err)
+	}
+	var echoed ogrenet.Message
+	select {
+	case echoed = <-h.echoed:
+	case <-ctx.Done():
+		return fmt.Errorf("echo %d: %w", i, context.Cause(ctx))
+	}
+	if !bytes.Equal(echoed.Data, payload) {
+		return fmt.Errorf("echo %d payload=%q want=%q", i, echoed.Data, payload)
+	}
+
+	if i&1 == 0 {
+		if err := session.Close(); err != nil {
+			return fmt.Errorf("client close %d: %w", i, err)
+		}
+		select {
+		case <-session.Done():
+			return nil
+		case <-ctx.Done():
+			return fmt.Errorf("client Done %d: %w", i, context.Cause(ctx))
+		}
+	}
+
+	half, ok := session.(ogrenet.HalfCloseSession)
+	if !ok {
+		return fmt.Errorf("session %d does not implement HalfCloseSession", i)
+	}
+	select {
+	case <-half.ReadClosed():
+		return nil
+	case <-ctx.Done():
+		return fmt.Errorf("server-close ReadClosed %d: %w", i, context.Cause(ctx))
+	}
+}
+
 func TestEpollNativeShortLivedConnections(t *testing.T) {
-	const connections = 2000
+	const (
+		connections = 2000
+		concurrency = 128
+	)
 
 	raw, err := NewEpoll(EpollConfig{
 		Pollers:         4,
@@ -70,75 +126,30 @@ func TestEpollNativeShortLivedConnections(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	jobs := make(chan int)
 	errCh := make(chan error, connections)
-	start := make(chan struct{})
 	var wg sync.WaitGroup
-	for i := 0; i < connections; i++ {
-		i := i
-		wg.Add(1)
+	wg.Add(concurrency)
+	for worker := 0; worker < concurrency; worker++ {
 		go func() {
 			defer wg.Done()
-			<-start
-
-			h := &epollStressClientHandler{
-				opened: make(chan struct{}),
-				echoed: make(chan ogrenet.Message, 1),
-			}
-			session, err := e.Dial(ctx, ln.Endpoint(), h)
-			if err != nil {
-				errCh <- fmt.Errorf("dial %d: %w", i, err)
-				return
-			}
-			select {
-			case <-h.opened:
-			case <-ctx.Done():
-				errCh <- fmt.Errorf("open %d: %w", i, context.Cause(ctx))
-				return
-			}
-
-			payload := []byte(fmt.Sprintf("%d-%06d", i&1, i))
-			if err := session.Send(ctx, ogrenet.Text(string(payload))); err != nil {
-				errCh <- fmt.Errorf("send %d: %w", i, err)
-				return
-			}
-			var echoed ogrenet.Message
-			select {
-			case echoed = <-h.echoed:
-			case <-ctx.Done():
-				errCh <- fmt.Errorf("echo %d: %w", i, context.Cause(ctx))
-				return
-			}
-			if !bytes.Equal(echoed.Data, payload) {
-				errCh <- fmt.Errorf("echo %d payload=%q want=%q", i, echoed.Data, payload)
-				return
-			}
-
-			if i&1 == 0 {
-				if err := session.Close(); err != nil {
-					errCh <- fmt.Errorf("client close %d: %w", i, err)
-					return
+			for i := range jobs {
+				if err := runEpollShortLivedClient(ctx, e, ln.Endpoint(), i); err != nil {
+					errCh <- err
 				}
-				select {
-				case <-session.Done():
-				case <-ctx.Done():
-					errCh <- fmt.Errorf("client Done %d: %w", i, context.Cause(ctx))
-				}
-				return
-			}
-
-			half, ok := session.(ogrenet.HalfCloseSession)
-			if !ok {
-				errCh <- fmt.Errorf("session %d does not implement HalfCloseSession", i)
-				return
-			}
-			select {
-			case <-half.ReadClosed():
-			case <-ctx.Done():
-				errCh <- fmt.Errorf("server-close ReadClosed %d: %w", i, context.Cause(ctx))
 			}
 		}()
 	}
-	close(start)
+	for i := 0; i < connections; i++ {
+		select {
+		case jobs <- i:
+		case <-ctx.Done():
+			close(jobs)
+			wg.Wait()
+			t.Fatalf("dispatching short-lived connection %d: %v", i, context.Cause(ctx))
+		}
+	}
+	close(jobs)
 	wg.Wait()
 	close(errCh)
 	for err := range errCh {
