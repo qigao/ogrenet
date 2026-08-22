@@ -17,6 +17,9 @@ structure Model where
   readReady : Bool
   generation : Nat
   terminal : Option Terminal
+  draining : Bool
+  admittedPacket : Bool
+  packetWritten : Bool
   deriving DecidableEq, Repr
 
 inductive Event where
@@ -25,6 +28,9 @@ inductive Event where
   | progress
   | deadline (generation : Nat)
   | explicitClose
+  | admitPacket
+  | beginDrain
+  | physicalWrite
   deriving DecidableEq, Repr
 
 def initial : Model := {
@@ -33,6 +39,9 @@ def initial : Model := {
   readReady := false
   generation := 1
   terminal := none
+  draining := false
+  admittedPacket := false
+  packetWritten := false
 }
 
 def activate (s : Model) : Model :=
@@ -81,6 +90,57 @@ def safePublishTerminal (terminal : Terminal) (s : Model) : Model :=
   | none => { s with phase := .closed, terminal := some terminal }
   | some _ => s
 
+/-- Packet admission transfers ownership to the runtime only while the resource
+    is Active and has not entered Engine drain. -/
+def admitPacket (s : Model) : Model :=
+  match s.phase with
+  | .active => if s.draining then s else { s with admittedPacket := true }
+  | _ => s
+
+/-- Unsafe Engine drain semantics: beginning drain closes the PacketConn
+    immediately even when one already-admitted datagram is still runtime-owned. -/
+def unsafeBeginDrain (s : Model) : Model :=
+  match s.phase with
+  | .active => { s with draining := true, phase := .closed }
+  | _ => s
+
+/-- Safe Engine drain semantics: new admission is closed immediately, but a
+    PacketConn with retained datagram ownership stays Active until physical
+    completion releases that ownership. -/
+def safeBeginDrain (s : Model) : Model :=
+  match s.phase with
+  | .active =>
+      if s.admittedPacket then
+        { s with draining := true }
+      else
+        { s with draining := true, phase := .closed }
+  | _ => s
+
+/-- A closed unsafe resource cannot physically write the datagram it discarded
+    during premature drain finalization. -/
+def unsafePhysicalWrite (s : Model) : Model :=
+  match s.phase with
+  | .active =>
+      if s.admittedPacket then
+        { s with admittedPacket := false, packetWritten := true }
+      else
+        s
+  | _ => s
+
+/-- Safe physical completion is the ownership-release point. During Engine
+    drain, that completion is also the barrier that permits clean close. -/
+def safePhysicalWrite (s : Model) : Model :=
+  match s.phase with
+  | .active =>
+      if s.admittedPacket then
+        if s.draining then
+          { s with admittedPacket := false, packetWritten := true, phase := .closed }
+        else
+          { s with admittedPacket := false, packetWritten := true }
+      else
+        s
+  | _ => s
+
 def unsafeStep (s : Model) (event : Event) : Model :=
   match event with
   | .readable => unsafeReadable s
@@ -88,6 +148,9 @@ def unsafeStep (s : Model) (event : Event) : Model :=
   | .progress => progress s
   | .deadline generation => unsafeDeadline generation s
   | .explicitClose => unsafePublishTerminal .explicitClose s
+  | .admitPacket => admitPacket s
+  | .beginDrain => unsafeBeginDrain s
+  | .physicalWrite => unsafePhysicalWrite s
 
 def safeStep (s : Model) (event : Event) : Model :=
   match event with
@@ -96,6 +159,9 @@ def safeStep (s : Model) (event : Event) : Model :=
   | .progress => progress s
   | .deadline generation => safeDeadline generation s
   | .explicitClose => safePublishTerminal .explicitClose s
+  | .admitPacket => admitPacket s
+  | .beginDrain => safeBeginDrain s
+  | .physicalWrite => safePhysicalWrite s
 
 def run (step : Model → Event → Model) : Model → List Event → Model
   | state, [] => state
@@ -172,5 +238,52 @@ theorem safe_first_terminal_owner
     (h : s.terminal = none) :
     (safePublishTerminal second (safePublishTerminal first s)).terminal = some first := by
   simp [safePublishTerminal, h]
+
+/-- Race observed by the broad Go gate: a datagram is admitted while the owning
+    reactor is blocked, Engine drain begins, and unsafe shutdown finalizes the
+    PacketConn before that retained datagram reaches physical write. -/
+def drainWithAdmittedPacketTrace : List Event := [
+  .activate,
+  .admitPacket,
+  .beginDrain
+]
+
+def prematureDrainClose (s : Model) : Prop :=
+  s.draining = true ∧
+  s.phase = .closed ∧
+  s.admittedPacket = true ∧
+  s.packetWritten = false
+
+theorem unsafe_engine_drain_can_close_with_admitted_packet :
+    prematureDrainClose (run unsafeStep initial drainWithAdmittedPacketTrace) := by
+  simp [prematureDrainClose, drainWithAdmittedPacketTrace, run, unsafeStep,
+    admitPacket, unsafeBeginDrain, activate, initial]
+
+theorem safe_engine_drain_retains_admitted_packet_until_write :
+    (run safeStep initial drainWithAdmittedPacketTrace).phase = .active ∧
+    (run safeStep initial drainWithAdmittedPacketTrace).draining = true ∧
+    (run safeStep initial drainWithAdmittedPacketTrace).admittedPacket = true ∧
+    (run safeStep initial drainWithAdmittedPacketTrace).packetWritten = false := by
+  simp [drainWithAdmittedPacketTrace, run, safeStep, admitPacket, safeBeginDrain, activate, initial]
+
+def drainThenWriteTrace : List Event :=
+  drainWithAdmittedPacketTrace ++ [.physicalWrite]
+
+theorem safe_engine_drain_closes_only_after_physical_write :
+    (run safeStep initial drainThenWriteTrace).phase = .closed ∧
+    (run safeStep initial drainThenWriteTrace).draining = true ∧
+    (run safeStep initial drainThenWriteTrace).admittedPacket = false ∧
+    (run safeStep initial drainThenWriteTrace).packetWritten = true := by
+  simp [drainThenWriteTrace, drainWithAdmittedPacketTrace, run, safeStep,
+    admitPacket, safeBeginDrain, safePhysicalWrite, activate, initial]
+
+theorem safe_begin_drain_preserves_retained_ownership
+    (s : Model)
+    (hphase : s.phase = .active)
+    (hadmitted : s.admittedPacket = true) :
+    (safeBeginDrain s).phase = .active ∧
+    (safeBeginDrain s).draining = true ∧
+    (safeBeginDrain s).admittedPacket = true := by
+  simp [safeBeginDrain, hphase, hadmitted]
 
 end Ogrenet.EpollUdpRace
