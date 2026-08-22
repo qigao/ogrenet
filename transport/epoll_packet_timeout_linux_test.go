@@ -151,3 +151,51 @@ func TestEpollNativeUnconnectedPacketIgnoresRuntimeIdleAndLifetime(t *testing.T)
 	}
 	waitEpollPacketDone(t, server.Done(), "unconnected UDP close after timeout immunity check")
 }
+
+func TestEpollNativePacketExplicitCloseWinsOverRuntimeDeadlines(t *testing.T) {
+	e := newEpollPacketTestEngine(t, 1, WithTimeouts(Timeouts{
+		ReadIdle:       45 * time.Millisecond,
+		ConnectionIdle: 45 * time.Millisecond,
+		MaxLifetime:    45 * time.Millisecond,
+	}))
+	server, err := e.listenNativeUDP(context.Background(), ogrenet.Endpoint{
+		Scheme: ogrenet.SchemeUDP,
+		Host:   "127.0.0.1",
+		Port:   0,
+	}, ogrenet.PacketHandlerFuncs{})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	closed := make(chan error, 1)
+	client, err := e.dialNativeUDP(context.Background(), ogrenet.Endpoint{
+		Scheme: ogrenet.SchemeUDP,
+		Host:   "127.0.0.1",
+		Port:   server.Endpoint().Port,
+	}, ogrenet.PacketHandlerFuncs{Close: func(_ ogrenet.PacketConn, err error) {
+		closed <- err
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := client.Close(); err != nil {
+		t.Fatalf("client Close: %v", err)
+	}
+	waitEpollPacketDone(t, client.Done(), "explicit UDP close before runtime deadlines")
+	select {
+	case err := <-closed:
+		if err != nil {
+			t.Fatalf("OnClose error=%v, want nil for explicit Close owner", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("missing UDP OnClose after explicit Close")
+	}
+	if err := client.Err(); err != nil {
+		t.Fatalf("PacketConn Err=%v, want nil after explicit Close", err)
+	}
+
+	time.Sleep(80 * time.Millisecond)
+	if err := client.Err(); err != nil {
+		t.Fatalf("stale runtime deadline replaced explicit Close owner: %v", err)
+	}
+}
