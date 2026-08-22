@@ -12,7 +12,9 @@ import (
 	"time"
 
 	"github.com/qigao/ogrenet"
+	"github.com/qigao/ogrenet/epoll"
 	"github.com/qigao/ogrenet/wire"
+	"golang.org/x/sys/unix"
 )
 
 type epollTestObserver struct {
@@ -264,6 +266,40 @@ func TestEpollAcceptCodecSetupFailureReleasesOwnership(t *testing.T) {
 	}
 	if opening := e.Stats().OpeningConnections; opening != 0 {
 		t.Fatalf("engine opening after codec failure=%d, want 0", opening)
+	}
+}
+
+func TestEpollAcceptHandoffAddFailureReleasesOwnership(t *testing.T) {
+	observer := newEpollTestObserver()
+	e := newEpollTestEngine(t, 2, WithObserver(observer))
+	target := e.reactors[1]
+	installed := make(chan struct{})
+	target.signal(newTestInboxItem(func(r *epollReactor) {
+		r.testPollerAdd = func(int, epoll.Events, uint64) error { return unix.EBADF }
+		close(installed)
+	}))
+	waitTestSignal(t, installed, "target Poller.Add failure hook")
+
+	l, err := e.listenNativeTCP(context.Background(), ogrenet.Endpoint{Scheme: ogrenet.SchemeTCP, Host: "127.0.0.1", Port: 0}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	conn := dialNativeListener(t, l)
+	defer conn.Close()
+	waitPeerClosed(t, conn)
+	assertNoEpollEvent(t, observer, ogrenet.EventAccept)
+
+	if err := e.Close(); err != nil {
+		t.Fatal(err)
+	}
+	waitTestSignal(t, e.Done(), "engine barrier after failed handoff")
+	stats := l.Stats()
+	if stats.AcceptedConnections != 0 || stats.CurrentConnections != 0 {
+		t.Fatalf("listener stats after handoff failure=%+v", stats)
+	}
+	engineStats := e.Stats()
+	if engineStats.OpeningConnections != 0 || engineStats.ActiveConnections != 0 || engineStats.DrainingConnections != 0 {
+		t.Fatalf("engine stats after handoff failure=%+v", engineStats)
 	}
 }
 
