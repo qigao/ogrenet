@@ -67,16 +67,21 @@ type epollSession struct {
 	setupErr       error
 	setupFramer    wire.Framer
 
-	engineAbort       atomic.Uint32
-	shutdownRequested atomic.Bool
-	done              chan struct{}
-	doneOnce          sync.Once
+	life                *sessionLifecycle
+	established         atomic.Bool
+	engineAbort         atomic.Uint32
+	shutdownRequested   atomic.Bool
+	done                chan struct{}
+	doneOnce            sync.Once
+	errMu               sync.RWMutex
+	err                 error
 
-	// Package tests set these before publishing send work. The first hook runs
-	// on the sending caller after queue ownership transfer; the second runs only
-	// on the owning reactor after a positive partial write.
+	// Package tests set these before publishing work. Caller hooks run only at
+	// documented ownership-transfer points; reactor hooks run only on the owning
+	// reactor and never move fd ownership to the test goroutine.
 	testAfterSendQueueTransfer func()
 	testAfterWriteProgress     func(*epollSession)
+	testBeforePhysicalClose    func(*epollSession)
 }
 
 func newEpollBootstrapSession(
@@ -102,6 +107,7 @@ func newEpollBootstrapSession(
 		handler:  handler,
 		lease:    lease,
 		parent:   parent,
+		life:     newSessionLifecycle(),
 		done:     make(chan struct{}),
 	}
 	s.node.owner = s
@@ -135,6 +141,10 @@ func (s *epollSession) requestEngineShutdown() {
 	if s == nil {
 		return
 	}
+	if s.established.Load() {
+		s.requestNativeShutdown()
+		return
+	}
 	s.shutdownRequested.Store(true)
 	if s.reactor != nil {
 		s.reactor.signal(s)
@@ -143,6 +153,10 @@ func (s *epollSession) requestEngineShutdown() {
 
 func (s *epollSession) requestEngineAbort(reason abortReason) {
 	if s == nil || reason == abortNone {
+		return
+	}
+	if s.established.Load() {
+		s.publishNativeAbort(reason, nil)
 		return
 	}
 	for {
@@ -160,13 +174,13 @@ func (s *epollSession) onReactorInbox(r *epollReactor) {
 	if s == nil || r == nil || s.state == epollSessionClosed {
 		return
 	}
-	if s.engineAbort.Load() != uint32(abortNone) {
+	if !s.established.Load() && s.engineAbort.Load() != uint32(abortNone) {
 		if s.dial != nil {
 			s.dial.finish(nil, ErrClosed)
 		}
 		s.state = epollSessionTerminal
 	}
-	if s.shutdownRequested.Load() && s.state < epollSessionActive {
+	if !s.established.Load() && s.shutdownRequested.Load() && s.state < epollSessionActive {
 		if s.dial != nil {
 			s.dial.finish(nil, ErrClosed)
 		}
@@ -189,7 +203,7 @@ func (s *epollSession) onReactorInbox(r *epollReactor) {
 			s.applyCodecSetup(r)
 		}
 	case epollSessionOpening, epollSessionActive:
-		s.driveNativeWrite(r)
+		s.driveNativeLifecycle(r)
 	case epollSessionTerminal:
 		s.finalizeReactor(r)
 	}
@@ -206,9 +220,16 @@ func (s *epollSession) onReactorEvent(r *epollReactor, events epoll.Events) {
 	if s.state != epollSessionOpening && s.state != epollSessionActive {
 		return
 	}
-	if events&(epoll.Writable|epoll.Error|epoll.Hangup|epoll.PeerClosed) != 0 {
-		s.onNativeWritable(r)
+	if events&(epoll.Readable|epoll.PeerClosed|epoll.Hangup) != 0 {
+		s.detectNativePeerFIN(r)
+		if s.state == epollSessionClosed {
+			return
+		}
 	}
+	if events&(epoll.Writable|epoll.Error|epoll.Hangup|epoll.PeerClosed) != 0 {
+		s.writeBlocked = false
+	}
+	s.driveNativeLifecycle(r)
 }
 
 func (s *epollSession) onReactorRunnable(r *epollReactor) {
@@ -221,7 +242,7 @@ func (s *epollSession) onReactorRunnable(r *epollReactor) {
 	case epollSessionCodecSetup:
 		s.startCodecSetup(r)
 	case epollSessionOpening, epollSessionActive:
-		s.driveNativeWrite(r)
+		s.driveNativeLifecycle(r)
 	case epollSessionTerminal:
 		s.finalizeReactor(r)
 	}
@@ -347,6 +368,7 @@ func (s *epollSession) applyCodecSetup(r *epollReactor) {
 	_, s.wireFramer = framer.(*wire.Codec)
 	s.initNativeSendState()
 	s.state = epollSessionOpening
+	s.established.Store(true)
 	if s.parent != nil {
 		if s.parent.stats != nil {
 			s.parent.stats.accepted.Add(1)
@@ -372,6 +394,10 @@ func (s *epollSession) applyCodecSetup(r *epollReactor) {
 
 func (s *epollSession) finalizeReactor(r *epollReactor) {
 	if s == nil || s.state == epollSessionClosed || s.codecSetupOutstanding() {
+		return
+	}
+	if s.established.Load() {
+		s.finalizeNativeEstablished(r)
 		return
 	}
 	if s.gate != nil {
