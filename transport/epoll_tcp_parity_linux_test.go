@@ -15,3 +15,7 @@ func TestEpollTCPLimitStatsContracts(t *testing.T) {
 func TestEpollTCPObserverContracts(t *testing.T) {
 	runTCPObserverContracts(t, epollFactory(contractProfile{TCP: true}))
 }
+
+func TestEpollTCPTimeoutErrorContracts(t *testing.T) {
+	runTCPTimeoutErrorContracts(t, epollFactory(contractProfile{TCP: true}))
+}
