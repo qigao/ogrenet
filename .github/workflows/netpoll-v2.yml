@@ -114,6 +114,9 @@ jobs:
       - name: Native epoll 2000-session stress loop
         if: matrix.go == '1.26.x'
         run: go test ./transport -run '^TestEpollNativeShortLivedConnections$' -count=10
+      - name: Native UDP stress loop
+        if: matrix.go == '1.26.x'
+        run: go test ./transport -run '^TestEpollNativeUDPStress$' -count=3
       - name: Native TCP benchmark smoke
         if: matrix.go == '1.26.x'
         run: go test ./transport -run '^$' -bench 'BenchmarkTCPBackend|BenchmarkEpoll' -benchmem -benchtime=1x
