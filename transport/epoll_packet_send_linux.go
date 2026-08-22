@@ -366,6 +366,7 @@ func (p *epollPacketConn) driveNativePacketWrite(r *epollReactor) {
 				return
 			}
 			p.completeNativePacketWrite()
+			p.noteNativePacketWriteProgress(r)
 			continue
 		}
 		if errors.Is(err, unix.EINTR) {

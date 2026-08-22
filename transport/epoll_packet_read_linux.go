@@ -66,7 +66,7 @@ func (p *epollPacketConn) driveNativePacketRead(r *epollReactor) {
 			if p.stats != nil {
 				p.stats.droppedDatagrams.Add(1)
 			}
-			p.noteNativePacketReadProgress(r)
+			p.noteNativePacketReadProgress(r, n)
 			p.observeNativePacket(ogrenet.EventDrop, uint64(n), peer, nil)
 			continue
 		}
@@ -76,7 +76,7 @@ func (p *epollPacketConn) driveNativePacketRead(r *epollReactor) {
 			p.stats.bytesRX.Add(uint64(n))
 			p.stats.packetsRX.Add(1)
 		}
-		p.noteNativePacketReadProgress(r)
+		p.noteNativePacketReadProgress(r, n)
 		p.observeNativePacket(ogrenet.EventRead, uint64(n), peer, nil)
 		p.callbackState = epollPacketCallbackPacketInFlight
 		p.engine.callbacks.submitReserved(&epollPacketCallbackTask{
