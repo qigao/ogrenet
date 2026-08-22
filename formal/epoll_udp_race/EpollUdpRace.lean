@@ -117,11 +117,11 @@ def preActiveReadableTrace : List Event := [
 
 theorem unsafe_preActive_readable_edge_has_stuck_witness :
     stuckReadable (run unsafeStep initial preActiveReadableTrace) := by
-  decide
+  simp [stuckReadable, preActiveReadableTrace, run, unsafeStep, unsafeReadable, activate, initial]
 
 theorem safe_preActive_readable_edge_is_preserved :
     ¬ stuckReadable (run safeStep initial preActiveReadableTrace) := by
-  decide
+  simp [stuckReadable, preActiveReadableTrace, run, safeStep, safeReadable, activate, initial]
 
 theorem unsafe_model_has_reachable_readiness_race :
     ∃ trace : List Event, stuckReadable (run unsafeStep initial trace) := by
@@ -137,13 +137,13 @@ def staleDeadlineTrace : List Event := [
 
 theorem unsafe_stale_deadline_can_close_new_generation :
     (run unsafeStep initial staleDeadlineTrace).terminal = some .timeout := by
-  decide
+  simp [staleDeadlineTrace, run, unsafeStep, unsafeDeadline, progress, activate, initial]
 
 theorem safe_stale_deadline_is_ignored :
     (run safeStep initial staleDeadlineTrace).terminal = none ∧
     (run safeStep initial staleDeadlineTrace).phase = .active ∧
     (run safeStep initial staleDeadlineTrace).generation = 2 := by
-  decide
+  simp [staleDeadlineTrace, run, safeStep, safeDeadline, progress, activate, initial]
 
 theorem safe_stale_generation_preserves
     (s : Model) (observedGeneration : Nat)
@@ -161,11 +161,11 @@ def closeThenTimeoutTrace : List Event := [
 
 theorem unsafe_timeout_can_overwrite_explicit_close :
     (run unsafeStep initial closeThenTimeoutTrace).terminal = some .timeout := by
-  decide
+  simp [closeThenTimeoutTrace, run, unsafeStep, unsafeDeadline, unsafePublishTerminal, activate, initial]
 
 theorem safe_explicit_close_remains_first_terminal_owner :
     (run safeStep initial closeThenTimeoutTrace).terminal = some .explicitClose := by
-  decide
+  simp [closeThenTimeoutTrace, run, safeStep, safeDeadline, safePublishTerminal, activate, initial]
 
 theorem safe_first_terminal_owner
     (s : Model) (first second : Terminal)
