@@ -235,28 +235,10 @@ func (s *epollSession) nativeReadHalfClosed() bool {
 	return isClosedSignal(s.life.readDone())
 }
 
-func (s *epollSession) replayNativeEngineLifecycle() {
-	if s == nil || !s.established.Load() {
-		return
-	}
-	if reason := abortReason(s.engineAbort.Swap(uint32(abortNone))); reason != abortNone {
-		// Abort is the stronger terminal request. If both bootstrap publications
-		// raced establishment, preserve the first terminal owner and discard the
-		// weaker graceful-shutdown residue.
-		s.shutdownRequested.Store(false)
-		s.publishNativeAbort(reason, nil)
-		return
-	}
-	if s.shutdownRequested.Swap(false) {
-		s.requestNativeShutdown()
-	}
-}
-
 func (s *epollSession) driveNativeLifecycle(r *epollReactor) {
 	if s == nil || r == nil || s.state == epollSessionClosed {
 		return
 	}
-	s.replayNativeEngineLifecycle()
 	if s.life != nil && isClosedSignal(s.life.aborted()) {
 		s.finalizeNativeEstablished(r)
 		return
