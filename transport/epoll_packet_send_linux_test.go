@@ -11,6 +11,8 @@ import (
 	"time"
 
 	"github.com/qigao/ogrenet"
+	"github.com/qigao/ogrenet/epoll"
+	"golang.org/x/sys/unix"
 )
 
 func newEpollPacketPair(t *testing.T, opts ...Option) (*epollEngine, *epollPacketConn, *epollPacketConn) {
@@ -33,6 +35,93 @@ func newEpollPacketPair(t *testing.T, opts ...Option) (*epollEngine, *epollPacke
 		t.Fatal(err)
 	}
 	return e, server, client
+}
+
+func newEpollBlockedPacketWriter(t *testing.T, writeTimeout time.Duration) (*epollEngine, *epollPacketConn) {
+	t.Helper()
+	fds, err := unix.Socketpair(unix.AF_UNIX, unix.SOCK_DGRAM|unix.SOCK_NONBLOCK|unix.SOCK_CLOEXEC, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sendFD, peerFD := fds[0], fds[1]
+	adopted := false
+	defer func() {
+		if !adopted {
+			_ = unix.Close(sendFD)
+			_ = unix.Close(peerFD)
+		}
+	}()
+	t.Cleanup(func() { _ = unix.Close(peerFD) })
+
+	if err := unix.SetsockoptInt(sendFD, unix.SOL_SOCKET, unix.SO_SNDBUF, 4096); err != nil {
+		t.Fatal(err)
+	}
+	filler := make([]byte, 1024)
+	full := false
+	for i := 0; i < 1<<20; i++ {
+		if _, err := unix.Write(sendFD, filler); err == nil {
+			continue
+		} else if errors.Is(err, unix.EAGAIN) || errors.Is(err, unix.EWOULDBLOCK) {
+			full = true
+			break
+		} else {
+			t.Fatalf("fill datagram send buffer: %v", err)
+		}
+	}
+	if !full {
+		t.Fatal("failed to drive nonblocking datagram socket to EAGAIN")
+	}
+
+	e := newEpollPacketTestEngine(t, 1, WithTimeouts(Timeouts{Write: writeTimeout}))
+	id, err := e.nextResourceID()
+	if err != nil {
+		t.Fatal(err)
+	}
+	r := e.reactors[0]
+	remote := &net.UDPAddr{IP: net.ParseIP("127.0.0.1"), Port: 9}
+	p := newEpollPacketConn(
+		e,
+		r,
+		id,
+		ogrenet.Endpoint{Scheme: ogrenet.SchemeUDP, Host: "127.0.0.1", Port: 9},
+		nil,
+		remote,
+		ogrenet.PacketHandlerFuncs{},
+		nil,
+	)
+	if err := e.addManaged(p); err != nil {
+		t.Fatal(err)
+	}
+
+	result := make(chan error, 1)
+	r.signal(newTestInboxItem(func(owner *epollReactor) {
+		p.fd = sendFD
+		p.local = &net.UDPAddr{IP: net.ParseIP("127.0.0.1"), Port: 1}
+		p.state = epollPacketActive
+		if err := owner.registerResource(p); err != nil {
+			result <- err
+			return
+		}
+		if err := owner.addFD(sendFD, epoll.Readable|epoll.Error|epoll.EdgeTriggered, p.id); err != nil {
+			delete(owner.resources, p.id)
+			result <- err
+			return
+		}
+		p.registered = true
+		result <- nil
+	}))
+	select {
+	case err := <-result:
+		if err != nil {
+			e.removeManaged(p.id)
+			t.Fatal(err)
+		}
+	case <-time.After(time.Second):
+		e.removeManaged(p.id)
+		t.Fatal("timed out adopting blocked datagram fd")
+	}
+	adopted = true
+	return e, p
 }
 
 func TestEpollNativePacketSendMethodLegalityAndOversize(t *testing.T) {
@@ -257,5 +346,43 @@ func TestEpollNativePacketAdmissionCopiesPayloadBeforePublication(t *testing.T) 
 	}
 	if string(owned) != string(want) {
 		t.Fatalf("retained datagram mutated with caller buffer: got=%q want=%q", owned, want)
+	}
+}
+
+func TestEpollNativePacketWriteDeadlineFailsBlockedDatagramAndReleasesAdmission(t *testing.T) {
+	e, client := newEpollBlockedPacketWriter(t, 75*time.Millisecond)
+	result := make(chan error, 1)
+	packet := ogrenet.Packet{Data: []byte("deadline-owned")}
+	go func() {
+		result <- client.Send(context.Background(), packet)
+	}()
+
+	select {
+	case err := <-result:
+		if !errors.Is(err, ErrTimeout) {
+			t.Fatalf("Send error=%v, want ErrTimeout", err)
+		}
+		var timeoutErr *TimeoutError
+		if !errors.As(err, &timeoutErr) || timeoutErr.Kind != TimeoutWrite {
+			t.Fatalf("Send timeout=%T %v, want TimeoutWrite", err, err)
+		}
+		var opErr *Error
+		if !errors.As(err, &opErr) || opErr.Op != OpWrite || opErr.Protocol != ogrenet.SchemeUDP || opErr.Kind != ErrorTimeout {
+			t.Fatalf("Send operational error=%#v", opErr)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("blocked native UDP datagram did not hit fixed write deadline")
+	}
+
+	waitEpollPacketDone(t, client.Done(), "blocked packet write timeout close")
+	stats := client.Stats()
+	if stats.QueuedPackets != 0 || stats.QueuedBytes != 0 {
+		t.Fatalf("write timeout retained packet ownership: %+v", stats)
+	}
+	if got := e.Stats().GlobalQueuedBytes; got != 0 {
+		t.Fatalf("write timeout retained Engine queued bytes=%d", got)
+	}
+	if !errors.Is(client.Err(), ErrTimeout) {
+		t.Fatalf("PacketConn.Err=%v, want write timeout", client.Err())
 	}
 }
