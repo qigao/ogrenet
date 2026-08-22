@@ -54,6 +54,14 @@ type epollSession struct {
 	activity      *activityClock
 	decodeWaiting atomic.Bool
 
+	callbackState     epollSessionCallbackState
+	callbackMu        sync.Mutex
+	callbackCompleted epollSessionCallbackState
+	readPending       []byte
+	readScratch       []byte
+	readReady         bool
+	terminalPrepared  bool
+
 	writeCurrent    outbound
 	writeOffset     int
 	writeActive     bool
@@ -187,6 +195,7 @@ func (s *epollSession) onReactorInbox(r *epollReactor) {
 		return
 	}
 	if s.established.Load() {
+		s.consumeNativeCallbackCompletion()
 		s.replayEstablishedEngineLifecycle()
 	}
 	if !s.established.Load() && s.engineAbort.Load() != uint32(abortNone) {
@@ -218,7 +227,7 @@ func (s *epollSession) onReactorInbox(r *epollReactor) {
 			s.applyCodecSetup(r)
 		}
 	case epollSessionOpening, epollSessionActive:
-		s.driveNativeLifecycle(r)
+		s.driveNativeEstablished(r)
 	case epollSessionTerminal:
 		s.finalizeReactor(r)
 	}
@@ -236,15 +245,12 @@ func (s *epollSession) onReactorEvent(r *epollReactor, events epoll.Events) {
 		return
 	}
 	if events&(epoll.Readable|epoll.PeerClosed|epoll.Hangup) != 0 {
-		s.detectNativePeerFIN(r)
-		if s.state == epollSessionClosed {
-			return
-		}
+		s.readReady = true
 	}
 	if events&(epoll.Writable|epoll.Error|epoll.Hangup|epoll.PeerClosed) != 0 {
 		s.writeBlocked = false
 	}
-	s.driveNativeLifecycle(r)
+	s.driveNativeEstablished(r)
 }
 
 func (s *epollSession) onReactorRunnable(r *epollReactor) {
@@ -257,7 +263,7 @@ func (s *epollSession) onReactorRunnable(r *epollReactor) {
 	case epollSessionCodecSetup:
 		s.startCodecSetup(r)
 	case epollSessionOpening, epollSessionActive:
-		s.driveNativeLifecycle(r)
+		s.driveNativeEstablished(r)
 	case epollSessionTerminal:
 		s.finalizeReactor(r)
 	}
@@ -382,6 +388,7 @@ func (s *epollSession) applyCodecSetup(r *epollReactor) {
 	s.framer = framer
 	_, s.wireFramer = framer.(*wire.Codec)
 	s.initNativeSendState()
+	s.initNativeReadCallbacks()
 	s.state = epollSessionOpening
 	s.established.Store(true)
 	if s.parent != nil {
@@ -403,8 +410,9 @@ func (s *epollSession) applyCodecSetup(r *epollReactor) {
 		s.engine.emitNativeConnect(s.id, s.endpoint, cloneTCPAddr(s.local), cloneTCPAddr(s.remote), s.dial.observerStart, nil)
 		s.dial.finish(s, nil)
 	}
-	// Handler.OnOpen is intentionally Task 9. The Session is adopted and
-	// observable, but application callback delivery is not enabled yet.
+	// Dial/accept publication may complete while OnOpen is queued or running,
+	// but application bytes are not consumed until the callback completes.
+	r.requeue(s)
 }
 
 func (s *epollSession) finalizeReactor(r *epollReactor) {
