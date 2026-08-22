@@ -56,8 +56,9 @@ type epollReactor struct {
 
 	// Package tests use these nil-by-default hooks only through reactor-owned
 	// callbacks so race tests preserve the same single-owner discipline.
-	testWaitArmed func()
-	testPollerAdd func(int, epoll.Events, uint64) error
+	testWaitArmed              func()
+	testPollerAdd              func(int, epoll.Events, uint64) error
+	testAfterConnectRegistered func(*epollSession)
 }
 
 func (r *epollReactor) addFD(fd int, events epoll.Events, data uint64) error {
