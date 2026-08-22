@@ -312,6 +312,7 @@ func (s *epollSession) applyCodecSetup(r *epollReactor) {
 
 	s.framer = framer
 	_, s.wireFramer = framer.(*wire.Codec)
+	s.state = epollSessionOpening
 	if s.parent != nil {
 		if s.parent.stats != nil {
 			s.parent.stats.accepted.Add(1)
@@ -333,7 +334,6 @@ func (s *epollSession) applyCodecSetup(r *epollReactor) {
 	}
 	// Handler.OnOpen is intentionally Task 9. The Session is adopted and
 	// observable, but application callback delivery is not enabled yet.
-	s.state = epollSessionOpening
 }
 
 func (s *epollSession) finalizeReactor(r *epollReactor) {
