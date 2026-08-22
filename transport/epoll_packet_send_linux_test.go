@@ -80,6 +80,7 @@ func TestEpollNativePacketTrySendAdmissionAndBackpressure(t *testing.T) {
 	_, _, client := newEpollPacketPair(t,
 		WithWriteQueue(1),
 		WithMaxQueuedBytes(64),
+		WithLimits(Limits{MaxQueuedBytesTotal: 128}),
 		WithObserver(ogrenet.ObserverFunc(func(event ogrenet.Event) {
 			if event.Kind == ogrenet.EventBackpressure && event.Resource == ogrenet.ResourcePacketConn {
 				select {
