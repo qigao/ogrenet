@@ -5,7 +5,6 @@ package transport
 import (
 	"context"
 	"errors"
-	"fmt"
 	"net"
 	"sync"
 	"sync/atomic"
