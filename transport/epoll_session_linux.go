@@ -181,7 +181,7 @@ func (s *epollSession) adoptAcceptedFD(r *epollReactor) {
 		s.finalizeReactor(r)
 		return
 	}
-	if err := r.poller.Add(s.fd, epoll.Readable|epoll.PeerClosed|epoll.Error|epoll.EdgeTriggered, s.id); err != nil {
+	if err := r.addFD(s.fd, epoll.Readable|epoll.PeerClosed|epoll.Error|epoll.EdgeTriggered, s.id); err != nil {
 		delete(r.resources, s.id)
 		s.state = epollSessionTerminal
 		s.finalizeReactor(r)
