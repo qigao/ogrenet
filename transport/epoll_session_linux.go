@@ -10,6 +10,7 @@ import (
 	"github.com/qigao/ogrenet"
 	"github.com/qigao/ogrenet/epoll"
 	"github.com/qigao/ogrenet/wire"
+	"golang.org/x/sys/unix"
 )
 
 type epollSessionState uint8
@@ -29,15 +30,16 @@ type epollSession struct {
 	reactor *epollReactor
 	node    epollInboxNode
 
-	id       uint64
-	fd       int
-	state    epollSessionState
-	endpoint ogrenet.Endpoint
-	local    *net.TCPAddr
-	remote   *net.TCPAddr
-	handler  ogrenet.Handler
-	lease    *connectionLease
-	parent   *epollListener
+	id         uint64
+	fd         int
+	state      epollSessionState
+	registered bool
+	endpoint   ogrenet.Endpoint
+	local      *net.TCPAddr
+	remote     *net.TCPAddr
+	handler    ogrenet.Handler
+	lease      *connectionLease
+	parent     *epollListener
 
 	framer     wire.Framer
 	wireFramer bool
@@ -132,29 +134,64 @@ func (s *epollSession) requestEngineAbort(reason abortReason) {
 }
 
 func (s *epollSession) onReactorInbox(r *epollReactor) {
-	if s == nil {
+	if s == nil || r == nil || s.state == epollSessionClosed {
 		return
 	}
 	if s.engineAbort.Load() != uint32(abortNone) {
 		s.state = epollSessionTerminal
-		return
 	}
 	if s.shutdownRequested.Load() && s.state < epollSessionActive {
 		s.state = epollSessionTerminal
-		return
 	}
-	if s.state == epollSessionCodecSetup && s.codecSetupComplete() {
-		s.applyCodecSetup()
+
+	switch s.state {
+	case epollSessionHandoff:
+		s.adoptAcceptedFD(r)
+	case epollSessionCodecSetup:
+		if s.codecSetupComplete() {
+			s.applyCodecSetup(r)
+		}
+	case epollSessionTerminal:
+		s.finalizeReactor(r)
 	}
 }
 
 func (s *epollSession) onReactorEvent(*epollReactor, epoll.Events) {}
 
 func (s *epollSession) onReactorRunnable(r *epollReactor) {
-	if s == nil || r == nil || s.state != epollSessionCodecSetup {
+	if s == nil || r == nil {
 		return
 	}
-	s.startCodecSetup(r)
+	switch s.state {
+	case epollSessionCodecSetup:
+		s.startCodecSetup(r)
+	case epollSessionTerminal:
+		s.finalizeReactor(r)
+	}
+}
+
+func (s *epollSession) adoptAcceptedFD(r *epollReactor) {
+	if s.fd < 0 {
+		s.state = epollSessionTerminal
+		s.finalizeReactor(r)
+		return
+	}
+	if err := r.registerResource(s); err != nil {
+		s.state = epollSessionTerminal
+		s.finalizeReactor(r)
+		return
+	}
+	if err := r.poller.Add(s.fd, epoll.Readable|epoll.PeerClosed|epoll.Error|epoll.EdgeTriggered, s.id); err != nil {
+		delete(r.resources, s.id)
+		s.state = epollSessionTerminal
+		s.finalizeReactor(r)
+		return
+	}
+	// Poller.Add is the accepted-fd ownership transfer point. From here on the
+	// target reactor is the only goroutine allowed to issue syscalls on this fd.
+	s.registered = true
+	s.state = epollSessionCodecSetup
+	r.requeue(s)
 }
 
 func (s *epollSession) startCodecSetup(r *epollReactor) {
@@ -181,7 +218,7 @@ func (s *epollSession) startCodecSetup(r *epollReactor) {
 	s.engine.callbacks.submitReserved(&epollCodecSetupTask{session: s})
 }
 
-func (s *epollSession) publishCodecSetup(framer wire.Framer, err error) {
+func (s *epollSession) storeCodecSetup(framer wire.Framer, err error) {
 	s.setupMu.Lock()
 	if s.setupDone {
 		s.setupMu.Unlock()
@@ -190,9 +227,15 @@ func (s *epollSession) publishCodecSetup(framer wire.Framer, err error) {
 	s.setupFramer = framer
 	s.setupErr = err
 	s.setupDone = true
-	s.setupSubmitted = false
 	s.setupMu.Unlock()
-	if s.reactor != nil {
+}
+
+func (s *epollSession) notifyCodecSetup() {
+	s.setupMu.Lock()
+	s.setupSubmitted = false
+	done := s.setupDone
+	s.setupMu.Unlock()
+	if done && s.reactor != nil {
 		s.reactor.signal(s)
 	}
 }
@@ -203,19 +246,83 @@ func (s *epollSession) codecSetupComplete() bool {
 	}
 	s.setupMu.Lock()
 	defer s.setupMu.Unlock()
-	return s.setupDone
+	return s.setupDone && !s.setupSubmitted
 }
 
-func (s *epollSession) applyCodecSetup() {
+func (s *epollSession) codecSetupOutstanding() bool {
+	if s == nil {
+		return false
+	}
+	s.setupMu.Lock()
+	defer s.setupMu.Unlock()
+	return s.setupSubmitted
+}
+
+func (s *epollSession) applyCodecSetup(r *epollReactor) {
 	s.setupMu.Lock()
 	framer := s.setupFramer
 	err := s.setupErr
 	s.setupMu.Unlock()
 	if err != nil || framer == nil {
 		s.state = epollSessionTerminal
+		s.finalizeReactor(r)
 		return
 	}
+	if s.lease != nil && !s.lease.activate() {
+		s.state = epollSessionTerminal
+		s.finalizeReactor(r)
+		return
+	}
+
 	s.framer = framer
 	_, s.wireFramer = framer.(*wire.Codec)
+	if s.parent != nil && s.parent.stats != nil {
+		s.parent.stats.accepted.Add(1)
+	}
+	if s.engine != nil && s.engine.observer != nil {
+		parentID := uint64(0)
+		if s.parent != nil {
+			parentID = s.parent.id
+		}
+		s.engine.observer.emit(ogrenet.Event{
+			Kind:       ogrenet.EventAccept,
+			Resource:   ogrenet.ResourceSession,
+			ResourceID: s.id,
+			ParentID:   parentID,
+			Protocol:   ogrenet.SchemeTCP,
+			Local:      cloneTCPAddr(s.local),
+			Remote:     cloneTCPAddr(s.remote),
+		})
+	}
+	// Handler.OnOpen is intentionally Task 9. The accepted Session is adopted
+	// and observable, but application callback delivery is not enabled yet.
 	s.state = epollSessionOpening
+}
+
+func (s *epollSession) finalizeReactor(r *epollReactor) {
+	if s == nil || s.state == epollSessionClosed || s.codecSetupOutstanding() {
+		return
+	}
+	if s.registered {
+		_ = r.poller.Del(s.fd)
+		if r.resources[s.id] == s {
+			delete(r.resources, s.id)
+		}
+		s.registered = false
+	} else if r.resources[s.id] == s {
+		delete(r.resources, s.id)
+	}
+	if s.fd >= 0 {
+		_ = unix.Close(s.fd)
+		s.fd = -1
+	}
+	if s.lease != nil {
+		s.lease.release()
+		s.lease = nil
+	}
+	s.state = epollSessionClosed
+	s.doneOnce.Do(func() { close(s.done) })
+	if s.engine != nil {
+		s.engine.removeManaged(s)
+	}
 }
