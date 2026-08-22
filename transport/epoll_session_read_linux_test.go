@@ -4,6 +4,7 @@ package transport
 
 import (
 	"context"
+	"net"
 	"testing"
 	"time"
 
@@ -20,10 +21,21 @@ func (h *epollNativeReadHandler) OnMessage(_ ogrenet.Session, msg ogrenet.Messag
 }
 func (h *epollNativeReadHandler) OnClose(ogrenet.Session, error) {}
 
+func newEpollNativeReadSession(t *testing.T, handler ogrenet.Handler, opts ...Option) (*epollEngine, *epollSession, net.Conn) {
+	t.Helper()
+	_, endpoint, accepted := newNativeDialTarget(t)
+	e := newEpollTestEngine(t, 1, opts...)
+	s, err := e.dialNativeTCP(context.Background(), endpoint, handler, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	peer := waitNativeDialAccepted(t, accepted)
+	return e, s, peer
+}
+
 func TestEpollNativeReadDecodesFrameAndDeliversMessage(t *testing.T) {
-	_, s, peer := newEpollNativeSendSession(t)
 	h := &epollNativeReadHandler{messages: make(chan ogrenet.Message, 1)}
-	s.handler = h
+	_, _, peer := newEpollNativeReadSession(t, h)
 
 	want := epollNativeMessage([]byte("native-read"))
 	frame := encodedNativeFrame(t, want)
