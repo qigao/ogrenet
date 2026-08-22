@@ -42,3 +42,7 @@ func TestEpollFactoryPhase6AConstruction(t *testing.T) {
 		t.Fatal("epoll 6A engine did not close its Done barrier")
 	}
 }
+
+func TestEpollPublicTCPContracts(t *testing.T) {
+	runEngineContracts(t, epollFactory(contractProfile{TCP: true}))
+}
