@@ -120,6 +120,9 @@ jobs:
       - name: Native epoll read/callback race loop
         if: matrix.go == '1.26.x'
         run: go test -race ./transport -run '^TestEpollNative(OnOpen|Decoded|StatsAndObserverRead|BlockedHandler|OneSession|DoneWaits|Callback)|^TestEpollPublicTCPContracts' -count=20
+      - name: Native epoll TCP parity race loop
+        if: matrix.go == '1.26.x'
+        run: go test -race ./transport -run '^TestEpoll.*(Parity|Graceful|Observer|Stats|Limit|Timeout|Error)' -count=20
       - name: Test with race detector
         run: go test -race -count=1 ./...
 
