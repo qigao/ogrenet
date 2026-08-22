@@ -48,10 +48,10 @@ type epollSession struct {
 	setupErr       error
 	setupFramer    wire.Framer
 
-	engineAbort      atomic.Uint32
+	engineAbort       atomic.Uint32
 	shutdownRequested atomic.Bool
-	done             chan struct{}
-	doneOnce         sync.Once
+	done              chan struct{}
+	doneOnce          sync.Once
 }
 
 func newEpollBootstrapSession(
