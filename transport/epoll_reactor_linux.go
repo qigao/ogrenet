@@ -27,7 +27,7 @@ const (
 var (
 	errEpollNilResource         = errors.New("transport: nil epoll resource")
 	errEpollInvalidResourceID   = errors.New("transport: invalid epoll resource id")
-	errEpollDuplicateResourceID = errors.New("transport: duplicate epoll managed resource id")
+	errEpollDuplicateResourceID = errors.New("transport: duplicate epoll resource id")
 )
 
 type epollReactor struct {
