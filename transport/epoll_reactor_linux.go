@@ -34,6 +34,7 @@ type epollReactor struct {
 	events []epoll.Event
 
 	resources map[uint64]epollEventResource
+	deadlines epollDeadlineHeap
 
 	inboxMu     sync.Mutex
 	inboxHead   *epollInboxNode
@@ -115,17 +116,19 @@ func (r *epollReactor) drainRunnable() {
 func (r *epollReactor) run() {
 	for {
 		r.drainInbox()
+		r.runExpiredDeadlines(time.Now())
 		r.drainRunnable()
 		if r.shouldStop() {
 			return
 		}
+		timeout := r.nextWaitTimeout(time.Now())
 		if !r.armWait() {
 			continue
 		}
 		if r.testWaitArmed != nil {
 			r.testWaitArmed()
 		}
-		n, err := r.poller.Wait(r.events, -1*time.Nanosecond)
+		n, err := r.poller.Wait(r.events, timeout)
 		r.disarmWait()
 		if err != nil {
 			if errors.Is(err, epoll.ErrClosed) {
