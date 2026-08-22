@@ -59,28 +59,28 @@ func (p *epollStressProgress) String() string {
 }
 
 type epollStressReactorSnapshot struct {
-	index            int
-	resources        int
-	sessions         int
-	handoff          int
-	connecting       int
-	codecSetup       int
-	opening          int
-	active           int
-	terminal         int
-	closed           int
-	callbackNeedOpen int
-	callbackOpen     int
-	callbackIdle     int
-	callbackMessage  int
+	index             int
+	resources         int
+	sessions          int
+	handoff           int
+	connecting        int
+	codecSetup        int
+	opening           int
+	active            int
+	terminal          int
+	closed            int
+	callbackNeedOpen  int
+	callbackOpen      int
+	callbackIdle      int
+	callbackMessage   int
 	callbackNeedClose int
-	callbackClose    int
-	callbackClosed   int
-	writeActive      int
-	writeBlocked     int
-	readReady        int
-	terminalPrepared int
-	workerBlocked    int
+	callbackClose     int
+	callbackClosed    int
+	writeActive       int
+	writeBlocked      int
+	readReady         int
+	terminalPrepared  int
+	workerBlocked     int
 }
 
 func captureEpollStressReactor(r *epollReactor) epollStressReactorSnapshot {
