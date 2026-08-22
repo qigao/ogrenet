@@ -21,6 +21,9 @@ func (x *blockingEpollWorkerTask) runEpollWorkerTask() {
 }
 
 func newCodecTestSession(e *epollEngine, r *epollReactor, id uint64) *epollSession {
+	if e.admission == nil {
+		e.admission = newAdmissionController(Limits{})
+	}
 	return newEpollBootstrapSession(
 		e,
 		r,
