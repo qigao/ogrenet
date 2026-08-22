@@ -7,6 +7,7 @@ import "context"
 type epollEngineShutdownSet struct {
 	listeners []epollManagedResource
 	sessions  []epollManagedResource
+	packets   []epollManagedResource
 }
 
 func (e *epollEngine) shutdownNative(ctx context.Context) error {
@@ -61,18 +62,24 @@ func (e *epollEngine) beginNativeGracefulShutdown() (bool, epollEngineShutdownSe
 }
 
 func (e *epollEngine) requestNativeGracefulShutdown(set epollEngineShutdownSet) {
-	// Admission ownership changes before any Session starts its graceful drain.
-	// That keeps Engine Stats and final quiescence aligned with the portable
-	// owner model: Active -> Draining -> Released.
+	// Admission ownership changes before any Session/PacketConn starts its
+	// graceful drain. That keeps Engine Stats and final quiescence aligned with
+	// the portable owner model: Active -> Draining -> Released.
 	for _, session := range set.sessions {
 		session.prepareEngineDrain()
 	}
-	// Stop new inbound adoption before asking established Sessions to drain.
+	for _, packet := range set.packets {
+		packet.prepareEngineDrain()
+	}
+	// Stop new inbound adoption before asking established resources to drain.
 	for _, listener := range set.listeners {
 		listener.requestEngineShutdown()
 	}
 	for _, session := range set.sessions {
 		session.requestEngineShutdown()
+	}
+	for _, packet := range set.packets {
+		packet.requestEngineShutdown()
 	}
 	e.wakeAll()
 }
@@ -111,6 +118,8 @@ func (e *epollEngine) snapshotNativeShutdownSetLocked() epollEngineShutdownSet {
 			set.listeners = append(set.listeners, resource)
 		case epollManagedSession:
 			set.sessions = append(set.sessions, resource)
+		case epollManagedPacket:
+			set.packets = append(set.packets, resource)
 		}
 	}
 	return set
@@ -122,6 +131,9 @@ func (e *epollEngine) requestNativeAbort(set epollEngineShutdownSet, reason abor
 	}
 	for _, session := range set.sessions {
 		session.requestEngineAbort(reason)
+	}
+	for _, packet := range set.packets {
+		packet.requestEngineAbort(reason)
 	}
 	e.wakeAll()
 }

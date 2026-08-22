@@ -19,6 +19,7 @@ type epollManagedKind uint8
 const (
 	epollManagedListener epollManagedKind = iota + 1
 	epollManagedSession
+	epollManagedPacket
 )
 
 type epollManagedResource interface {
