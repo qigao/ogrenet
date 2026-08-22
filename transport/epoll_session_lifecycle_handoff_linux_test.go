@@ -5,12 +5,13 @@ package transport
 import (
 	"errors"
 	"io"
+	"net"
 	"testing"
 	"time"
 )
 
 func TestEpollNativeLifecycleReplaysPendingEngineAbortAfterEstablishment(t *testing.T) {
-	_, session, _ := newEpollNativeLifecycleSession(t)
+	_, session, _ := newEpollNativeSendSession(t)
 
 	// Reproduce the bootstrap -> established publication race residue: an
 	// engine abort was published while the caller still observed established
@@ -18,14 +19,18 @@ func TestEpollNativeLifecycleReplaysPendingEngineAbortAfterEstablishment(t *test
 	session.engineAbort.Store(uint32(abortExplicit))
 	session.reactor.signal(session)
 
-	waitNativeSendSignal(t, session.Done(), time.Second, "pending engine abort")
+	waitNativeSendSignal(t, session.Done(), "pending engine abort")
 	if err := session.Err(); err != nil {
 		t.Fatalf("explicit engine abort Err() = %v, want nil", err)
 	}
 }
 
 func TestEpollNativeLifecycleReplaysPendingEngineShutdownAfterEstablishment(t *testing.T) {
-	_, session, peer := newEpollNativeLifecycleSession(t)
+	_, session, peer := newEpollNativeSendSession(t)
+	tcpPeer, ok := peer.(*net.TCPConn)
+	if !ok {
+		t.Fatalf("peer=%T, want *net.TCPConn", peer)
+	}
 
 	// Reproduce the equivalent shutdown publication residue. The established
 	// reactor must consume it instead of permanently ignoring the old atomic.
@@ -41,8 +46,8 @@ func TestEpollNativeLifecycleReplaysPendingEngineShutdownAfterEstablishment(t *t
 		t.Fatalf("peer read after pending shutdown = (%d, %v), want (0, EOF)", n, err)
 	}
 
-	if err := peer.CloseWrite(); err != nil {
+	if err := tcpPeer.CloseWrite(); err != nil {
 		t.Fatalf("peer CloseWrite: %v", err)
 	}
-	waitNativeSendSignal(t, session.Done(), time.Second, "pending engine shutdown completion")
+	waitNativeSendSignal(t, session.Done(), "pending engine shutdown completion")
 }
