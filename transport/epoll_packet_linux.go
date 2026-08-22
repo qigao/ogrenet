@@ -53,6 +53,13 @@ type epollPacketConn struct {
 	writeInterested bool
 	writeGen        uint64
 
+	readReady   bool
+	readScratch []byte
+
+	callbackState     epollPacketCallbackState
+	callbackMu        sync.Mutex
+	callbackCompleted bool
+
 	result     chan error
 	resultOnce sync.Once
 
@@ -226,6 +233,7 @@ func newEpollPacketConn(e *epollEngine, r *epollReactor, id uint64, endpoint ogr
 	}
 	p.node.owner = p
 	p.initNativePacketSendState()
+	p.initNativePacketReadCallbacks()
 	return p
 }
 
@@ -399,18 +407,23 @@ func (p *epollPacketConn) onReactorInbox(r *epollReactor) {
 		p.finishCreate(nil)
 		return
 	}
+	p.consumeNativePacketCallbackCompletion()
 	if p.closeRequested.Load() {
 		p.finalizeReactor(r)
 		return
 	}
 	if p.state == epollPacketActive {
 		p.driveNativePacketWrite(r)
+		p.driveNativePacketRead(r)
 	}
 }
 
 func (p *epollPacketConn) onReactorEvent(r *epollReactor, events epoll.Events) {
 	if p == nil || r == nil || p.state != epollPacketActive {
 		return
+	}
+	if events&epoll.Readable != 0 {
+		p.readReady = true
 	}
 	if events&(epoll.Writable|epoll.Error|epoll.Hangup) != 0 {
 		p.writeBlocked = false
@@ -420,6 +433,7 @@ func (p *epollPacketConn) onReactorEvent(r *epollReactor, events epoll.Events) {
 		return
 	}
 	p.driveNativePacketWrite(r)
+	p.driveNativePacketRead(r)
 }
 
 func (p *epollPacketConn) onReactorRunnable(r *epollReactor) {
@@ -432,6 +446,7 @@ func (p *epollPacketConn) onReactorRunnable(r *epollReactor) {
 	}
 	if p.state == epollPacketActive {
 		p.driveNativePacketWrite(r)
+		p.driveNativePacketRead(r)
 	}
 }
 
