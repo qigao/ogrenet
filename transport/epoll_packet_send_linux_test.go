@@ -168,3 +168,27 @@ func TestEpollNativePacketSendCancellationAfterPublicationRetainsOwnership(t *te
 		t.Fatalf("caller cancellation revoked admitted datagram: %+v", stats)
 	}
 }
+
+func TestEpollNativePacketAdmissionCopiesPayloadBeforePublication(t *testing.T) {
+	_, _, client := newEpollPacketPair(t, WithWriteQueue(2), WithMaxQueuedBytes(64))
+	data := []byte("copy-owned")
+	want := append([]byte(nil), data...)
+	if err := client.TrySend(ogrenet.Packet{Data: data}); err != nil {
+		t.Fatalf("TrySend: %v", err)
+	}
+
+	for i := range data {
+		data[i] = 'x'
+	}
+
+	select {
+	case req := <-client.queue:
+		if string(req.data) != string(want) {
+			client.queue <- req
+			t.Fatalf("retained datagram mutated with caller buffer: got=%q want=%q", req.data, want)
+		}
+		client.queue <- req
+	default:
+		t.Fatal("published datagram missing from retained queue")
+	}
+}
