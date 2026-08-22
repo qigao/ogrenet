@@ -12,6 +12,7 @@ type epollInboxNode struct {
 	next           *epollInboxNode
 	queued         bool
 	runnableQueued bool
+	workerBlocked  bool
 }
 
 func (r *epollReactor) signal(item epollInboxItem) {
