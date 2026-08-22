@@ -59,6 +59,7 @@ type epollPacketConn struct {
 	callbackState     epollPacketCallbackState
 	callbackMu        sync.Mutex
 	callbackCompleted bool
+	terminalPrepared  bool
 
 	result     chan error
 	resultOnce sync.Once
@@ -527,33 +528,45 @@ func (p *epollPacketConn) finalizeReactor(r *epollReactor) {
 	if p == nil || r == nil || p.state == epollPacketClosed {
 		return
 	}
+	wasCreating := p.state == epollPacketCreating
 	p.closeNativePacketAdmission()
 	p.closeRequested.Store(true)
 	p.state = epollPacketTerminal
 	if p.gate != nil && !isClosedSignal(p.gate.done()) {
 		return
 	}
-	p.releaseNativePacketWriteOwnership(ErrClosed)
-	if p.registered {
-		_ = r.poller.Del(p.fd)
-		if r.resources[p.id] == p {
-			delete(r.resources, p.id)
+	if !p.terminalPrepared {
+		p.releaseNativePacketWriteOwnership(ErrClosed)
+		if p.registered {
+			_ = r.poller.Del(p.fd)
+			p.registered = false
 		}
-		p.registered = false
-	} else if r.resources[p.id] == p {
+		if p.fd >= 0 {
+			if p.testBeforePhysicalClose != nil {
+				p.testBeforePhysicalClose(p)
+			}
+			_ = unix.Close(p.fd)
+			p.fd = -1
+		}
+		if p.stats != nil {
+			p.stats.age.freeze()
+		}
+		p.stopContextCallback()
+		if wasCreating {
+			p.callbackState = epollPacketCallbackClosed
+		} else {
+			p.observeNativePacket(ogrenet.EventClose, 0, nil, p.Err())
+		}
+		p.terminalPrepared = true
+	}
+
+	p.driveNativePacketCallbackState(r)
+	if p.callbackState != epollPacketCallbackClosed {
+		return
+	}
+	if r.resources[p.id] == p {
 		delete(r.resources, p.id)
 	}
-	if p.fd >= 0 {
-		if p.testBeforePhysicalClose != nil {
-			p.testBeforePhysicalClose(p)
-		}
-		_ = unix.Close(p.fd)
-		p.fd = -1
-	}
-	if p.stats != nil {
-		p.stats.age.freeze()
-	}
-	p.stopContextCallback()
 	if p.lease != nil {
 		p.lease.release()
 		p.lease = nil
