@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"time"
 
 	"github.com/qigao/ogrenet"
 	"github.com/qigao/ogrenet/epoll"
@@ -304,6 +305,27 @@ func (p *epollPacketConn) observeNativePacket(kind ogrenet.EventKind, bytes uint
 	})
 }
 
+func (p *epollPacketConn) currentDeadlineGeneration(kind epollDeadlineKind) uint64 {
+	if p == nil || kind != epollDeadlineWrite {
+		return 0
+	}
+	return p.writeGen
+}
+
+func (p *epollPacketConn) onReactorDeadline(r *epollReactor, kind epollDeadlineKind, generation uint64) {
+	if kind == epollDeadlineWrite {
+		p.onNativePacketWriteDeadline(r, generation)
+	}
+}
+
+func (p *epollPacketConn) onNativePacketWriteDeadline(r *epollReactor, generation uint64) {
+	if p == nil || r == nil || p.state != epollPacketActive || !p.writeActive || generation != p.writeGen {
+		return
+	}
+	timeout := &TimeoutError{Kind: TimeoutWrite, Cause: context.DeadlineExceeded}
+	p.failNativePacketWrite(r, p.operationalError(OpWrite, timeout, p.writeCurrent.peer))
+}
+
 func (p *epollPacketConn) driveNativePacketWrite(r *epollReactor) {
 	if p == nil || r == nil || p.state != epollPacketActive || p.fd < 0 || p.writeBlocked {
 		return
@@ -325,6 +347,11 @@ func (p *epollPacketConn) driveNativePacketWrite(r *epollReactor) {
 			case p.writeCurrent = <-p.queue:
 				p.writeActive = true
 				p.writeGen++
+				if p.engine != nil {
+					if timeout := p.engine.cfg.timeouts.Write; timeout > 0 {
+						r.scheduleDeadline(p.id, epollDeadlineWrite, p.writeGen, time.Now().Add(timeout))
+					}
+				}
 			default:
 				return
 			}
