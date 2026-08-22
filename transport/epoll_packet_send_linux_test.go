@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	"net"
+	"sync"
 	"testing"
 	"time"
 
@@ -77,19 +78,39 @@ func TestEpollNativePacketSendMethodLegalityAndOversize(t *testing.T) {
 
 func TestEpollNativePacketTrySendAdmissionAndBackpressure(t *testing.T) {
 	backpressure := make(chan ogrenet.Event, 4)
-	_, _, client := newEpollPacketPair(t,
+	writes := make(chan ogrenet.Event, 4)
+	e, _, client := newEpollPacketPair(t,
 		WithWriteQueue(1),
 		WithMaxQueuedBytes(64),
 		WithLimits(Limits{MaxQueuedBytesTotal: 128}),
 		WithObserver(ogrenet.ObserverFunc(func(event ogrenet.Event) {
-			if event.Kind == ogrenet.EventBackpressure && event.Resource == ogrenet.ResourcePacketConn {
+			if event.Resource != ogrenet.ResourcePacketConn {
+				return
+			}
+			switch event.Kind {
+			case ogrenet.EventBackpressure:
 				select {
 				case backpressure <- event:
+				default:
+				}
+			case ogrenet.EventWrite:
+				select {
+				case writes <- event:
 				default:
 				}
 			}
 		})),
 	)
+
+	entered := make(chan struct{})
+	release := make(chan struct{})
+	var releaseOnce sync.Once
+	t.Cleanup(func() { releaseOnce.Do(func() { close(release) }) })
+	client.reactor.signal(newTestInboxItem(func(*epollReactor) {
+		close(entered)
+		<-release
+	}))
+	waitNativeSendSignal(t, entered, "packet reactor blocker")
 
 	packet := ogrenet.Packet{Data: []byte("first")}
 	if err := client.TrySend(packet); err != nil {
@@ -99,7 +120,7 @@ func TestEpollNativePacketTrySendAdmissionAndBackpressure(t *testing.T) {
 	if stats.QueuedPackets != 1 || stats.QueuedBytes != uint64(len(packet.Data)) {
 		t.Fatalf("retained queue stats=%+v, want 1 packet/%d bytes", stats, len(packet.Data))
 	}
-	if got := client.engine.Stats().GlobalQueuedBytes; got != uint64(len(packet.Data)) {
+	if got := e.Stats().GlobalQueuedBytes; got != uint64(len(packet.Data)) {
 		t.Fatalf("Engine GlobalQueuedBytes=%d, want %d", got, len(packet.Data))
 	}
 
@@ -128,44 +149,93 @@ func TestEpollNativePacketTrySendAdmissionAndBackpressure(t *testing.T) {
 		t.Fatalf("duplicate EventBackpressure=%+v", extra)
 	case <-time.After(25 * time.Millisecond):
 	}
+
+	releaseOnce.Do(func() { close(release) })
+	select {
+	case event := <-writes:
+		if event.ResourceID != client.id || event.Protocol != ogrenet.SchemeUDP || event.Bytes != uint64(len(packet.Data)) || event.Err != nil {
+			t.Fatalf("EventWrite=%+v", event)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("first admitted datagram did not complete after reactor release")
+	}
+	stats = client.Stats()
+	if stats.QueuedPackets != 0 || stats.QueuedBytes != 0 {
+		t.Fatalf("queue ownership not released after write: %+v", stats)
+	}
+	if got := e.Stats().GlobalQueuedBytes; got != 0 {
+		t.Fatalf("Engine GlobalQueuedBytes after write=%d, want 0", got)
+	}
 }
 
 func TestEpollNativePacketSendCancellationAfterPublicationRetainsOwnership(t *testing.T) {
-	_, _, client := newEpollPacketPair(t, WithWriteQueue(2), WithMaxQueuedBytes(64))
-	ctx, cancel := context.WithCancel(context.Background())
+	writes := make(chan ogrenet.Event, 4)
+	_, _, client := newEpollPacketPair(t,
+		WithWriteQueue(2),
+		WithMaxQueuedBytes(64),
+		WithObserver(ogrenet.ObserverFunc(func(event ogrenet.Event) {
+			if event.Kind == ogrenet.EventWrite && event.Resource == ogrenet.ResourcePacketConn {
+				select {
+				case writes <- event:
+				default:
+				}
+			}
+		})),
+	)
+
+	entered := make(chan struct{})
+	release := make(chan struct{})
+	var releaseOnce sync.Once
+	t.Cleanup(func() { releaseOnce.Do(func() { close(release) }) })
+	client.reactor.signal(newTestInboxItem(func(*epollReactor) {
+		close(entered)
+		<-release
+	}))
+	waitNativeSendSignal(t, entered, "packet reactor blocker")
+
+	transferred := make(chan struct{})
+	client.testAfterPacketQueueTransfer = func(packetOutbound) {
+		close(transferred)
+	}
+
+	ctx, cancel := context.WithCancelCause(context.Background())
+	callerCause := errors.New("caller canceled after native packet queue transfer")
 	result := make(chan error, 1)
 	packet := ogrenet.Packet{Data: []byte("owned")}
 	go func() {
 		result <- client.Send(ctx, packet)
 	}()
 
-	deadline := time.Now().Add(time.Second)
-	for time.Now().Before(deadline) {
-		stats := client.Stats()
-		if stats.QueuedPackets == 1 && stats.QueuedBytes == uint64(len(packet.Data)) {
-			break
-		}
-		time.Sleep(time.Millisecond)
-	}
+	waitNativeSendSignal(t, transferred, "native packet queue transfer")
 	stats := client.Stats()
 	if stats.QueuedPackets != 1 || stats.QueuedBytes != uint64(len(packet.Data)) {
-		cancel()
-		t.Fatalf("Send was not published before deadline: %+v", stats)
+		t.Fatalf("Send did not retain admitted datagram after transfer: %+v", stats)
 	}
 
-	cancel()
-	select {
-	case err := <-result:
-		if !errors.Is(err, context.Canceled) {
-			t.Fatalf("Send after cancellation error=%v, want context.Canceled", err)
-		}
-	case <-time.After(time.Second):
-		t.Fatal("Send did not return caller cancellation")
+	cancel(callerCause)
+	if err := waitNativeSendResult(t, result, "canceled packet Send"); err != callerCause {
+		t.Fatalf("Send error=%v, want exact caller cause %v", err, callerCause)
 	}
-
 	stats = client.Stats()
 	if stats.QueuedPackets != 1 || stats.QueuedBytes != uint64(len(packet.Data)) {
 		t.Fatalf("caller cancellation revoked admitted datagram: %+v", stats)
+	}
+
+	releaseOnce.Do(func() { close(release) })
+	select {
+	case event := <-writes:
+		if event.ResourceID != client.id || event.Protocol != ogrenet.SchemeUDP || event.Bytes != uint64(len(packet.Data)) || event.Err != nil {
+			t.Fatalf("EventWrite=%+v", event)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("admitted datagram was not physically written after caller cancellation")
+	}
+	stats = client.Stats()
+	if stats.QueuedPackets != 0 || stats.QueuedBytes != 0 {
+		t.Fatalf("admitted datagram ownership not released after physical write: %+v", stats)
+	}
+	if stats.PacketsTX != 1 || stats.BytesTX != uint64(len(packet.Data)) {
+		t.Fatalf("TX stats after canceled Send=%+v", stats)
 	}
 }
 
