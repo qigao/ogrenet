@@ -103,10 +103,7 @@ func (p *epollPacketConn) sendNativePacket(ctx context.Context, peer *net.UDPAdd
 	if err := p.quota.acquire(ctx, p.closing, len(packet.Data)); err != nil {
 		return p.nativePacketSendError(ctx, err, peer)
 	}
-	// Task 2.2 pins payload detachment as a separate RED/GREEN cycle. The
-	// admission owner is established here; the following cycle replaces this
-	// borrowed slice with the required owned copy before publication.
-	data := packet.Data
+	data := append([]byte(nil), packet.Data...)
 	held = false
 
 	ack := make(chan error, 1)
@@ -173,7 +170,7 @@ func (p *epollPacketConn) trySendNativePacket(peer *net.UDPAddr, packet ogrenet.
 	if err := p.quota.tryAcquire(len(packet.Data)); err != nil {
 		return p.tryNativePacketSendError(err, peer)
 	}
-	data := packet.Data
+	data := append([]byte(nil), packet.Data...)
 	held = false
 	req := packetOutbound{peer: peer, data: data, bytes: len(data)}
 	select {
