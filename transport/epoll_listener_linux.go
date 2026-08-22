@@ -128,8 +128,8 @@ func (l *epollListener) managedID() uint64          { return l.id }
 func (l *epollListener) managedKind() epollManagedKind {
 	return epollManagedListener
 }
-func (l *epollListener) prepareEngineDrain() {}
-func (l *epollListener) requestEngineShutdown()     { _ = l.Close() }
+func (l *epollListener) prepareEngineDrain()    {}
+func (l *epollListener) requestEngineShutdown() { _ = l.Close() }
 func (l *epollListener) requestEngineAbort(abortReason) {
 	_ = l.Close()
 }
