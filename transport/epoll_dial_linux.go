@@ -79,6 +79,20 @@ func resolveNativeDialTCP(ctx context.Context, endpoint ogrenet.Endpoint, resolv
 	return out, nil
 }
 
+func nativeConnectReactorDeadline(parent, bounded context.Context, internalTimeout time.Duration) (time.Time, bool) {
+	if parent == nil || bounded == nil || internalTimeout <= 0 {
+		return time.Time{}, false
+	}
+	deadline, ok := bounded.Deadline()
+	if !ok {
+		return time.Time{}, false
+	}
+	if parentDeadline, parentHasDeadline := parent.Deadline(); parentHasDeadline && !deadline.Before(parentDeadline) {
+		return time.Time{}, false
+	}
+	return deadline, true
+}
+
 func (e *epollEngine) dialNativeTCP(ctx context.Context, endpoint ogrenet.Endpoint, handler ogrenet.Handler, resolver nativeIPResolver) (*epollSession, error) {
 	if ctx == nil {
 		return nil, ErrNilContext
@@ -134,7 +148,7 @@ func (e *epollEngine) dialNativeTCP(ctx context.Context, endpoint ogrenet.Endpoi
 	if reactor == nil {
 		return nil, ErrClosed
 	}
-	deadline, _ := dctx.Deadline()
+	deadline, _ := nativeConnectReactorDeadline(ctx, dctx, e.cfg.timeouts.Connect)
 	s := newEpollBootstrapSession(e, reactor, id, -1, endpoint, nil, nil, handler, nil, nil)
 	s.state = epollSessionConnecting
 	s.dial = &epollDialState{
