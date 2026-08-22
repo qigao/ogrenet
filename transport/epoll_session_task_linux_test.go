@@ -4,7 +4,6 @@ package transport
 
 import (
 	"net"
-	"sync"
 	"testing"
 
 	"github.com/qigao/ogrenet"
@@ -82,7 +81,7 @@ func TestEpollCodecWorkerCapacityReleaseCannotBeLost(t *testing.T) {
 	blockingRelease := make(chan struct{})
 	blocking := &blockingEpollWorkerTask{entered: make(chan struct{}), release: blockingRelease}
 	setupStarted := make(chan struct{})
-	setupCompleted := make(chan struct{}, 1)
+	capacity := make(chan struct{}, 2)
 
 	cfg := defaultConfig()
 	cfg.framerFactory = func() wire.Framer {
@@ -90,10 +89,9 @@ func TestEpollCodecWorkerCapacityReleaseCannotBeLost(t *testing.T) {
 		return wire.New(nil)
 	}
 	e := &epollEngine{cfg: cfg}
-	var once sync.Once
 	e.callbacks = newEpollCallbackExecutor(1, 0, func() {
 		r.signalControl(epollControlWorkerCapacity)
-		once.Do(func() { setupCompleted <- struct{}{} })
+		capacity <- struct{}{}
 	})
 	r.workerCapacityAvailable = e.callbacks.hasCapacity
 	defer e.callbacks.stopIdle()
@@ -113,16 +111,11 @@ func TestEpollCodecWorkerCapacityReleaseCannotBeLost(t *testing.T) {
 	}
 
 	close(blockingRelease)
-	waitTestSignal(t, setupCompleted, "worker capacity release")
+	waitTestSignal(t, capacity, "worker capacity release")
 	r.drainControl()
 	r.drainRunnable()
 	waitTestSignal(t, setupStarted, "codec setup after capacity release")
-
-	// The setup task itself completes without any second Session signal. Its
-	// worker completion may race this test, so synchronize through capacity.
-	for e.callbacks.reservedCount() != 0 {
-		r.drainInbox()
-	}
+	waitTestSignal(t, capacity, "codec setup completion")
 	r.drainInbox()
 	if !session.codecSetupComplete() {
 		t.Fatal("codec setup result was not published")
