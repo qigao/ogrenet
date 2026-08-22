@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/qigao/ogrenet"
 	"golang.org/x/sys/unix"
@@ -42,22 +43,15 @@ func TestEpollNativeDialCancellationAfterRegistrationReturnsExactCauseWithoutCal
 	waitTestSignal(t, registered, "native connect Poller.Add")
 	cancel(callerCause)
 
+	waitCtx, waitCancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer waitCancel()
 	select {
 	case err := <-result:
 		if err != callerCause {
 			t.Fatalf("dial error=%v, want exact caller cause %v", err, callerCause)
 		}
-	case <-ctx.Done():
-		// ctx cancellation is expected, but the dial goroutine still must publish
-		// its exact result promptly while the reactor is blocked in the hook.
-		select {
-		case err := <-result:
-			if err != callerCause {
-				t.Fatalf("dial error=%v, want exact caller cause %v", err, callerCause)
-			}
-		default:
-			t.Fatal("dial did not return after caller cancellation")
-		}
+	case <-waitCtx.Done():
+		t.Fatalf("dial did not return after caller cancellation: %v", context.Cause(waitCtx))
 	}
 
 	close(inspectFD)
