@@ -391,6 +391,9 @@ func (p *epollPacketConn) driveNativePacketWrite(r *epollReactor) {
 }
 
 func (p *epollPacketConn) writeNativePacketDatagram(req packetOutbound) (int, error) {
+	if p.testWriteDatagram != nil {
+		return p.testWriteDatagram(req)
+	}
 	var to unix.Sockaddr
 	if req.peer != nil {
 		sa, _, err := nativeUDPAddrToSockaddr(req.peer)
