@@ -13,6 +13,8 @@ import (
 	"github.com/qigao/ogrenet"
 )
 
+const epollStressProgressTimeout = 10 * time.Second
+
 type epollStressClientHandler struct {
 	opened chan struct{}
 	echoed chan ogrenet.Message
@@ -55,7 +57,10 @@ func finishEpollStressServerSession(ctx context.Context, s ogrenet.Session, serv
 	}
 }
 
-func runEpollShortLivedClient(ctx context.Context, e *epollEngine, endpoint ogrenet.Endpoint, i int) error {
+func runEpollShortLivedClient(parent context.Context, e *epollEngine, endpoint ogrenet.Endpoint, i int) error {
+	ctx, cancel := context.WithTimeout(parent, epollStressProgressTimeout)
+	defer cancel()
+
 	h := &epollStressClientHandler{
 		opened: make(chan struct{}),
 		echoed: make(chan ogrenet.Message, 1),
@@ -142,7 +147,7 @@ func TestEpollNativeShortLivedConnections(t *testing.T) {
 		waitEpollEngineDone(t, e.Done())
 	})
 
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	serverErr := make(chan error, connections*2)
 	serverDone := make(chan struct{}, connections)
@@ -152,7 +157,10 @@ func TestEpollNativeShortLivedConnections(t *testing.T) {
 		Port:   0,
 	}, ogrenet.HandlerFuncs{
 		Message: func(s ogrenet.Session, msg ogrenet.Message) {
-			if err := s.Send(context.Background(), msg); err != nil {
+			sendCtx, sendCancel := context.WithTimeout(ctx, epollStressProgressTimeout)
+			err := s.Send(sendCtx, msg)
+			sendCancel()
+			if err != nil {
 				serverErr <- err
 				_ = s.Close()
 				go finishEpollStressServerSession(ctx, s, true, serverErr, serverDone)
@@ -181,13 +189,7 @@ func TestEpollNativeShortLivedConnections(t *testing.T) {
 		}()
 	}
 	for i := 0; i < connections; i++ {
-		select {
-		case jobs <- i:
-		case <-ctx.Done():
-			close(jobs)
-			wg.Wait()
-			t.Fatalf("dispatching short-lived connection %d: %v", i, context.Cause(ctx))
-		}
+		jobs <- i
 	}
 	close(jobs)
 	wg.Wait()
@@ -198,11 +200,13 @@ func TestEpollNativeShortLivedConnections(t *testing.T) {
 		}
 	}
 
+	serverDeadline := time.NewTimer(epollStressProgressTimeout)
+	defer serverDeadline.Stop()
 	for completed := 0; completed < connections; completed++ {
 		select {
 		case <-serverDone:
-		case <-ctx.Done():
-			t.Fatalf("waiting for server Session %d/%d Done: %v", completed, connections, context.Cause(ctx))
+		case <-serverDeadline.C:
+			t.Fatalf("waiting for server Session %d/%d Done", completed, connections)
 		}
 	}
 	select {
@@ -214,10 +218,12 @@ func TestEpollNativeShortLivedConnections(t *testing.T) {
 	if err := e.Close(); err != nil {
 		t.Fatal(err)
 	}
+	engineDeadline := time.NewTimer(epollStressProgressTimeout)
+	defer engineDeadline.Stop()
 	select {
 	case <-e.Done():
-	case <-ctx.Done():
-		t.Fatalf("Engine.Done after %d loopback connections / %d Sessions: %v", connections, 2*connections, context.Cause(ctx))
+	case <-engineDeadline.C:
+		t.Fatalf("Engine.Done after %d loopback connections / %d Sessions", connections, 2*connections)
 	}
 	assertEpollEngineZeroInvariants(t, e)
 }
