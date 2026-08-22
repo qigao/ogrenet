@@ -242,6 +242,16 @@ func (s *epollSession) onReactorEvent(r *epollReactor, events epoll.Events) {
 		s.onNativeConnectEvent(r, events)
 		return
 	}
+	if s.state == epollSessionCodecSetup {
+		if events&(epoll.Readable|epoll.PeerClosed|epoll.Hangup) != 0 {
+			// Poller.Add already transferred fd ownership to this reactor. Under
+			// EPOLLET, a readable edge that arrives while codec setup or OnOpen is
+			// still pending must be remembered: the bytes remain unread and may not
+			// produce another edge after the Session becomes Active.
+			s.readReady = true
+		}
+		return
+	}
 	if s.state != epollSessionOpening && s.state != epollSessionActive {
 		return
 	}
