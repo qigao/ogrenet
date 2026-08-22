@@ -252,7 +252,18 @@ func (p *epollPacketConn) prepareEngineDrain() {
 	}
 }
 
-func (p *epollPacketConn) requestEngineShutdown() { _ = p.Close() }
+func (p *epollPacketConn) requestEngineShutdown() {
+	if p == nil {
+		return
+	}
+	if p.gate != nil {
+		p.gate.close()
+	}
+	if p.reactor != nil {
+		p.reactor.signal(p)
+	}
+}
+
 func (p *epollPacketConn) requestEngineAbort(abortReason) {
 	_ = p.Close()
 }
@@ -406,6 +417,9 @@ func (p *epollPacketConn) onReactorInbox(r *epollReactor) {
 		}
 		p.state = epollPacketActive
 		p.finishCreate(nil)
+		if p.gate != nil && isClosedSignal(p.gate.done()) {
+			r.requeue(p)
+		}
 		return
 	}
 	p.consumeNativePacketCallbackCompletion()
