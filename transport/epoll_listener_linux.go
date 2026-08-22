@@ -318,7 +318,7 @@ func (l *epollListener) createOnReactor(r *epollReactor) error {
 		l.fd = -1
 		return err
 	}
-	if err := r.poller.Add(fd, epoll.Readable|epoll.Error|epoll.EdgeTriggered, l.id); err != nil {
+	if err := r.addFD(fd, epoll.Readable|epoll.Error|epoll.EdgeTriggered, l.id); err != nil {
 		delete(r.resources, l.id)
 		l.fd = -1
 		return classifyOperational(OpListen, ogrenet.SchemeTCP, bound, nil, err, hintNone)
