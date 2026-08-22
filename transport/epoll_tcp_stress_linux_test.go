@@ -28,6 +28,33 @@ func (h *epollStressClientHandler) OnMessage(_ ogrenet.Session, msg ogrenet.Mess
 
 func (h *epollStressClientHandler) OnClose(ogrenet.Session, error) {}
 
+func finishEpollStressServerSession(ctx context.Context, s ogrenet.Session, serverInitiates bool, errs chan<- error, done chan<- struct{}) {
+	defer func() { done <- struct{}{} }()
+	if !serverInitiates {
+		half, ok := s.(ogrenet.HalfCloseSession)
+		if !ok {
+			errs <- fmt.Errorf("server session %d does not implement HalfCloseSession", s.ID())
+			_ = s.Close()
+		} else {
+			select {
+			case <-half.ReadClosed():
+				_ = s.Close()
+			case <-ctx.Done():
+				errs <- fmt.Errorf("server session %d waiting client close: %w", s.ID(), context.Cause(ctx))
+				_ = s.Close()
+			}
+		}
+	} else {
+		_ = s.Close()
+	}
+
+	select {
+	case <-s.Done():
+	case <-ctx.Done():
+		errs <- fmt.Errorf("server session %d Done: %w", s.ID(), context.Cause(ctx))
+	}
+}
+
 func runEpollShortLivedClient(ctx context.Context, e *epollEngine, endpoint ogrenet.Endpoint, i int) error {
 	h := &epollStressClientHandler{
 		opened: make(chan struct{}),
@@ -75,9 +102,17 @@ func runEpollShortLivedClient(ctx context.Context, e *epollEngine, endpoint ogre
 	}
 	select {
 	case <-half.ReadClosed():
-		return nil
 	case <-ctx.Done():
 		return fmt.Errorf("server-close ReadClosed %d: %w", i, context.Cause(ctx))
+	}
+	if err := session.Close(); err != nil {
+		return fmt.Errorf("client reciprocal close %d: %w", i, err)
+	}
+	select {
+	case <-session.Done():
+		return nil
+	case <-ctx.Done():
+		return fmt.Errorf("client reciprocal Done %d: %w", i, context.Cause(ctx))
 	}
 }
 
@@ -106,7 +141,8 @@ func TestEpollNativeShortLivedConnections(t *testing.T) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	serverErr := make(chan error, connections)
+	serverErr := make(chan error, connections*2)
+	serverDone := make(chan struct{}, connections)
 	ln, err := e.Listen(ctx, ogrenet.Endpoint{
 		Scheme: ogrenet.SchemeTCP,
 		Host:   "127.0.0.1",
@@ -115,11 +151,12 @@ func TestEpollNativeShortLivedConnections(t *testing.T) {
 		Message: func(s ogrenet.Session, msg ogrenet.Message) {
 			if err := s.Send(context.Background(), msg); err != nil {
 				serverErr <- err
+				_ = s.Close()
+				go finishEpollStressServerSession(ctx, s, true, serverErr, serverDone)
 				return
 			}
-			if len(msg.Data) != 0 && msg.Data[0] == '1' {
-				_ = s.Close()
-			}
+			serverInitiates := len(msg.Data) != 0 && msg.Data[0] == '1'
+			go finishEpollStressServerSession(ctx, s, serverInitiates, serverErr, serverDone)
 		},
 	})
 	if err != nil {
@@ -157,9 +194,17 @@ func TestEpollNativeShortLivedConnections(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
+
+	for completed := 0; completed < connections; completed++ {
+		select {
+		case <-serverDone:
+		case <-ctx.Done():
+			t.Fatalf("waiting for server Session %d/%d Done: %v", completed, connections, context.Cause(ctx))
+		}
+	}
 	select {
 	case err := <-serverErr:
-		t.Fatalf("server echo: %v", err)
+		t.Fatalf("server stress error: %v", err)
 	default:
 	}
 
