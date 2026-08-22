@@ -25,9 +25,5 @@ func NewEpoll(epcfg EpollConfig, opts ...Option) (ogrenet.Engine, error) {
 	if err := cfg.limits.validate(); err != nil {
 		return nil, err
 	}
-	return &epollEngine{
-		cfg:      cfg,
-		epollCfg: resolved,
-		done:     make(chan struct{}),
-	}, nil
+	return newEpollEngine(cfg, resolved)
 }
