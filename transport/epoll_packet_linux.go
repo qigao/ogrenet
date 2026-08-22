@@ -295,7 +295,7 @@ func (p *epollPacketConn) Err() error {
 }
 
 func (p *epollPacketConn) Send(context.Context, ogrenet.Packet) error { return ErrProtocolUnsupported }
-func (p *epollPacketConn) TrySend(ogrenet.Packet) error              { return ErrProtocolUnsupported }
+func (p *epollPacketConn) TrySend(ogrenet.Packet) error               { return ErrProtocolUnsupported }
 func (p *epollPacketConn) SendTo(context.Context, net.Addr, ogrenet.Packet) error {
 	return ErrProtocolUnsupported
 }
