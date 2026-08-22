@@ -60,7 +60,6 @@ type epollReactor struct {
 	testPollerAdd              func(int, epoll.Events, uint64) error
 	testAfterConnectRegistered func(*epollSession)
 	testAfterDialResult        func(*epollSession)
-	testWorkerBlocked          func(epollEventResource)
 }
 
 func (r *epollReactor) addFD(fd int, events epoll.Events, data uint64) error {
@@ -151,9 +150,6 @@ func (r *epollReactor) blockOnWorker(resource epollEventResource) {
 		n.workerBlocked = true
 		r.workerBlocked = append(r.workerBlocked, n)
 		r.hasWorkerBlocked.Store(true)
-		if r.testWorkerBlocked != nil {
-			r.testWorkerBlocked(resource)
-		}
 	}
 	// Close the release-before-registration race: if capacity became available
 	// just before workerBlocked was published, the executor callback could not
