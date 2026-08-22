@@ -314,6 +314,7 @@ func (l *epollListener) createOnReactor(r *epollReactor) error {
 	}
 	l.fd = fd
 	l.bound = bound
+	l.endpoint = boundEndpoint(l.endpoint, bound)
 	if err := r.registerResource(l); err != nil {
 		l.fd = -1
 		return err
