@@ -11,3 +11,7 @@ func TestEpollTCPGracefulContracts(t *testing.T) {
 func TestEpollTCPLimitStatsContracts(t *testing.T) {
 	runTCPLimitStatsContracts(t, epollFactory(contractProfile{TCP: true}))
 }
+
+func TestEpollTCPObserverContracts(t *testing.T) {
+	runTCPObserverContracts(t, epollFactory(contractProfile{TCP: true}))
+}
