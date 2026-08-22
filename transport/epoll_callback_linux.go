@@ -8,6 +8,10 @@ type epollWorkerTask interface {
 	runEpollWorkerTask()
 }
 
+type epollWorkerCompletion interface {
+	onEpollWorkerComplete()
+}
+
 type epollCallbackWorker struct {
 	tasks chan epollWorkerTask
 }
@@ -58,7 +62,7 @@ func (x *epollCallbackExecutor) runWorker(w *epollCallbackWorker) {
 	defer x.wg.Done()
 	for task := range w.tasks {
 		task.runEpollWorkerTask()
-		x.completeTask(w)
+		x.completeTask(w, task)
 	}
 }
 
@@ -120,7 +124,7 @@ func (x *epollCallbackExecutor) submitReserved(task epollWorkerTask) {
 	x.mu.Unlock()
 }
 
-func (x *epollCallbackExecutor) completeTask(worker *epollCallbackWorker) {
+func (x *epollCallbackExecutor) completeTask(worker *epollCallbackWorker, completed epollWorkerTask) {
 	var next epollWorkerTask
 	x.mu.Lock()
 	if x.reserved <= 0 {
@@ -142,6 +146,12 @@ func (x *epollCallbackExecutor) completeTask(worker *epollCallbackWorker) {
 	onCapacity := x.onCapacity
 	x.mu.Unlock()
 
+	// Resource completion is published only after the reservation count has
+	// dropped. That keeps Engine quiescence from racing stopIdle with a worker
+	// whose resource has already been removed from the managed set.
+	if completion, ok := completed.(epollWorkerCompletion); ok {
+		completion.onEpollWorkerComplete()
+	}
 	if next != nil {
 		worker.tasks <- next
 	}
