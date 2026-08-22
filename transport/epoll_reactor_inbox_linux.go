@@ -2,8 +2,6 @@
 
 package transport
 
-import "sync/atomic"
-
 type epollInboxItem interface {
 	inboxNode() *epollInboxNode
 	onReactorInbox(*epollReactor)
@@ -48,20 +46,22 @@ func (r *epollReactor) signal(item epollInboxItem) {
 }
 
 func (r *epollReactor) drainInbox() {
-	r.inboxMu.Lock()
-	head := r.inboxHead
-	r.inboxHead = nil
-	r.inboxTail = nil
-	r.inboxMu.Unlock()
-
-	for n := head; n != nil; {
-		next := n.next
+	for {
 		r.inboxMu.Lock()
+		n := r.inboxHead
+		if n == nil {
+			r.inboxMu.Unlock()
+			return
+		}
+		r.inboxHead = n.next
+		if r.inboxHead == nil {
+			r.inboxTail = nil
+		}
 		n.next = nil
 		n.queued = false
 		r.inboxMu.Unlock()
+
 		n.owner.onReactorInbox(r)
-		n = next
 	}
 }
 
@@ -100,13 +100,4 @@ func (r *epollReactor) disarmWait() {
 	r.waiting = false
 	r.wakePending = false
 	r.inboxMu.Unlock()
-}
-
-func atomicOrUint32(v *atomic.Uint32, mask uint32) {
-	for {
-		old := v.Load()
-		if old&mask == mask || v.CompareAndSwap(old, old|mask) {
-			return
-		}
-	}
 }
