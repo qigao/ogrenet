@@ -243,7 +243,7 @@ func (p *epollPacketConn) leaveNativePacketGate() {
 		return
 	}
 	p.gate.leave()
-	if p.closeRequested.Load() && p.reactor != nil {
+	if p.reactor != nil && (p.closeRequested.Load() || isClosedSignal(p.gate.done())) {
 		p.reactor.signal(p)
 	}
 }
@@ -330,6 +330,8 @@ func (p *epollPacketConn) driveNativePacketWrite(r *epollReactor) {
 	if p == nil || r == nil || p.state != epollPacketActive || p.fd < 0 || p.writeBlocked {
 		return
 	}
+	defer p.finalizeNativePacketEngineDrain(r)
+
 	opsBudget := r.cfg.ioBudgetOps
 	if opsBudget <= 0 {
 		opsBudget = 1
@@ -389,6 +391,16 @@ func (p *epollPacketConn) driveNativePacketWrite(r *epollReactor) {
 	if p.writeActive || len(p.queue) != 0 {
 		r.requeue(p)
 	}
+}
+
+func (p *epollPacketConn) finalizeNativePacketEngineDrain(r *epollReactor) {
+	if p == nil || r == nil || p.state != epollPacketActive || p.closeRequested.Load() || p.gate == nil {
+		return
+	}
+	if !isClosedSignal(p.gate.done()) || p.writeActive || len(p.queue) != 0 {
+		return
+	}
+	p.finalizeReactor(r)
 }
 
 func (p *epollPacketConn) writeNativePacketDatagram(req packetOutbound) (int, error) {
