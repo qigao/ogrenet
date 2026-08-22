@@ -40,6 +40,7 @@ type epollSession struct {
 	handler    ogrenet.Handler
 	lease      *connectionLease
 	parent     *epollListener
+	dial       *epollDialState
 
 	framer     wire.Framer
 	wireFramer bool
@@ -138,15 +139,23 @@ func (s *epollSession) onReactorInbox(r *epollReactor) {
 		return
 	}
 	if s.engineAbort.Load() != uint32(abortNone) {
+		if s.dial != nil {
+			s.dial.finish(nil, ErrClosed)
+		}
 		s.state = epollSessionTerminal
 	}
 	if s.shutdownRequested.Load() && s.state < epollSessionActive {
+		if s.dial != nil {
+			s.dial.finish(nil, ErrClosed)
+		}
 		s.state = epollSessionTerminal
 	}
 
 	switch s.state {
 	case epollSessionHandoff:
 		s.adoptAcceptedFD(r)
+	case epollSessionConnecting:
+		s.driveNativeConnect(r)
 	case epollSessionCodecSetup:
 		if s.codecSetupComplete() {
 			s.applyCodecSetup(r)
@@ -156,13 +165,22 @@ func (s *epollSession) onReactorInbox(r *epollReactor) {
 	}
 }
 
-func (s *epollSession) onReactorEvent(*epollReactor, epoll.Events) {}
+func (s *epollSession) onReactorEvent(r *epollReactor, events epoll.Events) {
+	if s == nil || r == nil {
+		return
+	}
+	if s.state == epollSessionConnecting {
+		s.onNativeConnectEvent(r, events)
+	}
+}
 
 func (s *epollSession) onReactorRunnable(r *epollReactor) {
 	if s == nil || r == nil {
 		return
 	}
 	switch s.state {
+	case epollSessionConnecting:
+		s.driveNativeConnect(r)
 	case epollSessionCodecSetup:
 		s.startCodecSetup(r)
 	case epollSessionTerminal:
@@ -263,12 +281,24 @@ func (s *epollSession) applyCodecSetup(r *epollReactor) {
 	framer := s.setupFramer
 	err := s.setupErr
 	s.setupMu.Unlock()
-	if err != nil || framer == nil {
+	if err == nil && framer == nil {
+		err = ErrNilFramer
+	}
+	if err != nil {
+		if s.dial != nil {
+			s.engine.emitNativeConnect(0, s.endpoint, cloneTCPAddr(s.local), cloneTCPAddr(s.remote), s.dial.observerStart, nil)
+			s.dial.finish(nil, err)
+		}
 		s.state = epollSessionTerminal
 		s.finalizeReactor(r)
 		return
 	}
 	if s.lease != nil && !s.lease.activate() {
+		if s.dial != nil {
+			opErr := classifyOperational(OpDial, ogrenet.SchemeTCP, cloneTCPAddr(s.local), cloneTCPAddr(s.remote), ErrClosed, hintNone)
+			s.engine.emitNativeConnect(0, s.endpoint, cloneTCPAddr(s.local), cloneTCPAddr(s.remote), s.dial.observerStart, nil)
+			s.dial.finish(nil, opErr)
+		}
 		s.state = epollSessionTerminal
 		s.finalizeReactor(r)
 		return
@@ -276,26 +306,27 @@ func (s *epollSession) applyCodecSetup(r *epollReactor) {
 
 	s.framer = framer
 	_, s.wireFramer = framer.(*wire.Codec)
-	if s.parent != nil && s.parent.stats != nil {
-		s.parent.stats.accepted.Add(1)
-	}
-	if s.engine != nil && s.engine.observer != nil {
-		parentID := uint64(0)
-		if s.parent != nil {
-			parentID = s.parent.id
+	if s.parent != nil {
+		if s.parent.stats != nil {
+			s.parent.stats.accepted.Add(1)
 		}
-		s.engine.observer.emit(ogrenet.Event{
-			Kind:       ogrenet.EventAccept,
-			Resource:   ogrenet.ResourceSession,
-			ResourceID: s.id,
-			ParentID:   parentID,
-			Protocol:   ogrenet.SchemeTCP,
-			Local:      cloneTCPAddr(s.local),
-			Remote:     cloneTCPAddr(s.remote),
-		})
+		if s.engine != nil && s.engine.observer != nil {
+			s.engine.observer.emit(ogrenet.Event{
+				Kind:       ogrenet.EventAccept,
+				Resource:   ogrenet.ResourceSession,
+				ResourceID: s.id,
+				ParentID:   s.parent.id,
+				Protocol:   ogrenet.SchemeTCP,
+				Local:      cloneTCPAddr(s.local),
+				Remote:     cloneTCPAddr(s.remote),
+			})
+		}
+	} else if s.dial != nil {
+		s.engine.emitNativeConnect(s.id, s.endpoint, cloneTCPAddr(s.local), cloneTCPAddr(s.remote), s.dial.observerStart, nil)
+		s.dial.finish(s, nil)
 	}
-	// Handler.OnOpen is intentionally Task 9. The accepted Session is adopted
-	// and observable, but application callback delivery is not enabled yet.
+	// Handler.OnOpen is intentionally Task 9. The Session is adopted and
+	// observable, but application callback delivery is not enabled yet.
 	s.state = epollSessionOpening
 }
 
@@ -319,6 +350,9 @@ func (s *epollSession) finalizeReactor(r *epollReactor) {
 	if s.lease != nil {
 		s.lease.release()
 		s.lease = nil
+	}
+	if s.dial != nil {
+		s.dial.finish(nil, ErrClosed)
 	}
 	s.state = epollSessionClosed
 	s.doneOnce.Do(func() { close(s.done) })
