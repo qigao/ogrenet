@@ -61,14 +61,23 @@ func runUDPObserverContract(t *testing.T, f engineFactory) {
 		t.Fatalf("server stats before observer read=%+v", serverStats)
 	}
 
-	writeEvent := waitUDPContractEvent(t, ctx, events, "client EventWrite", func(event ogrenet.Event) bool {
-		return event.Kind == ogrenet.EventWrite && event.ResourceID == clientStats.ResourceID
-	})
-	assertUDPContractEvent(t, writeEvent, ogrenet.EventWrite, clientStats.ResourceID, uint64(len(payload)))
-	readEvent := waitUDPContractEvent(t, ctx, events, "server EventRead", func(event ogrenet.Event) bool {
-		return event.Kind == ogrenet.EventRead && event.ResourceID == serverStats.ResourceID
-	})
-	assertUDPContractEvent(t, readEvent, ogrenet.EventRead, serverStats.ResourceID, uint64(len(payload)))
+	seenWrite := false
+	seenRead := false
+	for !seenWrite || !seenRead {
+		select {
+		case event := <-events:
+			switch {
+			case event.Kind == ogrenet.EventWrite && event.ResourceID == clientStats.ResourceID:
+				assertUDPContractEvent(t, event, ogrenet.EventWrite, clientStats.ResourceID, uint64(len(payload)))
+				seenWrite = true
+			case event.Kind == ogrenet.EventRead && event.ResourceID == serverStats.ResourceID:
+				assertUDPContractEvent(t, event, ogrenet.EventRead, serverStats.ResourceID, uint64(len(payload)))
+				seenRead = true
+			}
+		case <-ctx.Done():
+			t.Fatalf("waiting for UDP write/read events: %v", context.Cause(ctx))
+		}
+	}
 
 	udpAddr, ok := server.LocalAddr().(*net.UDPAddr)
 	if !ok || udpAddr == nil {
