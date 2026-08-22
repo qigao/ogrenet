@@ -21,6 +21,12 @@ type epollEventResource interface {
 
 const epollControlStop uint32 = 1 << 0
 
+var (
+	errEpollNilResource         = errors.New("transport: nil epoll resource")
+	errEpollInvalidResourceID   = errors.New("transport: invalid epoll resource id")
+	errEpollDuplicateResourceID = errors.New("transport: duplicate epoll resource id")
+)
+
 type epollReactor struct {
 	index  int
 	cfg    resolvedEpollConfig
@@ -44,9 +50,66 @@ type epollReactor struct {
 	testWaitArmed func()
 }
 
+func (r *epollReactor) registerResource(resource epollEventResource) error {
+	if resource == nil {
+		return errEpollNilResource
+	}
+	id := resource.resourceID()
+	if id == 0 {
+		return errEpollInvalidResourceID
+	}
+	if r.resources == nil {
+		r.resources = make(map[uint64]epollEventResource)
+	}
+	if _, exists := r.resources[id]; exists {
+		return errEpollDuplicateResourceID
+	}
+	r.resources[id] = resource
+	return nil
+}
+
+func (r *epollReactor) dispatch(event epoll.Event) {
+	resource := r.resources[event.Data]
+	if resource == nil {
+		return
+	}
+	resource.onReactorEvent(r, event.Events)
+}
+
+func (r *epollReactor) requeue(resource epollEventResource) {
+	if resource == nil {
+		return
+	}
+	n := resource.inboxNode()
+	if n == nil || n.owner == nil {
+		panic("transport: epoll runnable resource has no owner")
+	}
+	if n.runnableQueued {
+		return
+	}
+	n.runnableQueued = true
+	r.runnable = append(r.runnable, n)
+}
+
+func (r *epollReactor) drainRunnable() {
+	for len(r.runnable) != 0 {
+		n := r.runnable[0]
+		copy(r.runnable, r.runnable[1:])
+		r.runnable[len(r.runnable)-1] = nil
+		r.runnable = r.runnable[:len(r.runnable)-1]
+		n.runnableQueued = false
+		resource, ok := n.owner.(epollEventResource)
+		if !ok || resource == nil {
+			continue
+		}
+		resource.onReactorRunnable(r)
+	}
+}
+
 func (r *epollReactor) run() {
 	for {
 		r.drainInbox()
+		r.drainRunnable()
 		if r.shouldStop() {
 			return
 		}
@@ -56,7 +119,7 @@ func (r *epollReactor) run() {
 		if r.testWaitArmed != nil {
 			r.testWaitArmed()
 		}
-		_, err := r.poller.Wait(r.events, -1*time.Nanosecond)
+		n, err := r.poller.Wait(r.events, -1*time.Nanosecond)
 		r.disarmWait()
 		if err != nil {
 			if errors.Is(err, epoll.ErrClosed) {
@@ -66,6 +129,9 @@ func (r *epollReactor) run() {
 				r.onFatal(err)
 			}
 			return
+		}
+		for i := 0; i < n; i++ {
+			r.dispatch(r.events[i])
 		}
 	}
 }
