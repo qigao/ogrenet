@@ -1,6 +1,6 @@
 # Linux Native Engine Architecture
 
-Status: design approved in chat; written-spec review pending
+Status: design approved; P1-6A complete; P1-6B Tasks 1-4 foundation complete; native TCP socket I/O not started
 
 Parent roadmap: #38
 Native Engine umbrella: #56
